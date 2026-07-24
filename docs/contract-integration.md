@@ -423,38 +423,25 @@ async function verifyReceipt(receipt: any): Promise<boolean> {
 
 ### Off-Chain Verification
 
-Since the `contract_signature` is a simple SHA-256 hash of the deterministic XDR encoding of the receipt fields, it can also be verified **off-chain** without any RPC call:
+The `contract_signature` is a SHA-256 hash of the deterministic **XDR encoding** of the receipt fields
+(`donation_index`, `donor`, `project_id`, `amount`, `co2_offset`, `ledger`, `currency`).
+Because the contract uses `soroban_sdk::xdr::ToXdr` to serialize the struct before hashing (see
+`ReceiptFields` in the contract source), the same hash can in principle be recomputed off-chain
+by any library that implements Stellar XDR serialization.
 
-1. Serialize the receipt fields (donation_index, donor, project_id, amount, co2_offset, ledger, currency) using the same XDR encoding
-2. Compute SHA-256 of those bytes
-3. Compare with `receipt.contract_signature`
+**In practice, the simplest and most reliable verification method is to call the on-chain
+`verify_receipt` function** (shown above), which checks the receipt against the stored donation
+record **and** recomputes the hash — all in one RPC call. This avoids duplicating the contract's
+XDR serialization logic in client code.
 
-```typescript
-import { xdr } from "@stellar/stellar-sdk";
-import { createHash } from "crypto";
+If you do need true off-chain verification (e.g. in an air-gapped environment), you must:
 
-function verifyReceiptOffChain(receipt: any): boolean {
-  // Reconstruct the XDR bytes using the same field order as the contract
-  const fields = {
-    donation_index: receipt.donation_index,
-    donor: receipt.donor,
-    project_id: receipt.project_id,
-    amount: receipt.amount,
-    co2_offset: receipt.co2_offset,
-    ledger: receipt.ledger,
-    currency: receipt.currency,
-  };
-
-  // In practice, serialize using the Stellar XDR library
-  // and compute SHA-256. The exact XDR encoding depends on the
-  // Soroban SDK version — see ReceiptFields in the contract source.
-  const computedHash = createHash("sha256")
-    .update(JSON.stringify(fields)) // Replace with actual XDR serialization
-    .digest("hex");
-
-  return computedHash === receipt.contract_signature;
-}
-```
+1. Serialize the receipt fields **in the exact order and type encoding** used by
+   `soroban_sdk::xdr::ToXdr` — refer to the `ReceiptFields` struct in
+   `contracts/indigopay-contract/src/lib.rs`. The encoding is **not** JSON; it is the
+   binary XDR format used by the Stellar network.
+2. Compute SHA-256 of the resulting bytes.
+3. Compare with `receipt.contract_signature`.
 
 ### Receipt Event
 
