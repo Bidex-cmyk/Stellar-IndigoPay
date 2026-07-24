@@ -9700,6 +9700,8 @@ mod tests {
 
         let challenge = client.get_donation_challenge(&donation_index).unwrap();
         assert!(challenge.challenged);
+    }
+
     // ─── batch_donate tests ───────────────────────────────────────────────────
 
     #[test]
