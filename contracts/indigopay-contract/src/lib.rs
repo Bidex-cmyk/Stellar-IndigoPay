@@ -3,10 +3,10 @@
 // Suppressing this warning so clippy -- -D warnings still passes.
 // TODO(indigopay-272): migrate to #[contractevent] pattern.
 #![allow(deprecated)]
-#[cfg(all(test, feature = "testutils"))]
-mod fuzz_tests;
 #[cfg(feature = "donation")]
 pub mod donation;
+#[cfg(all(test, feature = "testutils"))]
+mod fuzz_tests;
 /**
  * contracts/indigopay-contract/src/lib.rs
  *
@@ -428,8 +428,8 @@ const DEFAULT_DONATION_RATE_LIMIT_WINDOW: u32 = 720;
 // pressure and prevents proposals from sitting open indefinitely.
 const MIN_VOTING_WINDOW_LEDGERS: u32 = 720; // 1 hour @ 5s/ledger
 const MAX_VOTING_WINDOW_LEDGERS: u32 = 518_400; // 30 days @ 5s/ledger
-// Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
-// panics and misleading impact figures from misconfigured projects.
+                                                // Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
+                                                // panics and misleading impact figures from misconfigured projects.
 const MAX_CO2_PER_XLM: u32 = 100_000;
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
