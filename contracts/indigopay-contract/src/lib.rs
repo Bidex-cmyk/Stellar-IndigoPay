@@ -4751,7 +4751,16 @@ impl IndigoPayContract {
                     .expect("GlobalCO2OffsetGrams underflow on refund"),
             );
 
-            if record.currency == symbol_short!("USDC") {
+            // Project wallet must co-sign — ensures the token transfer
+            // actually happens atomically, matching the approve_refund pattern.
+            project.wallet.require_auth();
+
+            if record.currency == symbol_short!("XLM") {
+                if let Some(native_token) = Self::get_native_token(env.clone()) {
+                    let token_client = token::Client::new(&env, &native_token);
+                    token_client.transfer(&project.wallet, &record.donor, &record.amount);
+                }
+            } else if record.currency == symbol_short!("USDC") {
                 if let Some(usdc_token) = Self::get_usdc_token(env.clone()) {
                     let token_client = token::Client::new(&env, &usdc_token);
                     token_client.transfer(&project.wallet, &record.donor, &record.amount);
