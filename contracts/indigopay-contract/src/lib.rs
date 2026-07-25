@@ -33,7 +33,7 @@ pub mod donation;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
+    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address,
     BytesN, Env, String, Symbol, Vec,
 };
 #[cfg(feature = "project_verification")]
@@ -442,13 +442,9 @@ pub enum DataKey {
     // or `cancel_emergency_withdrawal`.
     EmergencyWithdrawal(String),
     // Donation refund (#290)
-    #[cfg(feature = "refund")]
     RefundRequest(u32),
-    #[cfg(feature = "refund")]
     RefundCount,
-    #[cfg(feature = "refund")]
     RefundForDonation(u32),
-    #[cfg(feature = "refund")]
     DonationCO2Offset(u32),
     // Per-project per-token contract-held balance — the canonical ledger
     // for how much of each asset each project has deposited into the
