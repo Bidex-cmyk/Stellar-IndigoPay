@@ -45,6 +45,7 @@ use soroban_sdk::{contracterror, panic_with_error};
 /// Any on-chain contract implementing `get_price` can serve as the oracle.
 /// `get_price` returns the number of XLM stroops equivalent to 1 USDC stroop.
 /// Example: if 1 USDC = 8 XLM, return 8.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contractclient(name = "OracleClient")]
 pub trait OracleInterface {
     fn get_price(env: Env) -> i128;
@@ -464,6 +465,7 @@ pub enum DataKey {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STROOP: i128 = 10_000_000;
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 const PRICE_SCALE: i128 = 1;
 
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger ≈ 120_960 ledgers — used as the
@@ -1099,6 +1101,7 @@ pub fn calculate_badge(total_stroops: i128) -> BadgeTier {
 }
 
 /// Reject donations when the project's campaign is not accepting them.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 fn require_campaign_accepts_donation(project: &Project, current_ledger: u32) {
     match project.campaign_status {
         CampaignStatus::None => {}
@@ -1113,6 +1116,7 @@ fn require_campaign_accepts_donation(project: &Project, current_ledger: u32) {
     }
 }
 
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig {
     let config_key = DataKey::TokenConfig(token.clone());
     if let Some(config) = env.storage().instance().get::<_, TokenConfig>(&config_key) {
@@ -1133,7 +1137,7 @@ fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig 
                 oracle: token.clone(),
                 symbol: symbol_short!("XLM"),
                 active: true,
-                registered_at: env.ledger().sequence(),
+                registered_at: 0,
             };
         }
     }
@@ -1149,34 +1153,32 @@ fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig 
                 .instance()
                 .get::<_, Address>(&DataKey::OracleAddress)
                 .expect("Price oracle not configured");
-            let config = TokenConfig {
+            return TokenConfig {
                 token: token.clone(),
                 oracle: oracle_addr,
                 symbol: symbol_short!("USDC"),
                 active: true,
-                registered_at: env.ledger().sequence(),
+                registered_at: 0,
             };
-            env.storage().instance().set(&config_key, &config);
-            let mut list: Vec<Address> = env
-                .storage()
-                .instance()
-                .get(&DataKey::TokenList)
-                .unwrap_or(Vec::new(env));
-            if !list.contains(token) {
-                list.push_back(token.clone());
-                env.storage().instance().set(&DataKey::TokenList, &list);
-            }
-            return config;
         }
     }
 
     panic!("Token not registered");
 }
 
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+fn anon_address(env: &Env) -> Address {
+    Address::from_string(&String::from_str(
+        env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ))
+}
+
 /// Process a single donation's core logic: rate limiting, project validation,
 /// state updates (project, donor, NFT, globals), token transfers, and events.
 /// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
 /// responsible for those.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[allow(clippy::too_many_arguments)]
 fn process_donation_token(
     env: &Env,
@@ -1250,10 +1252,7 @@ fn process_donation_token(
         .expect("CO2 calculation overflow");
 
     let stats_donor = if anonymous {
-        Address::from_string(&String::from_str(
-            env,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-        ))
+        anon_address(env)
     } else {
         donor.clone()
     };
@@ -1446,6 +1445,7 @@ fn process_donation_token(
     );
 }
 
+#[cfg(any(feature = "donation", feature = "usdc", feature = "testutils"))]
 #[allow(clippy::too_many_arguments)]
 fn process_donation(
     env: &Env,
@@ -2159,6 +2159,7 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
+    #[cfg(any(feature = "batch", feature = "donation", feature = "testutils"))]
     pub fn batch_donate(env: Env, token: Address, donations: Vec<BatchDonation>) {
         require_not_paused(&env);
 
@@ -4238,6 +4239,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: Register a token and its price oracle into the token registry.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn register_token(
         env: Env,
         admin: Address,
@@ -4249,8 +4251,7 @@ impl IndigoPayContract {
         require_not_paused(&env);
 
         let config_key = DataKey::TokenConfig(token_address.clone());
-        if env.storage().instance().has(&config_key) {
-            let existing: TokenConfig = env.storage().instance().get(&config_key).unwrap();
+        if let Some(existing) = env.storage().instance().get::<_, TokenConfig>(&config_key) {
             if existing.active {
                 panic!("Token already registered");
             }
@@ -4282,6 +4283,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: Remove a token from active registration in the registry.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn remove_token(env: Env, admin: Address, token_address: Address) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -4300,18 +4302,15 @@ impl IndigoPayContract {
         config.active = false;
         env.storage().instance().set(&config_key, &config);
 
-        let list: Vec<Address> = env
+        let mut list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::TokenList)
             .unwrap_or(Vec::new(&env));
-        let mut new_list: Vec<Address> = Vec::new(&env);
-        for item in list.iter() {
-            if item != token_address {
-                new_list.push_back(item);
-            }
+        if let Some(idx) = list.first_index_of(&token_address) {
+            list.remove(idx);
+            env.storage().instance().set(&DataKey::TokenList, &list);
         }
-        env.storage().instance().set(&DataKey::TokenList, &new_list);
 
         env.events()
             .publish((symbol_short!("tok_rem"), admin), token_address);
@@ -4319,6 +4318,7 @@ impl IndigoPayContract {
     }
 
     /// Query configuration for a registered token.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn get_token_config(env: Env, token_address: Address) -> Option<TokenConfig> {
         env.storage()
             .instance()
@@ -4326,6 +4326,7 @@ impl IndigoPayContract {
     }
 
     /// Query the list of active registered tokens.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn get_token_list(env: Env) -> Vec<Address> {
         env.storage()
             .instance()
@@ -4334,6 +4335,7 @@ impl IndigoPayContract {
     }
 
     /// Generic donation entrypoint for any registered token.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn donate_token(
         env: Env,
         token: Address,
@@ -4346,6 +4348,7 @@ impl IndigoPayContract {
     }
 
     /// Generic donation entrypoint for any registered token with explicit privacy choice.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn donate_token_with_privacy(
         env: Env,
         token: Address,
@@ -5861,9 +5864,11 @@ impl IndigoPayContract {
 ///   - The admin registers it via `IndigoPayContract::set_oracle(admin, oracle_address)`
 ///
 /// Example real oracle sources: Band Protocol, DIA, or a custom TWAP contract.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contract]
 pub struct MockOracle;
 
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contractimpl]
 impl OracleInterface for MockOracle {
     fn get_price(_env: Env) -> i128 {
