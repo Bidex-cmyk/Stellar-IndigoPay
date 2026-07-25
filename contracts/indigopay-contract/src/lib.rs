@@ -3671,7 +3671,12 @@ impl IndigoPayContract {
 
         env.events().publish(
             (symbol_short!("rcpt_gen"), donor.clone()),
-            (donation_index, record.amount, record.project.clone(), co2_offset),
+            (
+                donation_index,
+                record.amount,
+                record.project.clone(),
+                co2_offset,
+            ),
         );
 
         DonationReceipt {
@@ -4620,7 +4625,6 @@ impl IndigoPayContract {
     pub fn get_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::OracleAddress)
     }
-
 
     // ─── Two-step admin transfer ─────────────────────────────────────────────
 
