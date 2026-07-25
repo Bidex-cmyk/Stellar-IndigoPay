@@ -33,7 +33,7 @@ pub mod donation;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
+    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address,
     BytesN, Env, String, Symbol, Vec,
 };
 #[cfg(feature = "project_verification")]
@@ -5503,6 +5503,7 @@ impl IndigoPayContract {
                     .expect("GlobalCO2OffsetGrams underflow on refund"),
             );
 
+            #[cfg(feature = "usdc")]
             if record.currency == symbol_short!("USDC") {
                 if let Some(usdc_token) = Self::get_usdc_token(env.clone()) {
                     let token_client = token::Client::new(&env, &usdc_token);
