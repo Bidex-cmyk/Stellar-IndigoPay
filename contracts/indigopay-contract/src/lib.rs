@@ -1330,10 +1330,7 @@ fn process_donation(
                 .expect("AnonymousDonationCount overflow"),
         );
     }
-    // Snapshot CO₂ offset for exact reversal on refund (#290). Written
-    // only when the `refund` feature is enabled; the slim build can skip
-    // both the write and `DonationCO2Offset` storage entirely.
-    #[cfg(feature = "refund")]
+    // Snapshot CO₂ offset for exact reversal on refund (#290) and receipt verification.
     env.storage()
         .instance()
         .set(&DataKey::DonationCO2Offset(dc), &co2_increment);
