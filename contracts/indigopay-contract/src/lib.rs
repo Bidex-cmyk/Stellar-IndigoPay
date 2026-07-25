@@ -147,6 +147,33 @@ pub struct DonationRecord {
     pub currency: Symbol, // "XLM" or "USDC"
 }
 
+/// A cryptographically signed/hashed receipt proving a donation's details.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DonationReceipt {
+    pub donation_index: u32,
+    pub donor: Address,
+    pub project_id: String,
+    pub amount: i128,
+    pub co2_offset: i128,
+    pub ledger: u32,
+    pub currency: Symbol,
+    pub contract_signature: BytesN<32>,
+}
+
+/// Helper struct used to compute the SHA-256 commitment of receipt fields.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiptFields {
+    pub donation_index: u32,
+    pub donor: Address,
+    pub project_id: String,
+    pub amount: i128,
+    pub co2_offset: i128,
+    pub ledger: u32,
+    pub currency: Symbol,
+}
+
 /// A proof-verified donation with no donor identity in contract storage.
 #[cfg(feature = "zk")]
 #[contracttype]
@@ -3642,14 +3669,19 @@ impl IndigoPayContract {
         let xdr_bytes = fields.to_xdr(&env);
         let contract_signature: BytesN<32> = env.crypto().sha256(&xdr_bytes).into();
 
+        env.events().publish(
+            (symbol_short!("rcpt_gen"), donor.clone()),
+            (donation_index, record.amount, record.project.clone(), co2_offset),
+        );
+
         DonationReceipt {
             donation_index,
-            donor,
-            project_id: record.project,
+            donor: donor.clone(),
+            project_id: record.project.clone(),
             amount: record.amount,
             co2_offset,
             ledger: record.ledger,
-            currency: record.currency,
+            currency: record.currency.clone(),
             contract_signature,
         }
     }
