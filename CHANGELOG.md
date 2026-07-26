@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Documentation
+
+* **backend:** document key service exports with JSDoc for TypeDoc (closes #548)
+
 ### Performance
 
 * **frontend:** optimize Core Web Vitals with next/image, next/font, and bundle splitting (closes #261)
