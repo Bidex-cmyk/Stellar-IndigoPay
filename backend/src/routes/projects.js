@@ -785,7 +785,7 @@ router.post("/:id/milestones/:milestoneId/reach", async (req, res, next) => {
  * GET /api/projects/admin/pending
  * Admin-only endpoint returning unverified active projects for review.
  */
-router.get("/admin/pending", async (req, res, next) => {
+router.get("/admin/pending", adminRequired, async (req, res, next) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const offset = parseInt(req.query.offset, 10) || 0;
