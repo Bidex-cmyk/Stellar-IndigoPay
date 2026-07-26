@@ -8,7 +8,7 @@ const router = express.Router();
 const { v4: uuid } = require("uuid");
 const QRCode = require("qrcode");
 const pool = require("../db/pool");
-const { validate } = require("../middleware/validate");
+const { validate, validateRouteParam } = require("../middleware/validate");
 const {
   stellarAddress,
   uuid: uuidValidator,
@@ -46,6 +46,9 @@ const PROJECT_MILESTONES_CACHE_TTL = 300; // seconds (5 minutes)
 const PROJECT_MILESTONES_CACHE_PREFIX = "cache:v1:projects:milestones:";
 const PROJECT_DETAIL_CACHE_PREFIX = "cache:v1:projects:detail:";
 const PROJECTS_MAP_CACHE_PREFIX = "cache:v1:map:";
+
+router.param("id", validateRouteParam(uuidValidator, "id"));
+router.param("milestoneId", validateRouteParam(uuidValidator, "milestoneId"));
 
 function getProjectMilestonesCacheKey(projectId) {
   return PROJECT_MILESTONES_CACHE_PREFIX + projectId;
