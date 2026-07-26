@@ -412,12 +412,6 @@ async function startIndexer(socketIo) {
   lagBackoffMs = Number(process.env.INDEXER_LAG_CHECK_INTERVAL_MS || 30_000);
   await checkLag();
 
-  logger.info(
-    { event: "indexer_started", usdcEnabled: Boolean(usdcTokenAddress) },
-    "Starting Horizon operations stream" +
-      (usdcTokenAddress ? " (USDC indexing enabled)" : ""),
-  );
-
   await openStream();
 }
 
