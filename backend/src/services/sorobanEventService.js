@@ -953,6 +953,8 @@ const HANDLERS = {
 /**
  * Fetch a batch of events from the Soroban RPC, dispatch to handlers,
  * and persist the cursor. Called once per poll interval.
+ *
+ * @returns {Promise<void>}
  */
 async function pollEvents() {
   const batchStart = Date.now();
@@ -1171,6 +1173,8 @@ async function start(socketIo) {
 /**
  * Stop the service. Clears the polling interval and resets state.
  * Idempotent — safe to call multiple times.
+ *
+ * @returns {Promise<void>}
  */
 async function stop() {
   if (!isRunning) return;
@@ -1200,6 +1204,10 @@ async function stop() {
 
 /**
  * Return health status for readiness probes.
+ *
+ * @returns {{isRunning: boolean, currentCursor: string,
+ *   processedTokenCount: number, contractId: string|undefined,
+ *   pollIntervalMs: number, timestamp: string}}
  */
 function getStatus() {
   return {
