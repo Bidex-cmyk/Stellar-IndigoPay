@@ -602,6 +602,12 @@ describe("POST /api/projects (create)", () => {
       .expect(201);
 
     expect(res.body.success).toBe(true);
+    expect(res.body.warnings).toEqual([
+      {
+        code: "GEOCODING_ERROR",
+        message: "Could not geocode the provided location",
+      },
+    ]);
     expect(pool.query).toHaveBeenCalledTimes(1);
   });
 });

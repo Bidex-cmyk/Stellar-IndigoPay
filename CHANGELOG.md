@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Bug Fixes
+
+* **backend:** surface geocoding failures as project creation warnings (closes #519)
+
 ### Documentation
 
 * **backend:** document key service exports with JSDoc for TypeDoc (closes #548)
