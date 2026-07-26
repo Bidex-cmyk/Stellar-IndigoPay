@@ -564,6 +564,7 @@ describe("GET /api/projects/admin/pending", () => {
       .set("X-Admin-Key", "test-admin-key")
       .expect(200);
 
+    expect(pool.query).toHaveBeenCalledTimes(2);
     expect(res.body.success).toBe(true);
     expect(res.body.total).toBe(1);
     expect(res.body.data).toHaveLength(1);
