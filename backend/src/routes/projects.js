@@ -13,6 +13,7 @@ const {
   stellarAddress,
   uuid: uuidValidator,
   projectSubmissionSchema,
+  campaignSchema,
 } = require("../validators/schemas");
 const { logAdminAction } = require("../services/audit");
 const {
@@ -554,45 +555,13 @@ router.get("/:id/verify", async (req, res) => {
  * @returns {Promise<void>} Sends the created campaign payload.
  * @throws {Error} If validation or database insertion fails.
  */
-router.post("/:id/campaigns", async (req, res, next) => {
+router.post("/:id/campaigns", validate(campaignSchema), async (req, res, next) => {
   try {
     const { title, goalXLM, deadline, description } = req.body || {};
-    const trimmedTitle = typeof title === "string" ? title.trim() : "";
-    const trimmedDescription =
-      typeof description === "string" ? description.trim() : "";
+    const trimmedTitle = title;
+    const trimmedDescription = description || "";
     const goal = Number.parseFloat(goalXLM);
     const deadlineDate = new Date(deadline);
-
-    if (trimmedTitle.length < 3 || trimmedTitle.length > 120) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "title",
-        detail: "title must be between 3 and 120 characters",
-      });
-    }
-    if (!Number.isFinite(goal) || goal <= 0) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "goalXLM",
-        detail: "goalXLM must be a positive number",
-      });
-    }
-    if (!deadline || Number.isNaN(deadlineDate.getTime())) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "deadline",
-        detail: "deadline must be a valid ISO date string",
-      });
-    }
-    if (deadlineDate.getTime() <= Date.now()) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "deadline",
-        detail: "deadline must be in the future",
-      });
-    }
-    if (trimmedDescription.length > 500) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "description",
-        detail: "description must be 500 characters or fewer",
-      });
-    }
 
     const projectResult = await pool.query(
       "SELECT id FROM projects WHERE id = $1",

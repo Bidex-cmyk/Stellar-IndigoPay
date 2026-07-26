@@ -646,6 +646,47 @@ describe("POST /api/projects (create)", () => {
   });
 });
 
+describe("POST /api/projects/:id/campaigns", () => {
+  let app;
+
+  beforeEach(() => {
+    app = buildApp();
+    jest.clearAllMocks();
+  });
+
+  test("returns structured Zod details for invalid campaign input", async () => {
+    const res = await request(app)
+      .post("/api/projects/proj-1/campaigns")
+      .send({
+        title: "No",
+        goalXLM: "0",
+        deadline: "not-a-date",
+        description: "x".repeat(501),
+      })
+      .expect(400);
+
+    expect(res.body.error).toBe("Validation failed");
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        {
+          path: "title",
+          message: "title must be between 3 and 120 characters",
+        },
+        { path: "goalXLM", message: "Must be a positive number" },
+        {
+          path: "deadline",
+          message: "deadline must be a valid ISO date string",
+        },
+        {
+          path: "description",
+          message: "description must be 500 characters or fewer",
+        },
+      ]),
+    );
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+
 describe("mapCampaignRow", () => {
   const mapCampaignRow = projectsRouter.mapCampaignRow;
 
