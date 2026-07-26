@@ -26,7 +26,18 @@
 
 ### Features
 
+* **contracts:** enforce Rust formatting via a robust pre-commit hook (closes #60)
+  - Implement reliable Cargo detection in `.husky/check-rust-fmt.sh` with PATH resolution for `$HOME/.cargo/bin` and `$HOME/.cargo/env` compatibility
+  - Optimize pre-commit hook to skip execution overhead and run instantly when no Rust files are staged
+  - Remove redundant `.husky/check-rust-fmt.sh` execution from package.json lint-staged config
+
 * **backend:** standardize structured startup, shutdown, and shutdown-error logging for background workers, with graceful queue draining
+
+* **backend:** JSDoc and TypeDoc validation CI check with warning-as-error strictness (GF-045)
+  - Add `typedoc` as a devDependency in `backend/package.json`
+  - Enable `"treatWarningsAsErrors": true` in `backend/typedoc.json`
+  - Add a dedicated CI step `npm run docs` in `.github/workflows/ci.yml`
+  - Resolve pre-existing JSDoc/TypeDoc syntax and tag warnings across backend service files
 
 * **contracts/backend:** add opt-in anonymous donations and signed, cached tax receipt PDFs with locked XLM/USD values
 
