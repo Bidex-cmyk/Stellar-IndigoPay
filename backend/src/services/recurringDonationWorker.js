@@ -337,7 +337,7 @@ async function start(io) {
       { event: "recurring_worker_disabled" },
       "[recurringDonationWorker] Disabled via env",
     );
-    return;
+    return false;
   }
 
   const cronSchedule = cronOverride || DEFAULT_CRON;
@@ -372,14 +372,7 @@ async function start(io) {
  */
 async function stop() {
   if (!boss) return;
-  try {
-    await boss.stop({ graceful: true, timeout: 15_000 });
-  } catch (err) {
-    logger.warn(
-      { event: "recurring_worker_stop_error", err: err.message },
-      "[recurringDonationWorker] graceful stop failed",
-    );
-  }
+  await boss.stop({ graceful: true, timeout: 15_000 });
   boss = null;
 }
 

@@ -1002,7 +1002,7 @@ async function startCO2VerificationCron() {
       { event: "co2_verification_cron_disabled" },
       "[co2Verifier] Cron disabled via CO2_VERIFICATION_CRON=disabled",
     );
-    return;
+    return false;
   }
 
   const cronSchedule = cronOverride || DEFAULT_CRON;
@@ -1043,13 +1043,15 @@ async function startCO2VerificationCron() {
       `[co2Verifier] Cron scheduled: ${cronSchedule}`,
     );
   } catch (err) {
+    boss = null;
     logger.error(
       {
         event: "co2_verification_cron_startup_error",
         err: err.message,
       },
-      "Failed to start CO₂ verification cron; runs will be manual only",
+      "Failed to start CO2 verification cron; runs will be manual only",
     );
+    return false;
   }
 }
 
@@ -1059,14 +1061,9 @@ async function startCO2VerificationCron() {
  * @returns {Promise<void>}
  */
 async function stopCO2VerificationCron() {
-  if (boss) {
-    try {
-      await boss.stop({ timeout: 5000 });
-    } catch {
-      // ignore
-    }
-    boss = null;
-  }
+  if (!boss) return;
+  await boss.stop({ timeout: 5000 });
+  boss = null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

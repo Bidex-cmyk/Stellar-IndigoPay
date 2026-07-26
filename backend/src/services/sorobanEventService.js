@@ -1137,15 +1137,6 @@ async function start(socketIo) {
 
   // Load persisted cursor
   currentCursor = await loadCursor();
-  logger.info(
-    {
-      event: "soroban_events_started",
-      cursor: currentCursor || "(start)",
-      contractId: CONTRACT_ID,
-      pollIntervalMs: POLL_INTERVAL_MS,
-    },
-    "Soroban event service started",
-  );
 
   // Run initial poll immediately
   pollEvents().catch((err) =>
@@ -1193,13 +1184,6 @@ async function stop() {
     await saveCursor(currentCursor);
   }
 
-  logger.info(
-    {
-      event: "soroban_events_stopped",
-      finalCursor: currentCursor,
-    },
-    "Soroban event service stopped",
-  );
 }
 
 /**
