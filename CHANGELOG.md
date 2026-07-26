@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### Features
+
+* **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` (closes #533, grantfox GF-031)
+  - Wrap each marker divIcon in a keyboard-focusable `<button>` with `tabindex="0"`, `role="button"`, and `aria-label="View project: {name}"`
+  - Handle Enter / Space on the marker via `react-leaflet`'s `eventHandlers.keydown` to open the popup, so keyboard-only users can discover project details
+  - HTML-escape the project name before embedding it in the divIcon attribute (defense-in-depth against XSS via project names)
+  - Remove the now-redundant `L.Marker.prototype.options.icon` patch from `ProjectMap.tsx` — each marker provides its own accessible icon
+  - Add visible `:focus-visible` ring on `.indigopay-marker-btn` in `globals.css` (WCAG 2.4.7 Focus Visible)
+  - Add `frontend/components/__tests__/ProjectMapMarker.a11y.test.tsx` with 8 jest cases: focusable button, Enter/Space opens popup, other keys are no-ops, unique aria-label per project, HTML escaping, `jest-axe` reports no violations
+
 ### Bug Fixes
 
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
