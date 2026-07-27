@@ -1301,9 +1301,6 @@ fn process_donation_token(
     #[cfg(feature = "project_verification")]
     require_project_verified_for_donation(env, project_id);
     require_campaign_accepts_donation(&project, env.ledger().sequence());
-    // Pre-compute CO2 increment with checked multiplication so an attacker
-    // can't trigger a silent wrap via a project with a huge co2_per_xlm.
-    let xlm_units = amount / STROOP;
 
     // Pre-compute CO2 increment using XLM equivalent
     let xlm_units = xlm_equivalent / STROOP;
@@ -1462,13 +1459,6 @@ fn process_donation_token(
     env.storage()
         .instance()
         .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
-    // ── Interaction: external call happens after every effect is durable.
-    let fee_bps = read_platform_fee_bps(env);
-    #[allow(unused_variables)]
-    let (project_amount, fee_amount) = split_fee(amount, fee_bps);
-    let token_client = token::Client::new(env, token);
-    // Transfer platform fee to treasury (if configured and feature enabled).
-
     // ── Interaction: external token transfer of raw_amount
     let fee_bps = read_platform_fee_bps(env);
     #[allow(unused_variables)]
@@ -4118,16 +4108,6 @@ impl IndigoPayContract {
     ) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
-        if usdc_amount <= 0 {
-            panic!("Donation amount must be positive");
-        }
-        let stored_usdc: Option<Address> = env.storage().instance().get(&DataKey::USDCTokenAddress);
-        if stored_usdc.is_none() || stored_usdc.unwrap() != usdc_token {
-            panic!("USDC token not configured");
-        }
-        // Fetch the USDC→XLM price from the configured oracle.
-        // The oracle returns how many XLM stroops equal 1 USDC stroop.
-        let oracle_addr: Address = env
 
         let config_key = DataKey::TokenConfig(token_address.clone());
         if let Some(existing) = env.storage().instance().get::<_, TokenConfig>(&config_key) {
@@ -4155,10 +4135,6 @@ impl IndigoPayContract {
             list.push_back(token_address.clone());
             env.storage().instance().set(&DataKey::TokenList, &list);
         }
-        let xlm_equivalent = usdc_amount
-            .checked_mul(rate)
-            .expect("USDC to XLM conversion overflow");
-        let mut project: Project = env
 
         env.events()
             .publish((symbol_short!("tok_reg"), admin), (token_address, symbol));
@@ -4181,46 +4157,6 @@ impl IndigoPayContract {
         if !config.active {
             panic!("Token is already inactive");
         }
-        #[cfg(feature = "project_verification")]
-        require_project_verified_for_donation(&env, &project_id);
-        require_campaign_accepts_donation(&project, env.ledger().sequence());
-        // Pre-compute CO2 increment using XLM-equivalent
-        let xlm_units = xlm_equivalent / STROOP;
-        let co2_increment = xlm_units
-            .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
-        let stats_donor = if anonymous {
-            Address::from_string(&String::from_str(
-                &env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        } else {
-            donor.clone()
-        };
-        let mut donor_stats: DonorStats = env
-            .storage()
-            .instance()
-            .get(&DataKey::DonorStats(stats_donor.clone()))
-            .unwrap_or(DonorStats {
-                total_donated: 0,
-                donation_count: 0,
-                badge: BadgeTier::None,
-                co2_offset_grams: 0,
-            });
-        let prev_badge = donor_stats.badge.clone();
-        // Update project and donor stats using XLM-equivalent
-        project.total_raised = project
-            .total_raised
-            .checked_add(xlm_equivalent)
-            .expect("Project total_raised overflow");
-        let goal_reached = apply_campaign_goal_progress(&mut project);
-        let donated_key = DataKey::HasDonated(project_id.clone(), donor.clone());
-        if !env.storage().instance().has(&donated_key) {
-            env.storage().instance().set(&donated_key, &true);
-            project.donor_count = project
-                .donor_count
-                .checked_add(1)
-                .expect("Project donor_count overflow");
 
         config.active = false;
         env.storage().instance().set(&config_key, &config);
@@ -4245,151 +4181,6 @@ impl IndigoPayContract {
     pub fn get_token_config(env: Env, token_address: Address) -> Option<TokenConfig> {
         env.storage()
             .instance()
-            .set(&DataKey::Project(project_id.clone()), &project);
-        if goal_reached {
-            env.events().publish(
-                (symbol_short!("camp_goal"), project_id.clone()),
-                project.total_raised,
-            );
-        }
-        donor_stats.total_donated = donor_stats
-            .total_donated
-            .checked_add(xlm_equivalent)
-            .expect("Donor total_donated overflow");
-        donor_stats.donation_count = donor_stats
-            .donation_count
-            .checked_add(1)
-            .expect("Donor donation_count overflow");
-        donor_stats.co2_offset_grams = donor_stats
-            .co2_offset_grams
-            .checked_add(co2_increment)
-            .expect("Donor co2_offset overflow");
-        donor_stats.badge = calculate_badge(donor_stats.total_donated);
-        #[cfg(feature = "delegation")]
-        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
-        env.storage()
-            .instance()
-            .set(&DataKey::DonorStats(stats_donor.clone()), &donor_stats);
-        if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
-            let nft_key = DataKey::ImpactNFT(donor.clone(), donor_stats.badge.clone());
-            if !env.storage().instance().has(&nft_key) {
-                let nft = ImpactNFT {
-                    owner: donor.clone(),
-                    tier: donor_stats.badge.clone(),
-                    total_donated: donor_stats.total_donated,
-                    minted_at_ledger: env.ledger().sequence(),
-                };
-                env.storage().instance().set(&nft_key, &nft);
-                env.events().publish(
-                    (symbol_short!("nft_mint"), donor.clone()),
-                    donor_stats.badge.clone(),
-                );
-            }
-        }
-        let dc: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DonationCount)
-            .unwrap_or(0);
-        let new_dc = dc.checked_add(1).expect("DonationCount overflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::DonationCount, &new_dc);
-        // Store USDC donation record for trustless enumeration
-        let donation_record = DonationRecord {
-            donor: donor.clone(),
-            anonymous,
-            project: project_id.clone(),
-            amount: usdc_amount,
-            ledger: env.ledger().sequence(),
-            message_hash: msg_hash,
-            currency: symbol_short!("USDC"),
-        };
-        env.storage()
-            .instance()
-            .set(&DataKey::DonationRecord(dc), &donation_record);
-        if anonymous {
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::AnonymousDonationCount)
-                .unwrap_or(0);
-            env.storage().instance().set(
-                &DataKey::AnonymousDonationCount,
-                &count
-                    .checked_add(1)
-                    .expect("AnonymousDonationCount overflow"),
-            );
-        }
-        // Snapshot CO₂ offset for exact reversal on refund (#290).
-        env.storage()
-            .instance()
-            .set(&DataKey::DonationCO2Offset(dc), &co2_increment);
-        let gr: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::GlobalTotalRaised)
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::GlobalTotalRaised,
-            &gr.checked_add(xlm_equivalent)
-                .expect("GlobalTotalRaised overflow"),
-        );
-        let gg: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::GlobalCO2OffsetGrams)
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::GlobalCO2OffsetGrams,
-            &gg.checked_add(co2_increment)
-                .expect("GlobalCO2OffsetGrams overflow"),
-        );
-        // Track per-project cumulative donations for milestone NFT eligibility.
-        let proj_total_key = DataKey::DonorProjectTotal(project_id.clone(), donor.clone());
-        let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
-        env.storage().instance().set(
-            &proj_total_key,
-            &prev_proj_total
-                .checked_add(xlm_equivalent)
-                .expect("DonorProjectTotal overflow"),
-        );
-        let token_client = token::Client::new(&env, &usdc_token);
-        let project_wallet = project.wallet;
-        // Fee split for USDC donations.
-        let fee_bps = read_platform_fee_bps(&env);
-        #[allow(unused_variables)]
-        let (project_usdc, fee_amount) = split_fee(usdc_amount, fee_bps);
-        #[cfg(feature = "fees")]
-        if fee_amount > 0 {
-            let treasury: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::PlatformTreasury)
-                .expect("Platform treasury not configured");
-            token_client.transfer(&donor, &treasury, &fee_amount);
-        }
-        token_client.transfer(&donor, &project_wallet, &project_usdc);
-        #[cfg(feature = "fees")]
-        env.events().publish(
-            (symbol_short!("donated"), donor.clone(), project_id),
-            (usdc_amount, symbol_short!("USDC"), msg_hash, fee_amount),
-        );
-        #[cfg(not(feature = "fees"))]
-        env.events().publish(
-            (
-                symbol_short!("donated"),
-                if anonymous {
-                    Address::from_string(&String::from_str(
-                        &env,
-                        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-                    ))
-                } else {
-                    donor.clone()
-                },
-                project_id,
-            ),
-            (usdc_amount, symbol_short!("USDC"), msg_hash),
             .get(&DataKey::TokenConfig(token_address))
     }
 
@@ -5123,76 +4914,6 @@ impl IndigoPayContract {
         // non-adversarial cases (wrong project, wrong amount, tech error).
         // The fraud case is unresolvable on-chain without escrow.
         project.wallet.require_auth();
-        // ── Effects: all counter adjustments BEFORE the token transfer (CEI).
-        project.total_raised = project
-            .total_raised
-            .checked_sub(request.amount)
-            .expect("Project total_raised underflow on refund");
-        env.storage()
-            .instance()
-            .set(&DataKey::Project(request.project_id.clone()), &project);
-        // Donor stats: decrement totals but do NOT recalculate badge (permanent).
-        let mut donor_stats: DonorStats = env
-            .storage()
-            .instance()
-            .get(&DataKey::DonorStats(request.donor.clone()))
-            .unwrap_or(DonorStats {
-                total_donated: 0,
-                donation_count: 0,
-                badge: BadgeTier::None,
-                co2_offset_grams: 0,
-            });
-        donor_stats.total_donated = donor_stats
-            .total_donated
-            .checked_sub(request.amount)
-            .expect("Donor total_donated underflow on refund");
-        donor_stats.co2_offset_grams = donor_stats
-            .co2_offset_grams
-            .checked_sub(request.co2_offset_grams)
-            .expect("Donor co2_offset underflow on refund");
-        // Badge is NOT recalculated — badges are permanent.
-        env.storage()
-            .instance()
-            .set(&DataKey::DonorStats(request.donor.clone()), &donor_stats);
-        // Per-project cumulative donation total (milestone NFT tracker).
-        let proj_total_key =
-            DataKey::DonorProjectTotal(request.project_id.clone(), request.donor.clone());
-        let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
-        env.storage().instance().set(
-            &proj_total_key,
-            &prev_proj_total
-                .checked_sub(request.amount)
-                .expect("DonorProjectTotal underflow on refund"),
-        );
-        // Global counters.
-        let gr: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::GlobalTotalRaised)
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::GlobalTotalRaised,
-            &gr.checked_sub(request.amount)
-                .expect("GlobalTotalRaised underflow on refund"),
-        );
-        let gc: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::GlobalCO2OffsetGrams)
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::GlobalCO2OffsetGrams,
-            &gc.checked_sub(request.co2_offset_grams)
-                .expect("GlobalCO2OffsetGrams underflow on refund"),
-        );
-        // Mark approved before the external transfer.
-        request.status = RefundRequestStatus::Approved;
-        env.storage()
-            .instance()
-            .set(&DataKey::RefundRequest(refund_id), &request);
-        // ── Interaction: token transfer from project wallet back to donor.
-        let token_client = token::Client::new(&env, &request.token);
-        token_client.transfer(&project.wallet, &request.donor, &request.amount);
 
         apply_refund_accounting(&env, refund_id, &mut request, &mut project);
 
