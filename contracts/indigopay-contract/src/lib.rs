@@ -1114,24 +1114,17 @@ fn require_project_verified_for_donation(env: &Env, project_id: &String) {
 }
 
 /// Read the configured platform fee in basis points.
-/// Returns 0 when the `fees` feature is disabled or no fee has been configured,
-/// preserving backward compatibility.
-fn read_platform_fee_bps(_env: &Env) -> u32 {
-    #[cfg(feature = "fees")]
-    {
-        env.storage()
-            .instance()
-            .get(&DataKey::PlatformFeeBps)
-            .unwrap_or(0)
-    }
-    #[cfg(not(feature = "fees"))]
-    {
-        0
-    }
+#[cfg(feature = "fees")]
+fn read_platform_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PlatformFeeBps)
+        .unwrap_or(0)
 }
 
 /// Split `amount` into (project_amount, fee_amount) based on the configured fee
 /// rate in basis points. Returns `(amount, 0)` when `fee_bps` is 0.
+#[cfg(feature = "fees")]
 fn split_fee(amount: i128, fee_bps: u32) -> (i128, i128) {
     if fee_bps == 0 {
         return (amount, 0);
@@ -1523,10 +1516,10 @@ fn process_donation_token(
         .instance()
         .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
 
-    // ── Interaction: external token transfer of raw_amount
-    let fee_bps = read_platform_fee_bps(env);
-    #[allow(unused_variables)]
-    let (project_amount, fee_amount) = split_fee(raw_amount, fee_bps);
+    #[cfg(feature = "fees")]
+    let (project_amount, fee_amount) = split_fee(raw_amount, read_platform_fee_bps(env));
+    #[cfg(not(feature = "fees"))]
+    let (project_amount, fee_amount) = (raw_amount, 0i128);
 
     let token_client = token::Client::new(env, token);
 
@@ -1600,6 +1593,7 @@ fn process_donation(
 
 /// After `total_raised` is updated, flip `Active` → `GoalReached` when the
 /// campaign goal is met. Returns `true` when the transition happened.
+#[cfg(feature = "campaign")]
 fn apply_campaign_goal_progress(project: &mut Project) -> bool {
     if project.campaign_status == CampaignStatus::Active
         && project.goal > 0
@@ -1635,6 +1629,7 @@ pub fn voting_credits_from_badge(badge: &BadgeTier) -> u32 {
 
 /// Babylonian integer square root (floor) for u32.
 /// Compatible with no_std — no floating point.
+#[cfg(feature = "governance")]
 fn isqrt(n: u32) -> u32 {
     if n < 2 {
         return n;
@@ -3010,9 +3005,10 @@ impl IndigoPayContract {
         let contract_addr = env.current_contract_address();
 
         // Fee split for anonymous donations.
-        let fee_bps = read_platform_fee_bps(&env);
-        #[allow(unused_variables)]
-        let (project_amount, fee_amount) = split_fee(amount, fee_bps);
+        #[cfg(feature = "fees")]
+        let (project_amount, fee_amount) = split_fee(amount, read_platform_fee_bps(&env));
+        #[cfg(not(feature = "fees"))]
+        let (project_amount, fee_amount) = (amount, 0i128);
 
         #[cfg(feature = "fees")]
         if fee_amount > 0 {
