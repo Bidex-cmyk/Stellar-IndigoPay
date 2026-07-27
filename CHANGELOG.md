@@ -15,6 +15,13 @@
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
 
+### Testing
+
+* **contracts:** verify oracle slash boundary test coverage (closes #011, #513)
+  - Confirm `test_slash_full_stake` covers slashing exactly the full stake
+  - Confirm `test_slash_more_than_stake_panics` covers attempting to slash more than staked
+  - Confirm `test_slash_zero_stake_panics` covers slashing when stake is 0
+
 ### Documentation
 
 * **backend:** document key service exports with JSDoc for TypeDoc (closes #548)
