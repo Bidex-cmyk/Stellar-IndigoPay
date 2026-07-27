@@ -589,7 +589,7 @@ fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
         signer.require_auth();
         if admin_set.contains(&signer) && !counted.contains(&signer) {
             counted.push_back(signer.clone());
-            valid_count = valid_count.checked_add(1).expect("valid_count overflow");
+            valid_count = valid_count.checked_add(1).expect("overflow");
         }
     }
 
@@ -644,7 +644,7 @@ fn apply_refund_accounting(
     project.total_raised = project
         .total_raised
         .checked_sub(request.amount)
-        .expect("Project total_raised underflow on refund");
+        .expect("underflow");
     env.storage()
         .instance()
         .set(&DataKey::Project(request.project_id.clone()), project);
@@ -662,11 +662,11 @@ fn apply_refund_accounting(
     donor_stats.total_donated = donor_stats
         .total_donated
         .checked_sub(request.amount)
-        .expect("Donor total_donated underflow on refund");
+        .expect("underflow");
     donor_stats.co2_offset_grams = donor_stats
         .co2_offset_grams
         .checked_sub(request.co2_offset_grams)
-        .expect("Donor co2_offset underflow on refund");
+        .expect("underflow");
     env.storage()
         .instance()
         .set(&DataKey::DonorStats(request.donor.clone()), &donor_stats);
@@ -682,7 +682,7 @@ fn apply_refund_accounting(
         &project_total_key,
         &previous_project_total
             .checked_sub(request.amount)
-            .expect("DonorProjectTotal underflow on refund"),
+            .expect("underflow"),
     );
 
     let global_raised: i128 = env
@@ -694,7 +694,7 @@ fn apply_refund_accounting(
         &DataKey::GlobalTotalRaised,
         &global_raised
             .checked_sub(request.amount)
-            .expect("GlobalTotalRaised underflow on refund"),
+            .expect("underflow"),
     );
 
     let global_co2: i128 = env
@@ -706,7 +706,7 @@ fn apply_refund_accounting(
         &DataKey::GlobalCO2OffsetGrams,
         &global_co2
             .checked_sub(request.co2_offset_grams)
-            .expect("GlobalCO2OffsetGrams underflow on refund"),
+            .expect("underflow"),
     );
 
     request.status = RefundRequestStatus::Approved;
@@ -1131,9 +1131,9 @@ fn split_fee(amount: i128, fee_bps: u32) -> (i128, i128) {
     }
     let fee = amount
         .checked_mul(fee_bps as i128)
-        .expect("Fee calculation overflow")
+        .expect("overflow")
         / 10_000;
-    let project_amount = amount.checked_sub(fee).expect("Amount minus fee underflow");
+    let project_amount = amount.checked_sub(fee).expect("underflow");
     (project_amount, fee)
 }
 
@@ -1340,7 +1340,7 @@ fn process_donation_token(
     window.count = window
         .count
         .checked_add(1)
-        .expect("RateLimitWindow count overflow");
+        .expect("overflow");
     env.storage().instance().set(&rate_key, &window);
 
     let mut project: Project = env
@@ -1362,7 +1362,7 @@ fn process_donation_token(
     let xlm_units = xlm_equivalent / STROOP;
     let co2_increment = xlm_units
         .checked_mul(project.co2_per_xlm as i128)
-        .expect("CO2 calculation overflow");
+        .expect("overflow");
 
     let stats_donor = if anonymous {
         anon_address(env)
@@ -1385,7 +1385,7 @@ fn process_donation_token(
     project.total_raised = project
         .total_raised
         .checked_add(xlm_equivalent)
-        .expect("Project total_raised overflow");
+        .expect("overflow");
     let goal_reached = apply_campaign_goal_progress(&mut project);
     let donated_key = DataKey::HasDonated(project_id.clone(), donor.clone());
     if !env.storage().instance().has(&donated_key) {
@@ -1393,7 +1393,7 @@ fn process_donation_token(
         project.donor_count = project
             .donor_count
             .checked_add(1)
-            .expect("Project donor_count overflow");
+            .expect("overflow");
     }
     env.storage()
         .instance()
@@ -1408,15 +1408,15 @@ fn process_donation_token(
     donor_stats.total_donated = donor_stats
         .total_donated
         .checked_add(xlm_equivalent)
-        .expect("Donor total_donated overflow");
+        .expect("overflow");
     donor_stats.donation_count = donor_stats
         .donation_count
         .checked_add(1)
-        .expect("Donor donation_count overflow");
+        .expect("overflow");
     donor_stats.co2_offset_grams = donor_stats
         .co2_offset_grams
         .checked_add(co2_increment)
-        .expect("Donor co2_offset overflow");
+        .expect("overflow");
     donor_stats.badge = calculate_badge(donor_stats.total_donated);
     #[cfg(feature = "delegation")]
     update_delegated_weight_if_needed(env, donor, &prev_badge, &donor_stats.badge);
@@ -1431,7 +1431,7 @@ fn process_donation_token(
         &proj_total_key,
         &prev_proj_total
             .checked_add(xlm_equivalent)
-            .expect("DonorProjectTotal overflow"),
+            .expect("overflow"),
     );
 
     // Auto-mint Impact NFT when donor reaches new badge tier
@@ -1457,7 +1457,7 @@ fn process_donation_token(
         .instance()
         .get(&DataKey::DonationCount)
         .unwrap_or(0);
-    let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+    let new_dc = dc.checked_add(1).expect("overflow");
     env.storage()
         .instance()
         .set(&DataKey::DonationCount, &new_dc);
@@ -1486,7 +1486,7 @@ fn process_donation_token(
             &DataKey::AnonymousDonationCount,
             &count
                 .checked_add(1)
-                .expect("AnonymousDonationCount overflow"),
+                .expect("overflow"),
         );
     }
 
@@ -1501,7 +1501,7 @@ fn process_donation_token(
         .unwrap_or(0);
     let new_gr = gr
         .checked_add(xlm_equivalent)
-        .expect("GlobalTotalRaised overflow");
+        .expect("overflow");
     env.storage()
         .instance()
         .set(&DataKey::GlobalTotalRaised, &new_gr);
@@ -1511,7 +1511,7 @@ fn process_donation_token(
         .instance()
         .get(&DataKey::GlobalCO2OffsetGrams)
         .unwrap_or(0);
-    let new_gc = gc.checked_add(co2_increment).expect("GlobalCO2 overflow");
+    let new_gc = gc.checked_add(co2_increment).expect("overflow");
     env.storage()
         .instance()
         .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
@@ -1519,7 +1519,7 @@ fn process_donation_token(
     #[cfg(feature = "fees")]
     let (project_amount, fee_amount) = split_fee(raw_amount, read_platform_fee_bps(env));
     #[cfg(not(feature = "fees"))]
-    let (project_amount, fee_amount) = (raw_amount, 0i128);
+    let project_amount = raw_amount;
 
     let token_client = token::Client::new(env, token);
 
@@ -1660,7 +1660,7 @@ fn update_delegated_weight_if_needed(
                 let mut del_weight: u32 = env.storage().instance().get(&del_key).unwrap_or(0);
                 del_weight = del_weight
                     .checked_add(new_weight - old_weight)
-                    .expect("Delegated weight overflow");
+                    .expect("overflow");
                 env.storage().instance().set(&del_key, &del_weight);
             }
         }
@@ -1755,7 +1755,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::ProjectCount)
             .unwrap_or(0);
-        let next_count = count.checked_add(1).expect("ProjectCount overflow");
+        let next_count = count.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::ProjectCount, &next_count);
@@ -1844,7 +1844,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::ProjectCount)
             .unwrap_or(0);
-        let next_count = count.checked_add(1).expect("ProjectCount overflow");
+        let next_count = count.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::ProjectCount, &next_count);
@@ -1905,7 +1905,7 @@ impl IndigoPayContract {
                 .instance()
                 .get(&DataKey::ProjectCount)
                 .unwrap_or(0);
-            let next_count = count.checked_add(1).expect("ProjectCount overflow");
+            let next_count = count.checked_add(1).expect("overflow");
             env.storage()
                 .instance()
                 .set(&DataKey::ProjectCount, &next_count);
@@ -2381,7 +2381,7 @@ impl IndigoPayContract {
         let xlm_units = xlm_amount / STROOP;
         let co2_increment = xlm_units
             .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         let stats_donor = if anonymous {
             Address::from_string(&String::from_str(
@@ -2408,7 +2408,7 @@ impl IndigoPayContract {
         project.total_raised = project
             .total_raised
             .checked_add(xlm_amount)
-            .expect("Project total_raised overflow");
+            .expect("overflow");
         let goal_reached = apply_campaign_goal_progress(&mut project);
         let donated_key = DataKey::HasDonated(project_id.clone(), donor.clone());
         if !env.storage().instance().has(&donated_key) {
@@ -2416,7 +2416,7 @@ impl IndigoPayContract {
             project.donor_count = project
                 .donor_count
                 .checked_add(1)
-                .expect("Project donor_count overflow");
+                .expect("overflow");
         }
         env.storage()
             .instance()
@@ -2431,15 +2431,15 @@ impl IndigoPayContract {
         donor_stats.total_donated = donor_stats
             .total_donated
             .checked_add(xlm_amount)
-            .expect("Donor total_donated overflow");
+            .expect("overflow");
         donor_stats.donation_count = donor_stats
             .donation_count
             .checked_add(1)
-            .expect("Donor donation_count overflow");
+            .expect("overflow");
         donor_stats.co2_offset_grams = donor_stats
             .co2_offset_grams
             .checked_add(co2_increment)
-            .expect("Donor co2_offset overflow");
+            .expect("overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
         #[cfg(feature = "delegation")]
         update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
@@ -2454,7 +2454,7 @@ impl IndigoPayContract {
             &proj_total_key,
             &prev_proj_total
                 .checked_add(xlm_amount)
-                .expect("DonorProjectTotal overflow"),
+                .expect("overflow"),
         );
 
         // Auto-mint an Impact NFT when a donor reaches a new badge tier.
@@ -2480,7 +2480,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::DonationCount)
             .unwrap_or(0);
-        let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+        let new_dc = dc.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::DonationCount, &new_dc);
@@ -2507,7 +2507,7 @@ impl IndigoPayContract {
                 &DataKey::AnonymousDonationCount,
                 &count
                     .checked_add(1)
-                    .expect("AnonymousDonationCount overflow"),
+                    .expect("overflow"),
             );
         }
         // Snapshot CO₂ offset for exact reversal on refund (#290).
@@ -2522,7 +2522,7 @@ impl IndigoPayContract {
             .unwrap_or(0);
         let new_gr = gr
             .checked_add(xlm_amount)
-            .expect("GlobalTotalRaised overflow");
+            .expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalTotalRaised, &new_gr);
@@ -2532,7 +2532,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalCO2OffsetGrams)
             .unwrap_or(0);
-        let new_gc = gc.checked_add(co2_increment).expect("GlobalCO2 overflow");
+        let new_gc = gc.checked_add(co2_increment).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
@@ -2669,7 +2669,7 @@ impl IndigoPayContract {
         project.total_raised = project
             .total_raised
             .checked_add(amount)
-            .expect("Project total_raised overflow");
+            .expect("overflow");
         let goal_reached = apply_campaign_goal_progress(&mut project);
         env.storage()
             .instance()
@@ -2698,7 +2698,7 @@ impl IndigoPayContract {
         );
         env.storage().instance().set(
             &DataKey::DonationCount,
-            &index.checked_add(1).expect("DonationCount overflow"),
+            &index.checked_add(1).expect("overflow"),
         );
         let total: i128 = env
             .storage()
@@ -2709,11 +2709,11 @@ impl IndigoPayContract {
             &DataKey::GlobalTotalRaised,
             &total
                 .checked_add(amount)
-                .expect("GlobalTotalRaised overflow"),
+                .expect("overflow"),
         );
         let co2 = amount
             .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 multiplication overflow")
+            .expect("overflow")
             / STROOP;
         let global_co2: i128 = env
             .storage()
@@ -2722,7 +2722,7 @@ impl IndigoPayContract {
             .unwrap_or(0);
         env.storage().instance().set(
             &DataKey::GlobalCO2OffsetGrams,
-            &global_co2.checked_add(co2).expect("GlobalCO2 overflow"),
+            &global_co2.checked_add(co2).expect("overflow"),
         );
         env.storage().instance().set(&nullifier_key, &true);
         env.events().publish(
@@ -2861,7 +2861,7 @@ impl IndigoPayContract {
         let xlm_units = amount / STROOP;
         let co2_increment = xlm_units
             .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         let mut donor_stats: DonorStats = env
             .storage()
@@ -2885,7 +2885,7 @@ impl IndigoPayContract {
         project.total_raised = project
             .total_raised
             .checked_add(amount)
-            .expect("Project total_raised overflow");
+            .expect("overflow");
         let goal_reached = apply_campaign_goal_progress(&mut project);
         let donated_key = DataKey::HasDonated(project_id.clone(), anon_donor.clone());
         if !env.storage().instance().has(&donated_key) {
@@ -2893,7 +2893,7 @@ impl IndigoPayContract {
             project.donor_count = project
                 .donor_count
                 .checked_add(1)
-                .expect("Project donor_count overflow");
+                .expect("overflow");
         }
         env.storage()
             .instance()
@@ -2908,15 +2908,15 @@ impl IndigoPayContract {
         donor_stats.total_donated = donor_stats
             .total_donated
             .checked_add(amount)
-            .expect("Donor total_donated overflow");
+            .expect("overflow");
         donor_stats.donation_count = donor_stats
             .donation_count
             .checked_add(1)
-            .expect("Donor donation_count overflow");
+            .expect("overflow");
         donor_stats.co2_offset_grams = donor_stats
             .co2_offset_grams
             .checked_add(co2_increment)
-            .expect("Donor co2_offset overflow");
+            .expect("overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
         #[cfg(feature = "delegation")]
         update_delegated_weight_if_needed(&env, &anon_donor, &prev_badge, &donor_stats.badge);
@@ -2931,7 +2931,7 @@ impl IndigoPayContract {
             &proj_total_key,
             &prev_proj_total
                 .checked_add(amount)
-                .expect("DonorProjectTotal overflow"),
+                .expect("overflow"),
         );
 
         // Auto-mint an Impact NFT when the anonymous donor reaches a new badge tier.
@@ -2957,7 +2957,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::DonationCount)
             .unwrap_or(0);
-        let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+        let new_dc = dc.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::DonationCount, &new_dc);
@@ -2982,7 +2982,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalTotalRaised)
             .unwrap_or(0);
-        let new_gr = gr.checked_add(amount).expect("GlobalTotalRaised overflow");
+        let new_gr = gr.checked_add(amount).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalTotalRaised, &new_gr);
@@ -2992,7 +2992,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalCO2OffsetGrams)
             .unwrap_or(0);
-        let new_gc = gc.checked_add(co2_increment).expect("GlobalCO2 overflow");
+        let new_gc = gc.checked_add(co2_increment).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
@@ -3008,7 +3008,7 @@ impl IndigoPayContract {
         #[cfg(feature = "fees")]
         let (project_amount, fee_amount) = split_fee(amount, read_platform_fee_bps(&env));
         #[cfg(not(feature = "fees"))]
-        let (project_amount, fee_amount) = (amount, 0i128);
+        let project_amount = amount;
 
         #[cfg(feature = "fees")]
         if fee_amount > 0 {
@@ -3129,13 +3129,13 @@ impl IndigoPayContract {
         let xlm_units = amount / STROOP;
         let co2_increment = xlm_units
             .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         // Update project total_raised (donor_count is NOT updated to preserve donor anonymity)
         project.total_raised = project
             .total_raised
             .checked_add(amount)
-            .expect("Project total_raised overflow");
+            .expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::Project(project_id.clone()), &project);
@@ -3146,7 +3146,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalTotalRaised)
             .unwrap_or(0);
-        let new_gr = gr.checked_add(amount).expect("GlobalTotalRaised overflow");
+        let new_gr = gr.checked_add(amount).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalTotalRaised, &new_gr);
@@ -3156,7 +3156,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalCO2OffsetGrams)
             .unwrap_or(0);
-        let new_gc = gc.checked_add(co2_increment).expect("GlobalCO2 overflow");
+        let new_gc = gc.checked_add(co2_increment).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
@@ -3167,7 +3167,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::DonationCount)
             .unwrap_or(0);
-        let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+        let new_dc = dc.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::DonationCount, &new_dc);
@@ -3424,7 +3424,7 @@ impl IndigoPayContract {
             None => {
                 let next_key = ImpactVerificationKey::ImpactNextReportId(project_id.clone());
                 let next: u32 = env.storage().instance().get(&next_key).unwrap_or(0);
-                let new_next = next.checked_add(1).expect("Impact report id overflow");
+                let new_next = next.checked_add(1).expect("overflow");
                 env.storage().instance().set(&next_key, &new_next);
                 next
             }
@@ -3821,7 +3821,7 @@ impl IndigoPayContract {
         let parent_xlm = parent.total_raised / STROOP;
         let mut total_co2 = parent_xlm
             .checked_mul(parent.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         let sub_ids: Vec<String> = env
             .storage()
@@ -3836,18 +3836,18 @@ impl IndigoPayContract {
                 .expect("Sub-project not found");
             total_raised = total_raised
                 .checked_add(sub.total_raised)
-                .expect("Aggregated total_raised overflow");
+                .expect("overflow");
             total_donors = total_donors
                 .checked_add(sub.donor_count)
-                .expect("Aggregated donor_count overflow");
+                .expect("overflow");
             let sub_xlm = sub.total_raised / STROOP;
             total_co2 = total_co2
                 .checked_add(
                     sub_xlm
                         .checked_mul(sub.co2_per_xlm as i128)
-                        .expect("CO2 calculation overflow"),
+                        .expect("overflow"),
                 )
-                .expect("Aggregated CO2 overflow");
+                .expect("overflow");
         }
         (total_raised, total_co2, total_donors)
     }
@@ -4059,7 +4059,7 @@ impl IndigoPayContract {
         let xlm_units = proj_total / STROOP;
         let co2_offset = xlm_units
             .checked_mul(co2_per_xlm)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         let nft = ProjectMilestoneNFT {
             owner: donor.clone(),
@@ -4136,7 +4136,7 @@ impl IndigoPayContract {
             .ledger()
             .sequence()
             .checked_add(window)
-            .expect("Voting deadline overflow");
+            .expect("overflow");
 
         let proposal = VoteProposal {
             project_id: project_id.clone(),
@@ -4178,7 +4178,7 @@ impl IndigoPayContract {
         let delegated_credits: u32 = 0;
         let total_credits = own_credits
             .checked_add(delegated_credits)
-            .expect("Credit overflow");
+            .expect("overflow");
         isqrt(total_credits)
     }
 
@@ -4216,13 +4216,13 @@ impl IndigoPayContract {
         if let Some(old) = old_delegate {
             let old_del_key = DataKey::DelegatedWeight(old.clone());
             let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
-            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            old_weight = old_weight.checked_sub(weight).expect("underflow");
             env.storage().instance().set(&old_del_key, &old_weight);
         }
 
         let new_del_key = DataKey::DelegatedWeight(delegate.clone());
         let mut new_weight: u32 = env.storage().instance().get(&new_del_key).unwrap_or(0);
-        new_weight = new_weight.checked_add(weight).expect("Weight overflow");
+        new_weight = new_weight.checked_add(weight).expect("overflow");
 
         env.storage().instance().set(&new_del_key, &new_weight);
         env.storage().instance().set(&del_key, &delegate);
@@ -4256,7 +4256,7 @@ impl IndigoPayContract {
 
             let old_del_key = DataKey::DelegatedWeight(del.clone());
             let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
-            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            old_weight = old_weight.checked_sub(weight).expect("underflow");
             env.storage().instance().set(&old_del_key, &old_weight);
 
             env.storage().instance().remove(&del_key);
@@ -4323,7 +4323,7 @@ impl IndigoPayContract {
             .unwrap_or(0);
         let total_credits = own_credits
             .checked_add(delegated_credits)
-            .expect("Credit overflow");
+            .expect("overflow");
 
         if total_credits == 0 {
             panic!("Only badge holders (Seedling or above) or active delegates can vote");
@@ -4333,7 +4333,7 @@ impl IndigoPayContract {
         let previously_spent: u32 = env.storage().instance().get(&credits_key).unwrap_or(0);
         let new_total = previously_spent
             .checked_add(credits)
-            .expect("Credit overflow");
+            .expect("overflow");
         if new_total > total_credits {
             panic!("Insufficient voting credits");
         }
@@ -4354,7 +4354,7 @@ impl IndigoPayContract {
         let new_effective = isqrt(new_total);
         let weight_delta = new_effective
             .checked_sub(prev_effective)
-            .expect("Weight delta underflow");
+            .expect("underflow");
 
         // Effects: persist state before external effects.
         let voter_list_key = DataKey::VoterList(project_id.clone());
@@ -4376,12 +4376,12 @@ impl IndigoPayContract {
             proposal.votes_for = proposal
                 .votes_for
                 .checked_add(weight_delta)
-                .expect("votes_for overflow");
+                .expect("overflow");
         } else {
             proposal.votes_against = proposal
                 .votes_against
                 .checked_add(weight_delta)
-                .expect("votes_against overflow");
+                .expect("overflow");
         }
         env.storage()
             .instance()
@@ -4657,7 +4657,7 @@ impl IndigoPayContract {
             }
             amount
                 .checked_mul(rate)
-                .expect("Token to XLM conversion overflow")
+                .expect("overflow")
                 / PRICE_SCALE
         };
 
@@ -5019,7 +5019,7 @@ impl IndigoPayContract {
             .ledger()
             .sequence()
             .checked_add(UPGRADE_TIMELOCK_LEDGERS)
-            .expect("Upgrade effective-at overflow");
+            .expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::PendingUpgrade, &new_wasm_hash);
@@ -5168,7 +5168,7 @@ impl IndigoPayContract {
         let current_ledger = env.ledger().sequence();
         let executable_at = current_ledger
             .checked_add(EMERGENCY_WITHDRAWAL_TIMELOCK)
-            .expect("Emergency withdrawal timelock overflow");
+            .expect("overflow");
 
         let withdrawal = EmergencyWithdrawal {
             new_wallet: new_wallet.clone(),
@@ -5296,7 +5296,7 @@ impl IndigoPayContract {
         let deadline = record
             .ledger
             .checked_add(REFUND_COOLDOWN_LEDGERS)
-            .expect("Refund deadline overflow");
+            .expect("overflow");
         if current_ledger > deadline {
             panic!("Refund cooldown expired");
         }
@@ -5468,7 +5468,7 @@ impl IndigoPayContract {
         let initiated_at = env.ledger().sequence();
         let effective_at = initiated_at
             .checked_add(FORCE_REFUND_TIMELOCK_LEDGERS)
-            .expect("Force refund timelock overflow");
+            .expect("overflow");
         env.storage().instance().set(
             &force_key,
             &ForceRefund {
@@ -5719,7 +5719,7 @@ impl IndigoPayContract {
             project.total_raised = project
                 .total_raised
                 .checked_sub(record.amount)
-                .expect("Project total_raised underflow on refund");
+                .expect("underflow");
             env.storage()
                 .instance()
                 .set(&DataKey::Project(record.project.clone()), &project);
@@ -5737,11 +5737,11 @@ impl IndigoPayContract {
             donor_stats.total_donated = donor_stats
                 .total_donated
                 .checked_sub(record.amount)
-                .expect("Donor total_donated underflow on refund");
+                .expect("underflow");
             donor_stats.co2_offset_grams = donor_stats
                 .co2_offset_grams
                 .checked_sub(co2_offset)
-                .expect("Donor co2_offset underflow on refund");
+                .expect("underflow");
             env.storage()
                 .instance()
                 .set(&DataKey::DonorStats(record.donor.clone()), &donor_stats);
@@ -5753,7 +5753,7 @@ impl IndigoPayContract {
                 &proj_total_key,
                 &prev_proj_total
                     .checked_sub(record.amount)
-                    .expect("DonorProjectTotal underflow on refund"),
+                    .expect("underflow"),
             );
 
             let gr: i128 = env
@@ -5764,7 +5764,7 @@ impl IndigoPayContract {
             env.storage().instance().set(
                 &DataKey::GlobalTotalRaised,
                 &gr.checked_sub(record.amount)
-                    .expect("GlobalTotalRaised underflow on refund"),
+                    .expect("underflow"),
             );
 
             let gc: i128 = env
@@ -5775,7 +5775,7 @@ impl IndigoPayContract {
             env.storage().instance().set(
                 &DataKey::GlobalCO2OffsetGrams,
                 &gc.checked_sub(co2_offset)
-                    .expect("GlobalCO2OffsetGrams underflow on refund"),
+                    .expect("underflow"),
             );
 
             #[cfg(feature = "usdc")]
@@ -5874,14 +5874,14 @@ impl IndigoPayContract {
         let count_key = DataKey::DonorRecurringCount(donor.clone());
         let count: u32 = env.storage().instance().get(&count_key).unwrap_or(0);
         let recurring_id = count;
-        let next_count = count.checked_add(1).expect("DonorRecurringCount overflow");
+        let next_count = count.checked_add(1).expect("overflow");
         env.storage().instance().set(&count_key, &next_count);
 
         let next_execution_ledger = env
             .ledger()
             .sequence()
             .checked_add(interval_ledgers)
-            .expect("next_execution_ledger overflow");
+            .expect("overflow");
 
         let recurring = RecurringDonation {
             donor: donor.clone(),
@@ -6000,7 +6000,7 @@ impl IndigoPayContract {
             xlm_equivalent = recurring
                 .amount
                 .checked_mul(rate)
-                .expect("USDC to XLM conversion overflow");
+                .expect("overflow");
         } else {
             panic!("Unsupported currency");
         }
@@ -6008,14 +6008,14 @@ impl IndigoPayContract {
         let xlm_units = xlm_equivalent / STROOP;
         let co2_increment = xlm_units
             .checked_mul(project.co2_per_xlm as i128)
-            .expect("CO2 calculation overflow");
+            .expect("overflow");
 
         // Checks-Effects-Interactions (CEI) Pattern: State changes before token transfers.
         // Update Project
         project.total_raised = project
             .total_raised
             .checked_add(xlm_equivalent)
-            .expect("Project total_raised overflow");
+            .expect("overflow");
         let goal_reached = apply_campaign_goal_progress(&mut project);
         let donated_key = DataKey::HasDonated(recurring.project_id.clone(), donor.clone());
         if !env.storage().instance().has(&donated_key) {
@@ -6023,7 +6023,7 @@ impl IndigoPayContract {
             project.donor_count = project
                 .donor_count
                 .checked_add(1)
-                .expect("Project donor_count overflow");
+                .expect("overflow");
         }
         env.storage()
             .instance()
@@ -6051,15 +6051,15 @@ impl IndigoPayContract {
         donor_stats.total_donated = donor_stats
             .total_donated
             .checked_add(xlm_equivalent)
-            .expect("Donor total_donated overflow");
+            .expect("overflow");
         donor_stats.donation_count = donor_stats
             .donation_count
             .checked_add(1)
-            .expect("Donor donation_count overflow");
+            .expect("overflow");
         donor_stats.co2_offset_grams = donor_stats
             .co2_offset_grams
             .checked_add(co2_increment)
-            .expect("Donor co2_offset overflow");
+            .expect("overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
         env.storage()
             .instance()
@@ -6073,7 +6073,7 @@ impl IndigoPayContract {
             &proj_total_key,
             &prev_proj_total
                 .checked_add(xlm_equivalent)
-                .expect("DonorProjectTotal overflow"),
+                .expect("overflow"),
         );
 
         // Auto-mint Impact NFT
@@ -6100,7 +6100,7 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::DonationCount)
             .unwrap_or(0);
-        let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+        let new_dc = dc.checked_add(1).expect("overflow");
         env.storage()
             .instance()
             .set(&DataKey::DonationCount, &new_dc);
@@ -6130,7 +6130,7 @@ impl IndigoPayContract {
         env.storage().instance().set(
             &DataKey::GlobalTotalRaised,
             &gr.checked_add(xlm_equivalent)
-                .expect("GlobalTotalRaised overflow"),
+                .expect("overflow"),
         );
 
         let gc: i128 = env
@@ -6140,7 +6140,7 @@ impl IndigoPayContract {
             .unwrap_or(0);
         env.storage().instance().set(
             &DataKey::GlobalCO2OffsetGrams,
-            &gc.checked_add(co2_increment).expect("GlobalCO2 overflow"),
+            &gc.checked_add(co2_increment).expect("overflow"),
         );
 
         // Update schedule next execution sequence
@@ -6148,7 +6148,7 @@ impl IndigoPayContract {
             .ledger()
             .sequence()
             .checked_add(recurring.interval_ledgers)
-            .expect("next_execution_ledger overflow");
+            .expect("overflow");
         env.storage().instance().set(&recurring_key, &recurring);
 
         // Interactions: Token transfers
@@ -6272,12 +6272,12 @@ impl IndigoPayContract {
             .ledger()
             .sequence()
             .checked_add(installment_interval_ledgers)
-            .expect("next_installment_ledger overflow");
+            .expect("overflow");
 
         let count_key = DataKey::DonorVestingCount(donor.clone());
         let count: u32 = env.storage().instance().get(&count_key).unwrap_or(0);
         let schedule_id = count;
-        let next_count = count.checked_add(1).expect("DonorVestingCount overflow");
+        let next_count = count.checked_add(1).expect("overflow");
         env.storage().instance().set(&count_key, &next_count);
 
         let schedule = VestingSchedule {
@@ -6354,10 +6354,10 @@ impl IndigoPayContract {
         schedule.installments_released = schedule
             .installments_released
             .checked_add(1)
-            .expect("installments_released overflow");
+            .expect("overflow");
         schedule.next_installment_ledger = current_ledger
             .checked_add(schedule.interval_ledgers)
-            .expect("next_installment_ledger overflow");
+            .expect("overflow");
         env.storage().instance().set(&schedule_key, &schedule);
 
         // Load project to get the wallet.
@@ -6417,7 +6417,7 @@ impl IndigoPayContract {
             .saturating_sub(schedule.installments_released);
         let unvested_amount = (remaining_count as i128)
             .checked_mul(schedule.amount_per_installment)
-            .expect("unvested amount overflow");
+            .expect("overflow");
 
         // Remove the schedule from storage.
         env.storage().instance().remove(&schedule_key);
