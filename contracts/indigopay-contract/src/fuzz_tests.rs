@@ -376,6 +376,8 @@ mod fuzz {
             // and trip an `E0382` on the second.
             prop_assert_eq!(&receipt_a.donor, &receipt_b.donor);
             prop_assert_eq!(&receipt_a.donor, &donor);
+        }
+
         /// Random token address must panic if unregistered when calling `donate_token`.
         #[test]
         fn prop_donate_token_random_token(

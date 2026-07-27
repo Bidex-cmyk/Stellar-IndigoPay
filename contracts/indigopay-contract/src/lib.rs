@@ -33,7 +33,7 @@ pub mod donation;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address,
+    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
     BytesN, Env, String, Symbol, Vec,
 };
 #[cfg(feature = "project_verification")]
@@ -11565,61 +11565,6 @@ mod tests {
     fn test_generate_receipt() {
         let (env, _cid, client, _admin, pid) = setup();
         let donor = Address::generate(&env);
-    #[test]
-    fn test_register_token() {
-        let (env, _cid, client, admin, _pid) = setup();
-        let token = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        let symbol = symbol_short!("YXLM");
-
-        client.register_token(&admin, &token, &oracle, &symbol);
-
-        let config = client
-            .get_token_config(&token)
-            .expect("TokenConfig should be stored");
-        assert_eq!(config.token, token);
-        assert_eq!(config.oracle, oracle);
-        assert_eq!(config.symbol, symbol);
-        assert!(config.active);
-
-        let list = client.get_token_list();
-        assert!(list.contains(&token));
-    }
-
-    #[test]
-    #[should_panic(expected = "Token already registered")]
-    fn test_register_duplicate_token_panics() {
-        let (env, _cid, client, admin, _pid) = setup();
-        let token = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        let symbol = symbol_short!("YXLM");
-
-        client.register_token(&admin, &token, &oracle, &symbol);
-        client.register_token(&admin, &token, &oracle, &symbol);
-    }
-
-    #[test]
-    fn test_remove_token() {
-        let (env, _cid, client, admin, _pid) = setup();
-        let token = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        let symbol = symbol_short!("YXLM");
-
-        client.register_token(&admin, &token, &oracle, &symbol);
-        assert!(client.get_token_list().contains(&token));
-
-        client.remove_token(&admin, &token);
-
-        let config = client
-            .get_token_config(&token)
-            .expect("TokenConfig should remain");
-        assert!(!config.active);
-        assert!(!client.get_token_list().contains(&token));
-    }
-
-    #[test]
-    fn test_donate_token_xlm() {
-        let (env, _cid, client, admin, pid) = setup();
         let token_admin = Address::generate(&env);
         let token = env
             .register_stellar_asset_contract_v2(token_admin)
@@ -11700,6 +11645,113 @@ mod tests {
     fn test_verify_tampered_receipt() {
         let (env, _cid, client, _admin, pid) = setup();
         let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(10 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &4u32);
+
+        let mut receipt = client.generate_receipt(&donor, &0u32);
+        // Tamper with the amount
+        receipt.amount = 999_999_999;
+        let valid = client.verify_receipt(&receipt);
+
+        assert!(
+            !valid,
+            "verify_receipt should return false for a tampered receipt"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the donor can generate a receipt")]
+    fn test_non_donor_generate_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let imposter = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(5 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(5 * STROOP), &5u32);
+
+        // Imposter tries to generate a receipt for donor's donation
+        client.generate_receipt(&imposter, &0u32);
+    }
+
+    #[test]
+    fn test_register_token() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+
+        let config = client
+            .get_token_config(&token)
+            .expect("TokenConfig should be stored");
+        assert_eq!(config.token, token);
+        assert_eq!(config.oracle, oracle);
+        assert_eq!(config.symbol, symbol);
+        assert!(config.active);
+
+        let list = client.get_token_list();
+        assert!(list.contains(&token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Token already registered")]
+    fn test_register_duplicate_token_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+        client.register_token(&admin, &token, &oracle, &symbol);
+    }
+
+    #[test]
+    fn test_remove_token() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+        assert!(client.get_token_list().contains(&token));
+
+        client.remove_token(&admin, &token);
+
+        let config = client
+            .get_token_config(&token)
+            .expect("TokenConfig should remain");
+        assert!(!config.active);
+        assert!(!client.get_token_list().contains(&token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Token not registered")]
+    fn test_remove_unregistered_token_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+
+        client.remove_token(&admin, &token);
+    }
+
+    #[test]
+    fn test_donate_token_xlm() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         let donor = Address::generate(&env);
         let amount = 50 * STROOP;
 
@@ -11827,39 +11879,6 @@ mod tests {
         let token = env
             .register_stellar_asset_contract_v2(token_admin)
             .address();
-        let token_client = StellarAssetClient::new(&env, &token);
-        token_client.mint(&donor, &(10 * STROOP));
-
-        client.donate(&token, &donor, &pid, &(10 * STROOP), &4u32);
-
-        let mut receipt = client.generate_receipt(&donor, &0u32);
-        // Tamper with the amount
-        receipt.amount = 999_999_999;
-        let valid = client.verify_receipt(&receipt);
-
-        assert!(
-            !valid,
-            "verify_receipt should return false for a tampered receipt"
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Only the donor can generate a receipt")]
-    fn test_non_donor_generate_panics() {
-        let (env, _cid, client, _admin, pid) = setup();
-        let donor = Address::generate(&env);
-        let imposter = Address::generate(&env);
-        let token_admin = Address::generate(&env);
-        let token = env
-            .register_stellar_asset_contract_v2(token_admin)
-            .address();
-        let token_client = StellarAssetClient::new(&env, &token);
-        token_client.mint(&donor, &(5 * STROOP));
-
-        client.donate(&token, &donor, &pid, &(5 * STROOP), &5u32);
-
-        // Imposter tries to generate a receipt for donor's donation
-        client.generate_receipt(&imposter, &0u32);
         let donor = Address::generate(&env);
         let amount = 15 * STROOP;
         soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&donor, &amount);
