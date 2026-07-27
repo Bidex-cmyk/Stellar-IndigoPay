@@ -163,6 +163,31 @@ const projectSubmissionSchema = z.object({
   impactMetrics: z.array(z.string()).optional().default([]),
 });
 
+const campaignSchema = z.object({
+  title: z
+    .string()
+    .trim()
+    .min(3, "title must be between 3 and 120 characters")
+    .max(120, "title must be between 3 and 120 characters"),
+  goalXLM: positiveNumberString,
+  deadline: z
+    .string()
+    .refine((value) => {
+      const deadlineDate = new Date(value);
+      return !Number.isNaN(deadlineDate.getTime());
+    }, "deadline must be a valid ISO date string")
+    .refine((value) => {
+      const deadlineDate = new Date(value);
+      return deadlineDate.getTime() > Date.now();
+    }, "deadline must be in the future"),
+  description: z
+    .string()
+    .trim()
+    .max(500, "description must be 500 characters or fewer")
+    .optional()
+    .or(z.literal("")),
+});
+
 // ── Donation request schema ─────────────────────────────────────────────────
 
 const donationSchema = z.object({
@@ -254,6 +279,7 @@ module.exports = {
   leaderboardQuerySchema,
   profileSchema,
   projectSubmissionSchema,
+  campaignSchema,
   PROJECT_CATEGORIES,
   DONATION_CURRENCIES,
 };
