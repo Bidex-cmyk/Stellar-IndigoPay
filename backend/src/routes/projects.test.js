@@ -1123,3 +1123,36 @@ describe("POST /api/projects/admin/confirm", () => {
     expect(res.body.data.onChainVerified).toBe(true);
   });
 });
+
+describe("PATCH /api/projects/:id/status", () => {
+  let app;
+  beforeEach(() => {
+    app = buildApp();
+    jest.resetAllMocks();
+    redis.get.mockResolvedValue(null);
+    redis.set.mockResolvedValue(null);
+    redis.deletePattern.mockResolvedValue(null);
+  });
+  test("invalidates milestones cache when status changes to paused", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [MOCK_PROJECT_ROW] }); // SELECT project
+    pool.query.mockResolvedValueOnce({
+      rows: [{ ...MOCK_PROJECT_ROW, status: "paused" }],
+    }); // UPDATE project
+    const res = await request(app)
+      .patch("/api/projects/11111111-2222-3333-8888-555555555555/status")
+      .send({ status: "paused", adminAddress: "GTESTADMIN" })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(redis.deletePattern).toHaveBeenCalledWith(
+      "cache:v1:projects:milestones:11111111-2222-3333-8888-555555555555",
+    );
+  });
+  test("returns 404 and does not invalidate cache for non-existent project", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] }); // SELECT project — not found
+    await request(app)
+      .patch("/api/projects/44444444-4444-4444-8444-444444444444/status")
+      .send({ status: "paused", adminAddress: "GTESTADMIN" })
+      .expect(404);
+    expect(redis.deletePattern).not.toHaveBeenCalled();
+  });
+});

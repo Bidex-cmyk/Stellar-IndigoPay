@@ -1384,9 +1384,17 @@ router.patch("/:id/status", async (req, res, next) => {
       ipAddress: req.ip,
     });
 
+    // Cache invalidation — keep in sync with the "Cache invalidation" table in
+    // docs/api.md. A status change alters what the project list/detail, global
+    // stats AND the impact dashboard report, so the impact keys served by
+    // src/routes/impact.js (TTL 300s) must be swept here too. Without the
+    // per-project sweep the transparency dashboard serves pre-change data for
+    // up to 5 minutes after a project is paused, completed or rejected.
     await invalidateCache("cache:v1:projects:list:*");
     await invalidateCache(`cache:v1:projects:detail:${req.params.id}`);
+    await invalidateCache(getProjectMilestonesCacheKey(req.params.id));
     await invalidateCache("cache:v1:stats:global");
+    await invalidateCache(`cache:v1:impact:project:${req.params.id}`);
     await invalidateCache("cache:v1:impact:global");
 
     res.json({ success: true, data: mapProjectRow(result.rows[0]) });
