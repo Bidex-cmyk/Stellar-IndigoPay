@@ -1392,6 +1392,7 @@ router.patch("/:id/status", async (req, res, next) => {
     // up to 5 minutes after a project is paused, completed or rejected.
     await invalidateCache("cache:v1:projects:list:*");
     await invalidateCache(`cache:v1:projects:detail:${req.params.id}`);
+    await invalidateCache(getProjectMilestonesCacheKey(req.params.id));
     await invalidateCache("cache:v1:stats:global");
     await invalidateCache(`cache:v1:impact:project:${req.params.id}`);
     await invalidateCache("cache:v1:impact:global");
