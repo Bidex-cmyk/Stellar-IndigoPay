@@ -29,6 +29,17 @@ nullifier consumed. No donor address is included.
 
 ---
 
+## `StealthScan`
+
+**Description**: Emitted when an authenticated project wallet scans for its
+stealth donations, including scans that find no donations.
+
+| Event Name    | Topics                              | Data                                         | When Emitted |
+| ------------- | ----------------------------------- | -------------------------------------------- | ------------ |
+| `StealthScan` | `["StealthScan", project_wallet]`   | `(donation_count: u32, timestamp: u64)`      | After `scan_stealth_donations` completes |
+
+---
+
 ## 1. `donated`
 
 **Description**: Emitted after a successful XLM donation to a project.
@@ -212,6 +223,40 @@ project-scoped anonymous donation totals.
 | Event Name  | Topics                              | Data                                        | When Emitted                          |
 | ----------- | ----------------------------------- | ------------------------------------------- | ------------------------------------- |
 | `rfnd_rj`   | `["rfnd_rj", refund_id, admin]`    | `(project_id: String, donor: Address)`       | When admin calls `reject_refund`      |
+
+---
+
+## Force-refund escalation events
+
+These lifecycle events use full `Symbol` values because their names exceed the
+nine-character `symbol_short!` limit.
+
+### `rfnd_force_init`
+
+**Description**: Emitted after M-of-N admins schedule a force-refund. No tokens
+or donation accounting move at this point.
+
+| Event Name         | Topics                           | Data                                                     | When Emitted |
+| ------------------ | -------------------------------- | -------------------------------------------------------- | ------------ |
+| `rfnd_force_init`  | `["rfnd_force_init", refund_id]` | `(project_id: String, amount: i128, effective_at: u32)` | When M-of-N admins call `force_approve_refund` |
+
+### `rfnd_force_exec`
+
+**Description**: Emitted after the timelock when a force-refund is paid from
+the project's canonical contract-held token balance.
+
+| Event Name         | Topics                           | Data                                                   | When Emitted |
+| ------------------ | -------------------------------- | ------------------------------------------------------ | ------------ |
+| `rfnd_force_exec`  | `["rfnd_force_exec", refund_id]` | `(project_id: String, amount: i128, donor: Address)`  | After `execute_force_refund` completes |
+
+### `rfnd_force_cncl`
+
+**Description**: Emitted when any current admin cancels an escalation before
+its effective ledger.
+
+| Event Name         | Topics                                  | Data | When Emitted |
+| ------------------ | --------------------------------------- | ---- | ------------ |
+| `rfnd_force_cncl`  | `["rfnd_force_cncl", refund_id, admin]` | `()` | When an admin calls `cancel_force_refund` |
 
 ---
 
@@ -451,6 +496,26 @@ model.
 
 ---
 
+## 39. `tok_reg` (Token Registered)
+
+**Description**: Emitted when an admin registers a new token and its oracle into the dynamic token registry.
+
+| Event Name | Topics                 | Data                             | When Emitted                     |
+| ---------- | ---------------------- | -------------------------------- | -------------------------------- |
+| `tok_reg`  | `["tok_reg", admin]`   | `(token: Address, symbol: Symbol)` | When admin calls `register_token` |
+
+---
+
+## 40. `tok_rem` (Token Removed)
+
+**Description**: Emitted when an admin removes a token from active registration in the dynamic token registry.
+
+| Event Name | Topics                 | Data               | When Emitted                   |
+| ---------- | ---------------------- | ------------------ | ------------------------------ |
+| `tok_rem`  | `["tok_rem", admin]`   | `token: Address`   | When admin calls `remove_token` |
+
+---
+
 ## Usage Notes
 
 - All events follow Soroban’s standard event format: `topics: Vec<Val>`, `data: Val`.
@@ -458,11 +523,10 @@ model.
 - Events can be queried via Horizon or Soroban RPC tools.
 - Frontend / backend should listen to these for real-time updates, notifications, and leaderboard.
 
-**Last Updated**: July 24, 2026
+**Last Updated**: July 26, 2026
 
 ---
 
 ## Coordination Note for #277 (Matching Pool)
 
 `DataKey::ProjectContractBalance(String, Address)` is the **canonical per-project per-token balance ledger** for all contract-held funds. Any deposit/matching-pool logic (including #277) **must** increment this key on deposit and decrement it on withdrawal. Do not introduce a parallel balance concept — the compound key already supports multi-token per project. See `SECURITY.md` for the full rationale.
-

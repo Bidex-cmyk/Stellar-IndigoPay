@@ -215,14 +215,41 @@ No silent overflows possible. All operations that could exceed i128::MAX will pa
 
 ### Trust model
 
-`approve_refund` requires **both** admin authorization (`require_admin_for_routine`) **and** `project.wallet.require_auth()`. This means the token transfer from project wallet → donor happens atomically inside `approve_refund` (CEI ordering — all counter decrements are written before the transfer fires). If the project wallet does not co-sign, the approval reverts entirely.
+`approve_refund` requires **both** admin authorization (`require_admin_for_routine`) **and** `project.wallet.require_auth()`. This means the token transfer from project wallet → donor happens atomically inside `approve_refund` (CEI ordering — all counter decrements are written before the transfer fires). If the project wallet does not co-sign, the normal approval reverts entirely.
 
 This provides on-chain enforcement that "Approved = Paid" for three of the four motivating scenarios:
 - Donor sent to the wrong project
 - Donor entered the wrong amount
 - Technical error in the transaction
 
-The fourth scenario (project found to be fraudulent) is **unresolvable on-chain without escrow** — if the project wallet is adversarial, it will not co-sign the refund. This is a known limitation. The 24-hour cooldown + admin review provides the safety net; the project wallet co-sign closes the gap for honest-mistake cases.
+For the fourth scenario (a fraudulent or adversarial project wallet),
+`force_approve_refund` provides a separate safety valve:
+
+1. The configured M-of-N admin threshold must authorize initiation.
+2. `DataKey::ForceRefund(refund_id)` records a 72-hour (51,840-ledger)
+   timelock. The refund remains `Pending`, and no accounting changes or token
+   transfers occur at initiation.
+3. Any single current admin may cancel during the review window. Once the
+   effective ledger is reached, cancellation is disabled and anyone may call
+   `execute_force_refund`.
+4. Execution pays the donor from the canonical
+   `ProjectContractBalance(project_id, token)` contract-held pool, marks the
+   request `Approved`, and applies the same amount and CO₂ reversals as the
+   normal path.
+
+The force path does **not** seize tokens from the project wallet and does not
+assume that a Soroban token allowance will remain available. Operators must
+pre-fund the relevant project/token contract balance; execution reverts
+atomically with `Insufficient force refund pool balance` if it is insufficient.
+The pool is checked by both project ID and token address, so one project's
+force-refund cannot consume accounting attributed to another project. Contract
+token balances not represented by this canonical ledger are never used.
+
+This changes the trust model: M-of-N admins can schedule use of contract-held
+funds for a full refund, while a 72-hour public review window and single-admin
+cancellation limit colluding or compromised-admin abuse. A force escalation
+must be cancelled before the request can return to the normal approve/reject
+flow, preventing stale escalation records.
 
 ### Pre-upgrade CO₂ limitation
 
@@ -297,3 +324,13 @@ statistics, but it is not an in-WASM Groth16 verifier. Soundness depends on the
 off-chain circuit, prover, and signing-key custody. Ledger observers may still
 identify a transaction submitter unless a relayer is used. Exact public totals
 also mean the donation amount is recoverable from the public commitment.
+
+## Multi-Token Donation Support (#421)
+
+### Trust model & Registry security
+
+- **Token registration is admin-gated.** `register_token` and `remove_token` require `require_admin_for_routine` and are paused-gated by `require_not_paused`. Only authorized admins can add or deactivate tokens in the registry.
+- **Oracle rate safety.** Oracle conversion uses checked multiplication (`checked_mul`) when computing `xlm_equivalent` from token amounts and oracle price feeds. Oracles returning price <= 0 panic immediately to prevent invalid state.
+- **Per-token rate limit isolation.** `donate_token` keys rate limits on `DataKey::DonorRateLimitPerToken(donor, project_id, token_address)`. This guarantees that rate limit windows for distinct assets (e.g. XLM vs USDC vs custom tokens) operate independently.
+- **Backward compatibility.** Legacy `donate` and `donate_usdc` entrypoints seamlessly delegate to `donate_token_with_privacy`, ensuring existing integrations continue to function without state corruption or breakage.
+

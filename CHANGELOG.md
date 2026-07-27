@@ -1,5 +1,32 @@
 ## [Unreleased]
 
+### Features
+
+* **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` (closes #533, grantfox GF-031)
+  - Wrap each marker divIcon in a keyboard-focusable `<button>` with `tabindex="0"`, `role="button"`, and `aria-label="View project: {name}"`
+  - Handle Enter / Space on the marker via `react-leaflet`'s `eventHandlers.keydown` to open the popup, so keyboard-only users can discover project details
+  - HTML-escape the project name before embedding it in the divIcon attribute (defense-in-depth against XSS via project names)
+  - Remove the now-redundant `L.Marker.prototype.options.icon` patch from `ProjectMap.tsx` — each marker provides its own accessible icon
+  - Add visible `:focus-visible` ring on `.indigopay-marker-btn` in `globals.css` (WCAG 2.4.7 Focus Visible)
+  - Add `frontend/components/__tests__/ProjectMapMarker.a11y.test.tsx` with 8 jest cases: focusable button, Enter/Space opens popup, other keys are no-ops, unique aria-label per project, HTML escaping, `jest-axe` reports no violations
+
+### Bug Fixes
+
+* **backend:** require admin authentication for pending project review endpoint (closes #516)
+* **backend:** surface geocoding failures as project creation warnings (closes #519)
+* **backend:** bound `tags` in the project submission schema — at most 10 tags, each a non-empty trimmed string of at most 50 characters — to prevent database and search-index bloat from unbounded arrays (closes #520)
+
+### Testing
+
+* **contracts:** verify oracle slash boundary test coverage (closes #011, #513)
+  - Confirm `test_slash_full_stake` covers slashing exactly the full stake
+  - Confirm `test_slash_more_than_stake_panics` covers attempting to slash more than staked
+  - Confirm `test_slash_zero_stake_panics` covers slashing when stake is 0
+
+### Documentation
+
+* **backend:** document key service exports with JSDoc for TypeDoc (closes #548)
+
 ### Performance
 
 * **frontend:** optimize Core Web Vitals with next/image, next/font, and bundle splitting (closes #261)
@@ -17,6 +44,17 @@
   + Add unit test suite in `frontend/components/__tests__/LiveDonationTicker.test.tsx`
 
 ### Features
+
+* **frontend:** add shared EmptyState component and adopt it in DonationFeed, projects listing, and dashboard (closes #532)
+
+* **contracts:** enforce Rust formatting via a robust pre-commit hook (closes #60)
+  - Implement reliable Cargo detection in `.husky/check-rust-fmt.sh` with PATH resolution for `$HOME/.cargo/bin` and `$HOME/.cargo/env` compatibility
+  - Optimize pre-commit hook to skip execution overhead and run instantly when no Rust files are staged
+  - Remove redundant `.husky/check-rust-fmt.sh` execution from package.json lint-staged config
+
+* **backend:** standardize structured startup, shutdown, and shutdown-error logging for background workers, with graceful queue draining
+
+* **contracts:** emit `StealthScan` events with the project wallet, donation count, and ledger timestamp after stealth donation scans (closes #514)
 
 * **contracts/backend:** add opt-in anonymous donations and signed, cached tax receipt PDFs with locked XLM/USD values
 
