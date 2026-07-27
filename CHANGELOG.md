@@ -12,6 +12,7 @@
 
 ### Bug Fixes
 
+* **backend:** standardize every direct admin-route error response through `sendAppError`, including validation, missing-resource, rate-limit, conflict, and internal failures
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
 
