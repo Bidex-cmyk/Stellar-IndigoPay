@@ -18,6 +18,7 @@
 
 ### Bug Fixes
 
+* **backend:** standardize every direct admin-route error response through `sendAppError`, including validation, missing-resource, rate-limit, conflict, and internal failures
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
 * **backend:** bound `tags` in the project submission schema — at most 10 tags, each a non-empty trimmed string of at most 50 characters — to prevent database and search-index bloat from unbounded arrays (closes #520)
