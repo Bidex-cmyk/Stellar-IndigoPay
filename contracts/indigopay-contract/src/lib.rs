@@ -41,6 +41,7 @@ use soroban_sdk::{contracterror, panic_with_error};
 /// Any on-chain contract implementing `get_price` can serve as the oracle.
 /// `get_price` returns the number of XLM stroops equivalent to 1 USDC stroop.
 /// Example: if 1 USDC = 8 XLM, return 8.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contractclient(name = "OracleClient")]
 pub trait OracleInterface {
     fn get_price(env: Env) -> i128;
@@ -249,6 +250,18 @@ pub struct RefundRequest {
     /// donations that lack this key (documented known limitation).
     pub co2_offset_grams: i128,
 }
+
+/// A pending M-of-N refund escalation.
+#[cfg(feature = "refund")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ForceRefund {
+    /// Ledger at which the M-of-N admins initiated the escalation.
+    pub initiated_at: u32,
+    /// Earliest ledger at which anyone may execute the force-refund.
+    pub effective_at: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RecurringDonation {
@@ -310,6 +323,16 @@ pub struct DonationChallenge {
     pub resolved: bool,
     pub approved: bool,
 }
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TokenConfig {
+    pub token: Address,
+    pub oracle: Address,
+    pub symbol: Symbol,
+    pub active: bool,
+    pub registered_at: u32,
+}
+
 #[contracttype]
 pub enum DataKey {
     // Multi-sig admin set: Vec<Address> of authorized admin addresses.
@@ -432,9 +455,19 @@ pub enum DataKey {
     DonationChallenge(u32),
     /// Quadratic voting: credits spent by a voter on a project proposal.
     VoteCredits(String, Address),
+    // Multi-token registry
+    TokenConfig(Address),
+    TokenList,
+    DonorRateLimitPerToken(Address, String, Address),
+    // Pending M-of-N force-refund escalation. Appended to preserve the
+    // discriminants of all previously deployed DataKey variants.
+    ForceRefund(u32),
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STROOP: i128 = 10_000_000;
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+const PRICE_SCALE: i128 = 1;
+
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger ≈ 120_960 ledgers — used as the
 // default when `create_proposal` is called without an explicit duration.
 const VOTING_WINDOW_LEDGERS: u32 = 120_960;
@@ -468,6 +501,12 @@ const REFUND_COOLDOWN_LEDGERS: u32 = 17_280;
 // 24 hours × 3600 s / 5 s per ledger = 17 280 ledgers. The challenge window
 // for high-value donations.
 const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
+
+// 72 hours × 3600 s / 5 s per ledger = 51 840 ledgers. The delay between
+// M-of-N initiation and permissionless force-refund execution.
+#[cfg(feature = "refund")]
+const FORCE_REFUND_TIMELOCK_LEDGERS: u32 = 51_840;
+
 /// Current storage schema version. Bump this and add a migration step in
 /// `migrate()` whenever a struct layout, DataKey variant, or stored value
 /// encoding changes in a backward-incompatible way.
@@ -548,6 +587,91 @@ fn require_not_paused(env: &Env) {
         panic!("Contract is paused");
     }
 }
+
+/// Reverse the donation-derived accounting shared by normal and force refunds.
+/// The caller performs authorization and funding checks first, then transfers
+/// the tokens after this helper returns (checks-effects-interactions ordering).
+#[cfg(feature = "refund")]
+fn apply_refund_accounting(
+    env: &Env,
+    refund_id: u32,
+    request: &mut RefundRequest,
+    project: &mut Project,
+) {
+    project.total_raised = project
+        .total_raised
+        .checked_sub(request.amount)
+        .expect("Project total_raised underflow on refund");
+    env.storage()
+        .instance()
+        .set(&DataKey::Project(request.project_id.clone()), project);
+
+    let mut donor_stats: DonorStats = env
+        .storage()
+        .instance()
+        .get(&DataKey::DonorStats(request.donor.clone()))
+        .unwrap_or(DonorStats {
+            total_donated: 0,
+            donation_count: 0,
+            badge: BadgeTier::None,
+            co2_offset_grams: 0,
+        });
+    donor_stats.total_donated = donor_stats
+        .total_donated
+        .checked_sub(request.amount)
+        .expect("Donor total_donated underflow on refund");
+    donor_stats.co2_offset_grams = donor_stats
+        .co2_offset_grams
+        .checked_sub(request.co2_offset_grams)
+        .expect("Donor co2_offset underflow on refund");
+    env.storage()
+        .instance()
+        .set(&DataKey::DonorStats(request.donor.clone()), &donor_stats);
+
+    let project_total_key =
+        DataKey::DonorProjectTotal(request.project_id.clone(), request.donor.clone());
+    let previous_project_total: i128 = env
+        .storage()
+        .instance()
+        .get(&project_total_key)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &project_total_key,
+        &previous_project_total
+            .checked_sub(request.amount)
+            .expect("DonorProjectTotal underflow on refund"),
+    );
+
+    let global_raised: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::GlobalTotalRaised)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::GlobalTotalRaised,
+        &global_raised
+            .checked_sub(request.amount)
+            .expect("GlobalTotalRaised underflow on refund"),
+    );
+
+    let global_co2: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::GlobalCO2OffsetGrams)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::GlobalCO2OffsetGrams,
+        &global_co2
+            .checked_sub(request.co2_offset_grams)
+            .expect("GlobalCO2OffsetGrams underflow on refund"),
+    );
+
+    request.status = RefundRequestStatus::Approved;
+    env.storage()
+        .instance()
+        .set(&DataKey::RefundRequest(refund_id), request);
+}
+
 #[cfg(feature = "impact")]
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1034,6 +1158,7 @@ pub fn calculate_badge(total_stroops: i128) -> BadgeTier {
     }
 }
 /// Reject donations when the project's campaign is not accepting them.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 fn require_campaign_accepts_donation(project: &Project, current_ledger: u32) {
     match project.campaign_status {
         CampaignStatus::None => {}
@@ -1047,17 +1172,79 @@ fn require_campaign_accepts_donation(project: &Project, current_ledger: u32) {
         CampaignStatus::Closed => panic!("Campaign is closed"),
     }
 }
+
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig {
+    let config_key = DataKey::TokenConfig(token.clone());
+    if let Some(config) = env.storage().instance().get::<_, TokenConfig>(&config_key) {
+        if !config.active {
+            panic!("Token is inactive");
+        }
+        return config;
+    }
+
+    if let Some(native_token) = env
+        .storage()
+        .instance()
+        .get::<_, Address>(&DataKey::NativeTokenAddress)
+    {
+        if native_token == *token {
+            return TokenConfig {
+                token: token.clone(),
+                oracle: token.clone(),
+                symbol: symbol_short!("XLM"),
+                active: true,
+                registered_at: 0,
+            };
+        }
+    }
+
+    if let Some(usdc_token) = env
+        .storage()
+        .instance()
+        .get::<_, Address>(&DataKey::USDCTokenAddress)
+    {
+        if usdc_token == *token {
+            let oracle_addr = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&DataKey::OracleAddress)
+                .expect("Price oracle not configured");
+            return TokenConfig {
+                token: token.clone(),
+                oracle: oracle_addr,
+                symbol: symbol_short!("USDC"),
+                active: true,
+                registered_at: 0,
+            };
+        }
+    }
+
+    panic!("Token not registered");
+}
+
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+fn anon_address(env: &Env) -> Address {
+    Address::from_string(&String::from_str(
+        env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ))
+}
+
 /// Process a single donation's core logic: rate limiting, project validation,
 /// state updates (project, donor, NFT, globals), token transfers, and events.
 /// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
 /// responsible for those.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[allow(clippy::too_many_arguments)]
-fn process_donation(
+fn process_donation_token(
     env: &Env,
     token: &Address,
+    token_symbol: &Symbol,
     donor: &Address,
     project_id: &String,
-    amount: i128,
+    raw_amount: i128,
+    xlm_equivalent: i128,
     msg_hash: u32,
     anonymous: bool,
 ) {
@@ -1073,14 +1260,21 @@ fn process_donation(
         .get(&DataKey::DonationRateLimitWindow)
         .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
     let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone());
+
+    let rate_key =
+        DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
     let mut window: RateLimitWindow =
-        env.storage()
-            .instance()
-            .get(&rate_key)
-            .unwrap_or(RateLimitWindow {
-                window_start: current_ledger,
-                count: 0,
-            });
+        env.storage().instance().get(&rate_key).unwrap_or_else(|| {
+            let legacy_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone());
+            env.storage()
+                .instance()
+                .get(&legacy_key)
+                .unwrap_or(RateLimitWindow {
+                    window_start: current_ledger,
+                    count: 0,
+                })
+        });
+
     if current_ledger - window.window_start >= window_ledgers {
         window.window_start = current_ledger;
         window.count = 0;
@@ -1110,14 +1304,14 @@ fn process_donation(
     // Pre-compute CO2 increment with checked multiplication so an attacker
     // can't trigger a silent wrap via a project with a huge co2_per_xlm.
     let xlm_units = amount / STROOP;
+
+    // Pre-compute CO2 increment using XLM equivalent
+    let xlm_units = xlm_equivalent / STROOP;
     let co2_increment = xlm_units
         .checked_mul(project.co2_per_xlm as i128)
         .expect("CO2 calculation overflow");
     let stats_donor = if anonymous {
-        Address::from_string(&String::from_str(
-            env,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-        ))
+        anon_address(env)
     } else {
         donor.clone()
     };
@@ -1135,9 +1329,11 @@ fn process_donation(
     // ── Effects: all state writes BEFORE the external token transfer
     //    (Checks-Effects-Interactions to defend against reentrancy from a
     //    malicious token contract passed via `token`).
+
+    // ── Effects: state updates using XLM equivalent
     project.total_raised = project
         .total_raised
-        .checked_add(amount)
+        .checked_add(xlm_equivalent)
         .expect("Project total_raised overflow");
     let goal_reached = apply_campaign_goal_progress(&mut project);
     let donated_key = DataKey::HasDonated(project_id.clone(), donor.clone());
@@ -1159,7 +1355,7 @@ fn process_donation(
     }
     donor_stats.total_donated = donor_stats
         .total_donated
-        .checked_add(amount)
+        .checked_add(xlm_equivalent)
         .expect("Donor total_donated overflow");
     donor_stats.donation_count = donor_stats
         .donation_count
@@ -1176,15 +1372,19 @@ fn process_donation(
         .instance()
         .set(&DataKey::DonorStats(stats_donor), &donor_stats);
     // Track per-project cumulative donations for milestone NFT eligibility.
+
+    // Track per-project cumulative donations for milestone NFT eligibility
     let proj_total_key = DataKey::DonorProjectTotal(project_id.clone(), donor.clone());
     let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
     env.storage().instance().set(
         &proj_total_key,
         &prev_proj_total
-            .checked_add(amount)
+            .checked_add(xlm_equivalent)
             .expect("DonorProjectTotal overflow"),
     );
     // Auto-mint an Impact NFT when a donor reaches a new badge tier.
+
+    // Auto-mint Impact NFT when donor reaches new badge tier
     if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
         let nft_key = DataKey::ImpactNFT(donor.clone(), donor_stats.badge.clone());
         if !env.storage().instance().has(&nft_key) {
@@ -1210,19 +1410,21 @@ fn process_donation(
     env.storage()
         .instance()
         .set(&DataKey::DonationCount, &new_dc);
-    // Store donation record for trustless enumeration
+
+    // Store donation record with raw token amount and token symbol
     let donation_record = DonationRecord {
         donor: donor.clone(),
         anonymous,
         project: project_id.clone(),
-        amount,
+        amount: raw_amount,
         ledger: env.ledger().sequence(),
         message_hash: msg_hash,
-        currency: symbol_short!("XLM"),
+        currency: token_symbol.clone(),
     };
     env.storage()
         .instance()
         .set(&DataKey::DonationRecord(dc), &donation_record);
+
     if anonymous {
         let count: u32 = env
             .storage()
@@ -1236,7 +1438,7 @@ fn process_donation(
                 .expect("AnonymousDonationCount overflow"),
         );
     }
-    // Snapshot CO₂ offset for exact reversal on refund (#290).
+
     env.storage()
         .instance()
         .set(&DataKey::DonationCO2Offset(dc), &co2_increment);
@@ -1245,7 +1447,9 @@ fn process_donation(
         .instance()
         .get(&DataKey::GlobalTotalRaised)
         .unwrap_or(0);
-    let new_gr = gr.checked_add(amount).expect("GlobalTotalRaised overflow");
+    let new_gr = gr
+        .checked_add(xlm_equivalent)
+        .expect("GlobalTotalRaised overflow");
     env.storage()
         .instance()
         .set(&DataKey::GlobalTotalRaised, &new_gr);
@@ -1264,6 +1468,14 @@ fn process_donation(
     let (project_amount, fee_amount) = split_fee(amount, fee_bps);
     let token_client = token::Client::new(env, token);
     // Transfer platform fee to treasury (if configured and feature enabled).
+
+    // ── Interaction: external token transfer of raw_amount
+    let fee_bps = read_platform_fee_bps(env);
+    #[allow(unused_variables)]
+    let (project_amount, fee_amount) = split_fee(raw_amount, fee_bps);
+
+    let token_client = token::Client::new(env, token);
+
     #[cfg(feature = "fees")]
     if fee_amount > 0 {
         let treasury: Address = env
@@ -1274,16 +1486,61 @@ fn process_donation(
         token_client.transfer(donor, &treasury, &fee_amount);
     }
     // Transfer remainder to project wallet.
+
     token_client.transfer(donor, &project.wallet, &project_amount);
     #[cfg(feature = "fees")]
     env.events().publish(
         (symbol_short!("donated"), donor.clone(), project_id.clone()),
-        (amount, donor_stats.badge.clone(), msg_hash, fee_amount),
+        (raw_amount, token_symbol.clone(), msg_hash, fee_amount),
     );
     #[cfg(not(feature = "fees"))]
     env.events().publish(
-        (symbol_short!("donated"), donor.clone(), project_id.clone()),
-        (amount, donor_stats.badge.clone(), msg_hash),
+        (
+            symbol_short!("donated"),
+            if anonymous {
+                Address::from_string(&String::from_str(
+                    env,
+                    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+                ))
+            } else {
+                donor.clone()
+            },
+            project_id.clone(),
+        ),
+        (raw_amount, token_symbol.clone(), msg_hash),
+    );
+}
+
+#[cfg(any(feature = "donation", feature = "usdc", feature = "testutils"))]
+#[allow(clippy::too_many_arguments)]
+fn process_donation(
+    env: &Env,
+    token: &Address,
+    donor: &Address,
+    project_id: &String,
+    amount: i128,
+    msg_hash: u32,
+    anonymous: bool,
+) {
+    let token_symbol = if let Some(config) = env
+        .storage()
+        .instance()
+        .get::<_, TokenConfig>(&DataKey::TokenConfig(token.clone()))
+    {
+        config.symbol
+    } else {
+        symbol_short!("XLM")
+    };
+    process_donation_token(
+        env,
+        token,
+        &token_symbol,
+        donor,
+        project_id,
+        amount,
+        amount,
+        msg_hash,
+        anonymous,
     );
 }
 /// After `total_raised` is updated, flip `Active` → `GoalReached` when the
@@ -1915,6 +2172,8 @@ impl IndigoPayContract {
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
+
+    #[cfg(any(feature = "batch", feature = "donation", feature = "testutils"))]
     pub fn batch_donate(env: Env, token: Address, donations: Vec<BatchDonation>) {
         require_not_paused(&env);
         let mut authorized: Vec<Address> = Vec::new(&env);
@@ -3837,7 +4096,27 @@ impl IndigoPayContract {
         msg_hash: u32,
         anonymous: bool,
     ) {
-        donor.require_auth();
+        Self::donate_token_with_privacy(
+            env,
+            usdc_token,
+            donor,
+            project_id,
+            usdc_amount,
+            msg_hash,
+            anonymous,
+        )
+    }
+
+    /// Admin-only: Register a token and its price oracle into the token registry.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn register_token(
+        env: Env,
+        admin: Address,
+        token_address: Address,
+        oracle_address: Address,
+        symbol: Symbol,
+    ) {
+        require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
         if usdc_amount <= 0 {
             panic!("Donation amount must be positive");
@@ -3849,28 +4128,58 @@ impl IndigoPayContract {
         // Fetch the USDC→XLM price from the configured oracle.
         // The oracle returns how many XLM stroops equal 1 USDC stroop.
         let oracle_addr: Address = env
+
+        let config_key = DataKey::TokenConfig(token_address.clone());
+        if let Some(existing) = env.storage().instance().get::<_, TokenConfig>(&config_key) {
+            if existing.active {
+                panic!("Token already registered");
+            }
+        }
+
+        let config = TokenConfig {
+            token: token_address.clone(),
+            oracle: oracle_address.clone(),
+            symbol: symbol.clone(),
+            active: true,
+            registered_at: env.ledger().sequence(),
+        };
+
+        env.storage().instance().set(&config_key, &config);
+
+        let mut list: Vec<Address> = env
             .storage()
             .instance()
-            .get(&DataKey::OracleAddress)
-            .expect("Price oracle not configured");
-        let oracle = OracleClient::new(&env, &oracle_addr);
-        let rate = oracle.get_price();
-        if rate <= 0 {
-            panic!("Oracle returned invalid price");
+            .get(&DataKey::TokenList)
+            .unwrap_or(Vec::new(&env));
+        if !list.contains(&token_address) {
+            list.push_back(token_address.clone());
+            env.storage().instance().set(&DataKey::TokenList, &list);
         }
         let xlm_equivalent = usdc_amount
             .checked_mul(rate)
             .expect("USDC to XLM conversion overflow");
         let mut project: Project = env
+
+        env.events()
+            .publish((symbol_short!("tok_reg"), admin), (token_address, symbol));
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Admin-only: Remove a token from active registration in the registry.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn remove_token(env: Env, admin: Address, token_address: Address) {
+        require_admin_for_routine(&env, &admin);
+        require_not_paused(&env);
+
+        let config_key = DataKey::TokenConfig(token_address.clone());
+        let mut config: TokenConfig = env
             .storage()
             .instance()
-            .get(&DataKey::Project(project_id.clone()))
-            .expect("Project not found");
-        if !project.active {
-            panic!("Project is not accepting donations");
-        }
-        if project.paused {
-            panic!("Project is temporarily paused");
+            .get(&config_key)
+            .expect("Token not registered");
+
+        if !config.active {
+            panic!("Token is already inactive");
         }
         #[cfg(feature = "project_verification")]
         require_project_verified_for_donation(&env, &project_id);
@@ -3912,7 +4221,28 @@ impl IndigoPayContract {
                 .donor_count
                 .checked_add(1)
                 .expect("Project donor_count overflow");
+
+        config.active = false;
+        env.storage().instance().set(&config_key, &config);
+
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenList)
+            .unwrap_or(Vec::new(&env));
+        if let Some(idx) = list.first_index_of(&token_address) {
+            list.remove(idx);
+            env.storage().instance().set(&DataKey::TokenList, &list);
         }
+
+        env.events()
+            .publish((symbol_short!("tok_rem"), admin), token_address);
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Query configuration for a registered token.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn get_token_config(env: Env, token_address: Address) -> Option<TokenConfig> {
         env.storage()
             .instance()
             .set(&DataKey::Project(project_id.clone()), &project);
@@ -4060,6 +4390,83 @@ impl IndigoPayContract {
                 project_id,
             ),
             (usdc_amount, symbol_short!("USDC"), msg_hash),
+            .get(&DataKey::TokenConfig(token_address))
+    }
+
+    /// Query the list of active registered tokens.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn get_token_list(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenList)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Generic donation entrypoint for any registered token.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn donate_token(
+        env: Env,
+        token: Address,
+        donor: Address,
+        project_id: String,
+        amount: i128,
+        msg_hash: u32,
+    ) {
+        Self::donate_token_with_privacy(env, token, donor, project_id, amount, msg_hash, false)
+    }
+
+    /// Generic donation entrypoint for any registered token with explicit privacy choice.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn donate_token_with_privacy(
+        env: Env,
+        token: Address,
+        donor: Address,
+        project_id: String,
+        amount: i128,
+        msg_hash: u32,
+        anonymous: bool,
+    ) {
+        donor.require_auth();
+        require_not_paused(&env);
+        if amount <= 0 {
+            panic!("Donation amount must be positive");
+        }
+
+        let token_config = get_token_config_for_donate_token(&env, &token);
+
+        let xlm_equivalent = if token_config.symbol == symbol_short!("XLM")
+            || (env.storage().instance().has(&DataKey::NativeTokenAddress)
+                && env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&DataKey::NativeTokenAddress)
+                    .unwrap()
+                    == token)
+        {
+            amount
+        } else {
+            let oracle_addr = token_config.oracle.clone();
+            let oracle = OracleClient::new(&env, &oracle_addr);
+            let rate = oracle.get_price();
+            if rate <= 0 {
+                panic!("Oracle returned invalid price");
+            }
+            amount
+                .checked_mul(rate)
+                .expect("Token to XLM conversion overflow")
+                / PRICE_SCALE
+        };
+
+        process_donation_token(
+            &env,
+            &token,
+            &token_config.symbol,
+            &donor,
+            &project_id,
+            amount,
+            xlm_equivalent,
+            msg_hash,
+            anonymous,
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
@@ -4071,6 +4478,34 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&DataKey::USDCTokenAddress, &usdc_token);
+
+        let oracle_addr = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleAddress)
+            .unwrap_or(usdc_token.clone());
+
+        let config = TokenConfig {
+            token: usdc_token.clone(),
+            oracle: oracle_addr,
+            symbol: symbol_short!("USDC"),
+            active: true,
+            registered_at: env.ledger().sequence(),
+        };
+
+        let config_key = DataKey::TokenConfig(usdc_token.clone());
+        env.storage().instance().set(&config_key, &config);
+
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenList)
+            .unwrap_or(Vec::new(&env));
+        if !list.contains(&usdc_token) {
+            list.push_back(usdc_token.clone());
+            env.storage().instance().set(&DataKey::TokenList, &list);
+        }
+
         env.events()
             .publish((symbol_short!("usdc_set"),), usdc_token);
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
@@ -4129,6 +4564,38 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&DataKey::OracleAddress, &oracle);
+
+        if let Some(usdc_token) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::USDCTokenAddress)
+        {
+            let config_key = DataKey::TokenConfig(usdc_token.clone());
+            let mut config = env
+                .storage()
+                .instance()
+                .get::<_, TokenConfig>(&config_key)
+                .unwrap_or(TokenConfig {
+                    token: usdc_token.clone(),
+                    oracle: oracle.clone(),
+                    symbol: symbol_short!("USDC"),
+                    active: true,
+                    registered_at: env.ledger().sequence(),
+                });
+            config.oracle = oracle.clone();
+            env.storage().instance().set(&config_key, &config);
+
+            let mut list: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenList)
+                .unwrap_or(Vec::new(&env));
+            if !list.contains(&usdc_token) {
+                list.push_back(usdc_token.clone());
+                env.storage().instance().set(&DataKey::TokenList, &list);
+            }
+        }
+
         env.events().publish((symbol_short!("oracle"),), oracle);
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
@@ -4629,6 +5096,15 @@ impl IndigoPayContract {
     pub fn approve_refund(env: Env, admin: Address, refund_id: u32) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ForceRefund(refund_id))
+        {
+            panic!("Force refund escalation pending; cancel it first");
+        }
+
         let mut request: RefundRequest = env
             .storage()
             .instance()
@@ -4717,18 +5193,140 @@ impl IndigoPayContract {
         // ── Interaction: token transfer from project wallet back to donor.
         let token_client = token::Client::new(&env, &request.token);
         token_client.transfer(&project.wallet, &request.donor, &request.amount);
+
+        apply_refund_accounting(&env, refund_id, &mut request, &mut project);
+
+        // ── Interaction: token transfer from project wallet back to donor.
+        let token_client = token::Client::new(&env, &request.token);
+        token_client.transfer(&project.wallet, &request.donor, &request.amount);
+
         env.events().publish(
             (symbol_short!("rfnd_ap"), refund_id, admin),
             (request.project_id, request.amount, request.donor),
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
+
     /// Admin-only: reject a pending refund request. The donation stands;
     /// no counters are adjusted and no tokens move.
     #[cfg(feature = "refund")]
     pub fn reject_refund(env: Env, admin: Address, refund_id: u32) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::ForceRefund(refund_id))
+        {
+            panic!("Force refund escalation pending; cancel it first");
+        }
+
+        let mut request: RefundRequest = env
+            .storage()
+            .instance()
+            .get(&DataKey::RefundRequest(refund_id))
+            .expect("Refund request not found");
+
+        if request.status != RefundRequestStatus::Pending {
+            panic!("Refund request is not pending");
+        }
+
+        request.status = RefundRequestStatus::Rejected;
+        env.storage()
+            .instance()
+            .set(&DataKey::RefundRequest(refund_id), &request);
+
+        env.events().publish(
+            (symbol_short!("rfnd_rj"), refund_id, admin),
+            (request.project_id, request.donor),
+        );
+    }
+
+    /// M-of-N initiation of the 72-hour force-refund timelock.
+    ///
+    /// This only schedules the escalation; no tokens move and no donation
+    /// accounting changes until `execute_force_refund`.
+    #[cfg(feature = "refund")]
+    pub fn force_approve_refund(env: Env, signers: Vec<Address>, refund_id: u32) {
+        require_admin_for_critical(&env, &signers);
+        require_not_paused(&env);
+
+        let request: RefundRequest = env
+            .storage()
+            .instance()
+            .get(&DataKey::RefundRequest(refund_id))
+            .expect("Refund request not found");
+        if request.status != RefundRequestStatus::Pending {
+            panic!("Refund request is not pending");
+        }
+
+        let force_key = DataKey::ForceRefund(refund_id);
+        if env.storage().instance().has(&force_key) {
+            panic!("Force refund already pending");
+        }
+
+        let initiated_at = env.ledger().sequence();
+        let effective_at = initiated_at
+            .checked_add(FORCE_REFUND_TIMELOCK_LEDGERS)
+            .expect("Force refund timelock overflow");
+        env.storage().instance().set(
+            &force_key,
+            &ForceRefund {
+                initiated_at,
+                effective_at,
+            },
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "rfnd_force_init"), refund_id),
+            (request.project_id, request.amount, effective_at),
+        );
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+    /// Admin-only: reject a pending refund request. The donation stands;
+    /// no counters are adjusted and no tokens move.
+
+    /// Cancel a pending force-refund during its 72-hour review window.
+    #[cfg(feature = "refund")]
+    pub fn cancel_force_refund(env: Env, admin: Address, refund_id: u32) {
+        require_admin_for_routine(&env, &admin);
+        require_not_paused(&env);
+
+        let force_key = DataKey::ForceRefund(refund_id);
+        let force_refund: ForceRefund = env
+            .storage()
+            .instance()
+            .get(&force_key)
+            .expect("No pending force refund");
+        if env.ledger().sequence() >= force_refund.effective_at {
+            panic!("Force refund timelock already elapsed");
+        }
+
+        env.storage().instance().remove(&force_key);
+        env.events()
+            .publish((Symbol::new(&env, "rfnd_force_cncl"), refund_id, admin), ());
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Permissionless execution of a matured force-refund.
+    ///
+    /// Funds come from the canonical per-project, per-token contract-held
+    /// balance. This avoids authorization from an adversarial project wallet
+    /// and prevents funds attributed to another project or token from being
+    /// spent.
+    #[cfg(feature = "refund")]
+    pub fn execute_force_refund(env: Env, refund_id: u32) {
+        let force_key = DataKey::ForceRefund(refund_id);
+        let force_refund: ForceRefund = env
+            .storage()
+            .instance()
+            .get(&force_key)
+            .expect("No pending force refund");
+        if env.ledger().sequence() < force_refund.effective_at {
+            panic!("Force refund timelock not yet elapsed");
+        }
+
         let mut request: RefundRequest = env
             .storage()
             .instance()
@@ -4741,10 +5339,47 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&DataKey::RefundRequest(refund_id), &request);
-        env.events().publish(
-            (symbol_short!("rfnd_rj"), refund_id, admin),
-            (request.project_id, request.donor),
+        let mut project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(request.project_id.clone()))
+            .expect("Project not found");
+
+        let balance_key =
+            DataKey::ProjectContractBalance(request.project_id.clone(), request.token.clone());
+        let pool_balance: i128 = env.storage().instance().get(&balance_key).unwrap_or(0);
+        if request.amount > pool_balance {
+            panic!("Insufficient force refund pool balance");
+        }
+
+        // Checks-effects-interactions: Soroban reverts every storage write if
+        // the subsequent token transfer fails.
+        env.storage().instance().remove(&force_key);
+        env.storage()
+            .instance()
+            .set(&balance_key, &(pool_balance - request.amount));
+        apply_refund_accounting(&env, refund_id, &mut request, &mut project);
+
+        let token_client = token::Client::new(&env, &request.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &request.donor,
+            &request.amount,
         );
+
+        env.events().publish(
+            (Symbol::new(&env, "rfnd_force_exec"), refund_id),
+            (request.project_id, request.amount, request.donor),
+        );
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Returns the pending force-refund escalation, if one exists.
+    #[cfg(feature = "refund")]
+    pub fn get_force_refund(env: Env, refund_id: u32) -> Option<ForceRefund> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ForceRefund(refund_id))
     }
     /// Read-only: returns the refund request for the given ID, or panics if
     /// not found.
@@ -5540,8 +6175,11 @@ impl IndigoPayContract {
 ///   - The admin registers it via `IndigoPayContract::set_oracle(admin, oracle_address)`
 ///
 /// Example real oracle sources: Band Protocol, DIA, or a custom TWAP contract.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contract]
 pub struct MockOracle;
+
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[contractimpl]
 impl OracleInterface for MockOracle {
     fn get_price(_env: Env) -> i128 {
@@ -5562,6 +6200,15 @@ mod tests {
         v.push_back(a.clone());
         v
     }
+
+    /// Helper: create a two-element signer Vec for threshold admin calls.
+    fn signers2(env: &Env, a: &Address, b: &Address) -> Vec<Address> {
+        let mut v = Vec::new(env);
+        v.push_back(a.clone());
+        v.push_back(b.clone());
+        v
+    }
+
     // ─── Existing tests ───────────────────────────────────────────────────────
     #[test]
     fn test_initialize() {
@@ -8121,6 +8768,39 @@ mod tests {
         client.donate(&token, &donor, pid, &(25 * STROOP), &0u32);
         (donor, token, donation_index)
     }
+
+    /// Expand the default test admin set to a 2-of-3 threshold.
+    fn enable_two_of_three_admins(
+        env: &Env,
+        client: &IndigoPayContractClient,
+        first_admin: &Address,
+    ) -> (Address, Address) {
+        let second_admin = Address::generate(env);
+        let third_admin = Address::generate(env);
+        client.add_admin(&signers1(env, first_admin), &second_admin);
+        client.add_admin(&signers1(env, first_admin), &third_admin);
+        client.update_threshold(&signers1(env, first_admin), &2u32);
+        (second_admin, third_admin)
+    }
+
+    /// Put real tokens and the matching canonical accounting entry into the
+    /// force-refund pool.
+    fn fund_force_refund_pool(
+        env: &Env,
+        cid: &Address,
+        project_id: &String,
+        token: &Address,
+        amount: i128,
+    ) {
+        StellarAssetClient::new(env, token).mint(cid, &amount);
+        env.as_contract(cid, || {
+            env.storage().instance().set(
+                &DataKey::ProjectContractBalance(project_id.clone(), token.clone()),
+                &amount,
+            );
+        });
+    }
+
     #[test]
     fn test_request_refund_success() {
         let (env, _cid, client, _admin, pid) = setup();
@@ -8299,6 +8979,174 @@ mod tests {
         let (_env, _cid, client, _admin, _pid) = setup();
         client.get_refund_request(&0);
     }
+
+    #[test]
+    fn test_force_approve_refund_m_of_n() {
+        let (env, _cid, client, first_admin, pid) = setup();
+        let (second_admin, _third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        client.request_refund(&donor, &donation_index, &token);
+
+        let initiated_at = env.ledger().sequence();
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+
+        let pending = client.get_force_refund(&0u32).unwrap();
+        assert_eq!(pending.initiated_at, initiated_at);
+        assert_eq!(
+            pending.effective_at,
+            initiated_at + FORCE_REFUND_TIMELOCK_LEDGERS
+        );
+        assert_eq!(
+            client.get_refund_request(&0u32).status,
+            RefundRequestStatus::Pending
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Insufficient admin signatures")]
+    fn test_force_approve_single_admin_panics() {
+        let (env, _cid, client, first_admin, pid) = setup();
+        enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        client.request_refund(&donor, &donation_index, &token);
+
+        client.force_approve_refund(&signers1(&env, &first_admin), &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Force refund timelock not yet elapsed")]
+    fn test_execute_force_refund_before_timelock_panics() {
+        let (env, cid, client, first_admin, pid) = setup();
+        let (second_admin, _third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        fund_force_refund_pool(&env, &cid, &pid, &token, 25 * STROOP);
+        client.request_refund(&donor, &donation_index, &token);
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+
+        client.execute_force_refund(&0u32);
+    }
+
+    #[test]
+    fn test_execute_force_refund_after_timelock() {
+        let (env, cid, client, first_admin, pid) = setup();
+        let (second_admin, _third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        let refund_amount = 25 * STROOP;
+        fund_force_refund_pool(&env, &cid, &pid, &token, refund_amount);
+        let donor_balance_before = StellarAssetClient::new(&env, &token).balance(&donor);
+
+        client.request_refund(&donor, &donation_index, &token);
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+        let start = env.ledger().sequence();
+        extend_ttl(&env, &cid);
+        env.ledger()
+            .set_sequence_number(start + FORCE_REFUND_TIMELOCK_LEDGERS);
+        client.execute_force_refund(&0u32);
+
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&donor),
+            donor_balance_before + refund_amount
+        );
+        assert_eq!(
+            client.get_refund_request(&0u32).status,
+            RefundRequestStatus::Approved
+        );
+        assert_eq!(client.get_force_refund(&0u32), None);
+    }
+
+    #[test]
+    fn test_cancel_force_refund() {
+        let (env, _cid, client, first_admin, pid) = setup();
+        let (second_admin, third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        client.request_refund(&donor, &donation_index, &token);
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+
+        // Any one admin, including one who did not initiate, may cancel.
+        client.cancel_force_refund(&third_admin, &0u32);
+
+        assert_eq!(client.get_force_refund(&0u32), None);
+        assert_eq!(
+            client.get_refund_request(&0u32).status,
+            RefundRequestStatus::Pending
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "No pending force refund")]
+    fn test_cancel_force_refund_after_execution_panics() {
+        let (env, cid, client, first_admin, pid) = setup();
+        let (second_admin, _third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        fund_force_refund_pool(&env, &cid, &pid, &token, 25 * STROOP);
+        client.request_refund(&donor, &donation_index, &token);
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+        let start = env.ledger().sequence();
+        extend_ttl(&env, &cid);
+        env.ledger()
+            .set_sequence_number(start + FORCE_REFUND_TIMELOCK_LEDGERS);
+        client.execute_force_refund(&0u32);
+
+        client.cancel_force_refund(&first_admin, &0u32);
+    }
+
+    #[test]
+    fn test_force_refund_integration_reverses_balances_and_stats() {
+        let (env, cid, client, first_admin, pid) = setup();
+        let (second_admin, _third_admin) = enable_two_of_three_admins(&env, &client, &first_admin);
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        let refund_amount = 25 * STROOP;
+        let co2_amount = 25 * 100;
+        fund_force_refund_pool(&env, &cid, &pid, &token, 2 * refund_amount);
+
+        let project_before = client.get_project(&pid);
+        let donor_before = client.get_donor_stats(&donor);
+        let global_before = client.get_global_stats();
+        let token_before = StellarAssetClient::new(&env, &token).balance(&donor);
+
+        client.request_refund(&donor, &donation_index, &token);
+        client.force_approve_refund(&signers2(&env, &first_admin, &second_admin), &0u32);
+        let start = env.ledger().sequence();
+        extend_ttl(&env, &cid);
+        env.ledger()
+            .set_sequence_number(start + FORCE_REFUND_TIMELOCK_LEDGERS);
+        client.execute_force_refund(&0u32);
+
+        assert_eq!(
+            client.get_project(&pid).total_raised,
+            project_before.total_raised - refund_amount
+        );
+        let donor_after = client.get_donor_stats(&donor);
+        assert_eq!(
+            donor_after.total_donated,
+            donor_before.total_donated - refund_amount
+        );
+        assert_eq!(
+            donor_after.co2_offset_grams,
+            donor_before.co2_offset_grams - co2_amount
+        );
+        let global_after = client.get_global_stats();
+        assert_eq!(
+            global_after.total_raised,
+            global_before.total_raised - refund_amount
+        );
+        assert_eq!(
+            global_after.co2_offset_grams,
+            global_before.co2_offset_grams - co2_amount
+        );
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&donor),
+            token_before + refund_amount
+        );
+        let remaining_pool: i128 = env.as_contract(&cid, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::ProjectContractBalance(pid.clone(), token.clone()))
+                .unwrap()
+        });
+        assert_eq!(remaining_pool, refund_amount);
+    }
+
     // ─── Recurring Donation Tests ─────────────────────────────────────────────
     #[test]
     fn test_create_recurring_success() {
@@ -10159,5 +11007,268 @@ mod tests {
         client.add_impact_verifier(&admin, &verifier);
         let unknown = String::from_str(&env, "does-not-exist");
         client.submit_impact_report(&verifier, &unknown, &105u32, &evidence(&env, 1));
+    }
+
+    #[test]
+    fn test_register_token() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+
+        let config = client
+            .get_token_config(&token)
+            .expect("TokenConfig should be stored");
+        assert_eq!(config.token, token);
+        assert_eq!(config.oracle, oracle);
+        assert_eq!(config.symbol, symbol);
+        assert!(config.active);
+
+        let list = client.get_token_list();
+        assert!(list.contains(&token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Token already registered")]
+    fn test_register_duplicate_token_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+        client.register_token(&admin, &token, &oracle, &symbol);
+    }
+
+    #[test]
+    fn test_remove_token() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+        assert!(client.get_token_list().contains(&token));
+
+        client.remove_token(&admin, &token);
+
+        let config = client
+            .get_token_config(&token)
+            .expect("TokenConfig should remain");
+        assert!(!config.active);
+        assert!(!client.get_token_list().contains(&token));
+    }
+
+    #[test]
+    fn test_donate_token_xlm() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        let amount = 50 * STROOP;
+
+        client.register_token(&admin, &token, &token, &symbol_short!("XLM"));
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        client.donate_token(&token, &donor, &pid, &amount, &0u32);
+
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, amount);
+        assert_eq!(stats.donation_count, 1);
+    }
+
+    #[test]
+    fn test_donate_token_usdc() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let usdc_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let mock_oracle = env.register(MockOracle, ());
+
+        client.set_usdc_token(&admin, &usdc_token);
+        client.set_oracle(&admin, &mock_oracle);
+
+        let donor = Address::generate(&env);
+        let usdc_amount = 10 * STROOP; // 10 USDC
+        soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token).mint(&donor, &usdc_amount);
+
+        client.donate_token(&usdc_token, &donor, &pid, &usdc_amount, &0u32);
+
+        let stats = client.get_donor_stats(&donor);
+        // MockOracle rate is 8 XLM per 1 USDC, so 10 USDC -> 80 XLM
+        assert_eq!(stats.total_donated, 80 * STROOP);
+        assert_eq!(stats.donation_count, 1);
+    }
+
+    #[test]
+    fn test_donate_token_custom() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let custom_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let mock_oracle = env.register(MockOracle, ());
+
+        client.register_token(&admin, &custom_token, &mock_oracle, &symbol_short!("USDT"));
+
+        let donor = Address::generate(&env);
+        let amount = 5 * STROOP;
+        soroban_sdk::token::StellarAssetClient::new(&env, &custom_token).mint(&donor, &amount);
+
+        client.donate_token(&custom_token, &donor, &pid, &amount, &0u32);
+
+        let stats = client.get_donor_stats(&donor);
+        // MockOracle rate is 8 XLM per unit -> 5 * 8 = 40 XLM equivalent
+        assert_eq!(stats.total_donated, 40 * STROOP);
+    }
+
+    #[test]
+    #[should_panic(expected = "Token not registered")]
+    fn test_donate_token_unregistered_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let unreg_token = Address::generate(&env);
+        let donor = Address::generate(&env);
+
+        client.donate_token(&unreg_token, &donor, &pid, &(10 * STROOP), &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Token is inactive")]
+    fn test_donate_token_inactive_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let symbol = symbol_short!("YXLM");
+
+        client.register_token(&admin, &token, &oracle, &symbol);
+        client.remove_token(&admin, &token);
+
+        let donor = Address::generate(&env);
+        client.donate_token(&token, &donor, &pid, &(10 * STROOP), &0u32);
+    }
+
+    #[test]
+    fn test_rate_limit_per_token_isolation() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let xlm_token = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let usdc_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let mock_oracle = env.register(MockOracle, ());
+
+        client.register_token(&admin, &xlm_token, &xlm_token, &symbol_short!("XLM"));
+        client.register_token(&admin, &usdc_token, &mock_oracle, &symbol_short!("USDC"));
+        client.set_donation_rate_limit(&admin, &2u32, &720u32);
+
+        let donor = Address::generate(&env);
+        let amount = 10 * STROOP;
+        soroban_sdk::token::StellarAssetClient::new(&env, &xlm_token).mint(&donor, &(100 * STROOP));
+        soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token)
+            .mint(&donor, &(100 * STROOP));
+
+        // Use up 2 donations for XLM
+        client.donate_token(&xlm_token, &donor, &pid, &amount, &0u32);
+        client.donate_token(&xlm_token, &donor, &pid, &amount, &1u32);
+
+        // Third XLM donation panics due to rate limit
+        let res_xlm = client.try_donate_token(&xlm_token, &donor, &pid, &amount, &2u32);
+        assert!(res_xlm.is_err());
+
+        // USDC donation still succeeds because rate limit is per-token
+        client.donate_token(&usdc_token, &donor, &pid, &amount, &0u32);
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.donation_count, 3);
+    }
+
+    #[test]
+    fn test_backward_compat_donate_with_privacy() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        let amount = 15 * STROOP;
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        client.donate_with_privacy(&token, &donor, &pid, &amount, &0u32, &false);
+
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, amount);
+    }
+
+    #[test]
+    fn test_backward_compat_donate_usdc() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let usdc_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let mock_oracle = env.register(MockOracle, ());
+
+        client.set_usdc_token(&admin, &usdc_token);
+        client.set_oracle(&admin, &mock_oracle);
+
+        let donor = Address::generate(&env);
+        let amount = 5 * STROOP;
+        soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token).mint(&donor, &amount);
+
+        client.donate_usdc(&usdc_token, &donor, &pid, &amount, &0u32);
+
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, 40 * STROOP);
+    }
+
+    #[test]
+    fn test_integration_multi_token_donations() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+
+        let xlm_token = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let usdc_token = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let custom_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let mock_oracle = env.register(MockOracle, ());
+
+        client.register_token(&admin, &xlm_token, &xlm_token, &symbol_short!("XLM"));
+        client.register_token(&admin, &usdc_token, &mock_oracle, &symbol_short!("USDC"));
+        client.register_token(&admin, &custom_token, &mock_oracle, &symbol_short!("BTC"));
+
+        let donor = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &xlm_token).mint(&donor, &(100 * STROOP));
+        soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token)
+            .mint(&donor, &(100 * STROOP));
+        soroban_sdk::token::StellarAssetClient::new(&env, &custom_token)
+            .mint(&donor, &(100 * STROOP));
+
+        // Donate 10 XLM (10 XLM eq)
+        client.donate_token(&xlm_token, &donor, &pid, &(10 * STROOP), &0u32);
+        // Donate 5 USDC (40 XLM eq)
+        client.donate_token(&usdc_token, &donor, &pid, &(5 * STROOP), &1u32);
+        // Donate 2 Custom BTC-rep (16 XLM eq)
+        client.donate_token(&custom_token, &donor, &pid, &(2 * STROOP), &2u32);
+
+        let donor_stats = client.get_donor_stats(&donor);
+        assert_eq!(donor_stats.donation_count, 3);
+        assert_eq!(donor_stats.total_donated, (10 + 40 + 16) * STROOP);
+
+        let global_stats = client.get_global_stats();
+        assert_eq!(global_stats.total_raised, (10 + 40 + 16) * STROOP);
+
+        let proj = client.get_project(&pid);
+        assert_eq!(proj.total_raised, (10 + 40 + 16) * STROOP);
     }
 }
