@@ -2,6 +2,12 @@
 
 ### Features
 
+* **frontend:** announce `DonateForm` validation errors to screen readers (GrantFox OSS, grantfox GF-a11y-donate-form)
+  - Add a hidden `<div aria-live="assertive" className="sr-only">` in `DonateForm.tsx` alongside the existing `aria-live="polite"` step-status region
+  - Populate the new region with the first message from `useFormValidation`'s `errors` map via a `useEffect`, so invalid-amount and message-too-long errors (previously only conveyed visually via `aria-invalid`/`role="alert"`) are also announced assertively when the user clicks "Donate" with invalid input
+  - No visual changes for sighted users (region is `sr-only`)
+  - Add `frontend/components/__tests__/DonateForm.a11y.test.tsx` cases covering: the live region's presence/`aria-live="assertive"` attribute, announcing the first validation error, and clearing the region once errors are resolved
+
 * **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` (closes #533, grantfox GF-031)
   - Wrap each marker divIcon in a keyboard-focusable `<button>` with `tabindex="0"`, `role="button"`, and `aria-label="View project: {name}"`
   - Handle Enter / Space on the marker via `react-leaflet`'s `eventHandlers.keydown` to open the popup, so keyboard-only users can discover project details
@@ -14,13 +20,6 @@
 
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
-
-### Testing
-
-* **contracts:** verify oracle slash boundary test coverage (closes #011, #513)
-  - Confirm `test_slash_full_stake` covers slashing exactly the full stake
-  - Confirm `test_slash_more_than_stake_panics` covers attempting to slash more than staked
-  - Confirm `test_slash_zero_stake_panics` covers slashing when stake is 0
 
 ### Documentation
 
@@ -43,8 +42,6 @@
   + Add unit test suite in `frontend/components/__tests__/LiveDonationTicker.test.tsx`
 
 ### Features
-
-* **frontend:** add shared EmptyState component and adopt it in DonationFeed, projects listing, and dashboard (closes #532)
 
 * **contracts:** enforce Rust formatting via a robust pre-commit hook (closes #60)
   - Implement reliable Cargo detection in `.husky/check-rust-fmt.sh` with PATH resolution for `$HOME/.cargo/bin` and `$HOME/.cargo/env` compatibility
