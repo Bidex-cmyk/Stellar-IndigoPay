@@ -320,6 +320,13 @@ impl EscrowContract {
 
         let deadline = env.ledger().sequence() + DEFAULT_DEADLINE_LEDGERS;
 
+        // release_after is stored as an absolute ledger sequence; compute it
+        // now so we can validate it against the deadline before persisting.
+        let release_after_abs = env.ledger().sequence() + release_after;
+        if release_after_abs > deadline {
+            panic!("release_after must not exceed the job deadline");
+        }
+
         // ── Effects: persist the Job struct BEFORE the external token
         //    transfer so a malicious token contract cannot exploit a
         //    non-CEI ordering to leave the ledger without a `Job` entry
@@ -333,7 +340,7 @@ impl EscrowContract {
             status: JobStatus::Escrowed,
             milestones,
             disputed: false,
-            release_after: env.ledger().sequence() + release_after,
+            release_after: release_after_abs,
             deadline,
         };
         env.storage()
@@ -2583,6 +2590,37 @@ mod tests {
         env.ledger()
             .set_sequence_number(created_at + RELEASE_AFTER_LEDGERS + 1);
         client.claim_milestone(&freelancer, &job_id, &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "release_after must not exceed the job deadline")]
+    fn test_release_after_exceeds_deadline_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, client) = setup(&env);
+
+        let client_addr = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&client_addr, &1000i128);
+        let job_id = String::from_str(&env, "job-release-after-exceeds-deadline");
+        let mut milestones = Vec::new(&env);
+        milestones.push_back(make_milestone(&env, "M1", 100));
+
+        // DEFAULT_DEADLINE_LEDGERS is 1_555_200; passing 2_000_000 makes the
+        // absolute release_after exceed the absolute deadline.
+        client.create_job(
+            &client_addr,
+            &freelancer,
+            &job_id,
+            &token,
+            &1000i128,
+            &milestones,
+            &2_000_000u32,
+        );
     }
 
     #[test]
