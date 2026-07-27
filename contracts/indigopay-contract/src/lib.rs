@@ -557,6 +557,7 @@ fn read_admin_threshold(env: &Env) -> u32 {
 /// membership in the admin set. Duplicate signers are counted only once
 /// to prevent a single compromised key from satisfying the threshold by
 /// passing itself multiple times.
+#[inline(never)]
 fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
     let admin_set: Vec<Address> = read_admin_set(env);
     let mut counted: Vec<Address> = Vec::new(env);
@@ -573,11 +574,13 @@ fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
     }
 }
 /// Require M-of-N admin signatures for critical operations.
+#[inline(never)]
 fn require_admin_for_critical(env: &Env, signers: &Vec<Address>) {
     let threshold: u32 = read_admin_threshold(env);
     verify_m_of_n(env, signers, threshold);
 }
 /// Require a single admin signature for routine operations.
+#[inline(never)]
 fn require_admin_for_routine(env: &Env, signer: &Address) {
     signer.require_auth();
     let admin_set: Vec<Address> = read_admin_set(env);
@@ -589,6 +592,7 @@ fn require_admin_for_routine(env: &Env, signer: &Address) {
 /// public functions call this right after `require_auth` and before
 /// any storage read so a paused contract costs as little as possible
 /// to verify and the panic message is uniform.
+#[inline(never)]
 fn require_not_paused(env: &Env) {
     let paused: bool = env
         .storage()
@@ -1095,6 +1099,7 @@ fn split_fee(amount: i128, fee_bps: u32) -> (i128, i128) {
     let project_amount = amount.checked_sub(fee).expect("Amount minus fee underflow");
     (project_amount, fee)
 }
+#[inline(never)]
 fn ensure_min_ttl(env: &Env, min_ledgers: u32) {
     env.storage()
         .instance()
@@ -1233,7 +1238,7 @@ fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig 
     panic!("Token not registered");
 }
 
-#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[inline(never)]
 fn anon_address(env: &Env) -> Address {
     Address::from_string(&String::from_str(
         env,
@@ -1497,10 +1502,7 @@ fn process_donation_token(
         (
             symbol_short!("donated"),
             if anonymous {
-                Address::from_string(&String::from_str(
-                    env,
-                    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-                ))
+                anon_address(env)
             } else {
                 donor.clone()
             },
@@ -1794,6 +1796,7 @@ impl IndigoPayContract {
             .publish((symbol_short!("sub_reg"), wallet), (parent_id, project_id));
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
+    #[cfg(any(feature = "batch", feature = "testutils"))]
     pub fn batch_register_projects(env: Env, admin: Address, projects: Vec<ProjectInit>) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2274,10 +2277,7 @@ impl IndigoPayContract {
             .checked_mul(project.co2_per_xlm as i128)
             .expect("CO2 calculation overflow");
         let stats_donor = if anonymous {
-            Address::from_string(&String::from_str(
-                &env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
+            anon_address(&env)
         } else {
             donor.clone()
         };
@@ -2438,10 +2438,7 @@ impl IndigoPayContract {
             (
                 symbol_short!("donated"),
                 if anonymous {
-                    Address::from_string(&String::from_str(
-                        &env,
-                        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-                    ))
+                    anon_address(&env)
                 } else {
                     donor.clone()
                 },
