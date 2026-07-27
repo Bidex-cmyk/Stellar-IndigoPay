@@ -286,6 +286,7 @@ module.exports = {
   stellarAddress,
   transactionHash,
   uuid,
+  UUID_RE,
   xlmAmount,
   positiveNumberString,
   nonNegativeNumberString,
