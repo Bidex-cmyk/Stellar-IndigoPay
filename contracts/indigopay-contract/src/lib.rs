@@ -4301,7 +4301,6 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
     /// Get the configured USDC token address.
-    #[cfg(feature = "usdc")]
     pub fn get_usdc_token(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::USDCTokenAddress)
     }
