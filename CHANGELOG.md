@@ -37,6 +37,8 @@
 
 ### Features
 
+* **frontend:** add shared EmptyState component and adopt it in DonationFeed, projects listing, and dashboard (closes #532)
+
 * **contracts:** enforce Rust formatting via a robust pre-commit hook (closes #60)
   - Implement reliable Cargo detection in `.husky/check-rust-fmt.sh` with PATH resolution for `$HOME/.cargo/bin` and `$HOME/.cargo/env` compatibility
   - Optimize pre-commit hook to skip execution overhead and run instantly when no Rust files are staged
