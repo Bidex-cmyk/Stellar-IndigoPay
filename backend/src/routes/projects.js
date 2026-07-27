@@ -1386,6 +1386,7 @@ router.patch("/:id/status", async (req, res, next) => {
 
     await invalidateCache("cache:v1:projects:list:*");
     await invalidateCache(`cache:v1:projects:detail:${req.params.id}`);
+    await invalidateCache(getProjectMilestonesCacheKey(req.params.id));
     await invalidateCache("cache:v1:stats:global");
     await invalidateCache("cache:v1:impact:global");
 
