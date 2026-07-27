@@ -2,6 +2,12 @@
 
 ### Features
 
+* **frontend:** announce `DonateForm` validation errors to screen readers (GrantFox OSS, grantfox GF-a11y-donate-form)
+  - Add a hidden `<div aria-live="assertive" className="sr-only">` in `DonateForm.tsx` alongside the existing `aria-live="polite"` step-status region
+  - Populate the new region with the first message from `useFormValidation`'s `errors` map via a `useEffect`, so invalid-amount and message-too-long errors (previously only conveyed visually via `aria-invalid`/`role="alert"`) are also announced assertively when the user clicks "Donate" with invalid input
+  - No visual changes for sighted users (region is `sr-only`)
+  - Add `frontend/components/__tests__/DonateForm.a11y.test.tsx` cases covering: the live region's presence/`aria-live="assertive"` attribute, announcing the first validation error, and clearing the region once errors are resolved
+
 * **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` (closes #533, grantfox GF-031)
   - Wrap each marker divIcon in a keyboard-focusable `<button>` with `tabindex="0"`, `role="button"`, and `aria-label="View project: {name}"`
   - Handle Enter / Space on the marker via `react-leaflet`'s `eventHandlers.keydown` to open the popup, so keyboard-only users can discover project details
@@ -20,6 +26,7 @@
   - Add 11 regression tests in `backend/src/routes/projects.test.js`, including an end-to-end case that warms `GET /api/impact/project/:id`, verifies `X-Cache: HIT`, pauses the project, and asserts the next read is a `MISS` with fresh figures
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
+* **backend:** bound `tags` in the project submission schema — at most 10 tags, each a non-empty trimmed string of at most 50 characters — to prevent database and search-index bloat from unbounded arrays (closes #520)
 
 ### Documentation
 
