@@ -661,7 +661,7 @@ describe("POST /api/projects/:id/campaigns", () => {
 
   test("returns structured Zod details for invalid campaign input", async () => {
     const res = await request(app)
-      .post("/api/projects/proj-1/campaigns")
+      .post(`/api/projects/${MOCK_PROJECT_ROW.id}/campaigns`)
       .send({
         title: "No",
         goalXLM: "0",
