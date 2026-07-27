@@ -30,7 +30,8 @@ mod fuzz_tests;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
 #[cfg(any(
     feature = "usdc",
@@ -39,7 +40,7 @@ use soroban_sdk::{
     feature = "zk",
     feature = "impact"
 ))]
-use soroban_sdk::{contractclient, token, Bytes};
+use soroban_sdk::{contractclient, Bytes};
 #[cfg(feature = "project_verification")]
 use soroban_sdk::{contracterror, panic_with_error};
 
