@@ -1259,7 +1259,6 @@ fn process_donation_token(
         .instance()
         .get(&DataKey::DonationRateLimitWindow)
         .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
-    let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone());
 
     let rate_key =
         DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
@@ -5005,8 +5004,6 @@ impl IndigoPayContract {
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
-    /// Admin-only: reject a pending refund request. The donation stands;
-    /// no counters are adjusted and no tokens move.
 
     /// Cancel a pending force-refund during its 72-hour review window.
     #[cfg(feature = "refund")]
