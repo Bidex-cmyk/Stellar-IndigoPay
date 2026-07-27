@@ -33,7 +33,7 @@ pub mod donation;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address,
+    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
     BytesN, Env, String, Symbol, Vec,
 };
 #[cfg(feature = "project_verification")]
@@ -346,6 +346,9 @@ pub struct DonationChallenge {
     pub challenged_at: u32,
     pub resolved: bool,
     pub approved: bool,
+}
+
+#[contracttype]
 pub struct TokenConfig {
     pub token: Address,
     pub oracle: Address,
@@ -3115,7 +3118,8 @@ impl IndigoPayContract {
             .get(&DataKey::StealthDonationContract)
             .expect("Stealth donation contract not configured");
 
-        let stealth_client = crate::donation::contract::DonationContractClient::new(&env, &stealth_contract);
+        let stealth_client =
+            crate::donation::contract::DonationContractClient::new(&env, &stealth_contract);
         let donation_id = stealth_client.donate_stealth(
             &sender,
             &token,
@@ -3182,6 +3186,7 @@ impl IndigoPayContract {
 
         let donation_record = DonationRecord {
             donor: stealth_pool_donor.clone(),
+            anonymous: true,
             project: project_id.clone(),
             amount,
             ledger: env.ledger().sequence(),
@@ -3196,11 +3201,7 @@ impl IndigoPayContract {
             .set(&DataKey::DonationCO2Offset(dc), &co2_increment);
 
         env.events().publish(
-            (
-                symbol_short!("stlth_don"),
-                stealth_pool_donor,
-                project_id,
-            ),
+            (symbol_short!("stlth_don"), stealth_pool_donor, project_id),
             (donation_id, amount, msg_hash_u32),
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
@@ -5616,12 +5617,7 @@ impl IndigoPayContract {
     }
 
     /// Badge holders (≥ Seedling) can challenge a donation exceeding the threshold within the 24h window.
-    pub fn challenge_donation(
-        env: Env,
-        challenger: Address,
-        donation_index: u32,
-        reason: String,
-    ) {
+    pub fn challenge_donation(env: Env, challenger: Address, donation_index: u32, reason: String) {
         challenger.require_auth();
         require_not_paused(&env);
 
@@ -5682,12 +5678,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: resolve a pending challenge by either approving or rejecting (refunding) the donation.
-    pub fn resolve_challenge(
-        env: Env,
-        admin: Address,
-        donation_index: u32,
-        approve: bool,
-    ) {
+    pub fn resolve_challenge(env: Env, admin: Address, donation_index: u32, approve: bool) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
 
@@ -5708,10 +5699,8 @@ impl IndigoPayContract {
             .set(&DataKey::DonationChallenge(donation_index), &challenge);
 
         if approve {
-            env.events().publish(
-                (symbol_short!("chg_res"), donation_index, admin),
-                true,
-            );
+            env.events()
+                .publish((symbol_short!("chg_res"), donation_index, admin), true);
         } else {
             let record: DonationRecord = env
                 .storage()
@@ -5763,11 +5752,7 @@ impl IndigoPayContract {
 
             let proj_total_key =
                 DataKey::DonorProjectTotal(record.project.clone(), record.donor.clone());
-            let prev_proj_total: i128 = env
-                .storage()
-                .instance()
-                .get(&proj_total_key)
-                .unwrap_or(0);
+            let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
             env.storage().instance().set(
                 &proj_total_key,
                 &prev_proj_total
@@ -5805,20 +5790,15 @@ impl IndigoPayContract {
                 }
             }
 
-            env.events().publish(
-                (symbol_short!("chg_res"), donation_index, admin),
-                false,
-            );
+            env.events()
+                .publish((symbol_short!("chg_res"), donation_index, admin), false);
         }
 
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
     /// Read-only: get the challenge status for a donation index.
-    pub fn get_donation_challenge(
-        env: Env,
-        donation_index: u32,
-    ) -> Option<DonationChallenge> {
+    pub fn get_donation_challenge(env: Env, donation_index: u32) -> Option<DonationChallenge> {
         env.storage()
             .instance()
             .get(&DataKey::DonationChallenge(donation_index))
@@ -5856,10 +5836,8 @@ impl IndigoPayContract {
     pub fn auto_finalize(env: Env, donation_index: u32) -> bool {
         let finalized = Self::is_donation_finalized(env.clone(), donation_index);
         if finalized {
-            env.events().publish(
-                (symbol_short!("chg_fin"), donation_index),
-                (),
-            );
+            env.events()
+                .publish((symbol_short!("chg_fin"), donation_index), ());
         }
         finalized
     }
@@ -11434,13 +11412,22 @@ mod tests {
         assert!(!challenge.approved);
 
         let project_after = client.get_project(&pid);
-        assert_eq!(project_after.total_raised, project_before.total_raised - 25 * STROOP);
+        assert_eq!(
+            project_after.total_raised,
+            project_before.total_raised - 25 * STROOP
+        );
 
         let stats_after = client.get_donor_stats(&donor);
-        assert_eq!(stats_after.total_donated, stats_before.total_donated - 25 * STROOP);
+        assert_eq!(
+            stats_after.total_donated,
+            stats_before.total_donated - 25 * STROOP
+        );
 
         let global_after = client.get_global_stats();
-        assert_eq!(global_after.total_raised, global_before.total_raised - 25 * STROOP);
+        assert_eq!(
+            global_after.total_raised,
+            global_before.total_raised - 25 * STROOP
+        );
     }
 
     #[test]
@@ -11453,7 +11440,8 @@ mod tests {
 
         assert!(!client.is_donation_finalized(&donation_index));
 
-        env.ledger().set_sequence_number(env.ledger().sequence() + CHALLENGE_WINDOW_LEDGERS + 1);
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + CHALLENGE_WINDOW_LEDGERS + 1);
 
         assert!(client.is_donation_finalized(&donation_index));
         assert!(client.auto_finalize(&donation_index));
@@ -11536,14 +11524,8 @@ mod tests {
         let ephem = BytesN::from_array(&env, &[7u8; 33]);
         let msg_hash = BytesN::from_array(&env, &[1u8; 32]);
 
-        let donation_id = client.donate_stealth_integrated(
-            &sender,
-            &token,
-            &ephem,
-            &pid,
-            &amount,
-            &msg_hash,
-        );
+        let donation_id =
+            client.donate_stealth_integrated(&sender, &token, &ephem, &pid, &amount, &msg_hash);
 
         assert_eq!(donation_id, 1u64);
 
@@ -11569,14 +11551,7 @@ mod tests {
         let ephem = BytesN::from_array(&env, &[12u8; 33]);
         let msg_hash = BytesN::from_array(&env, &[2u8; 32]);
 
-        client.donate_stealth_integrated(
-            &sender,
-            &token,
-            &ephem,
-            &pid,
-            &amount,
-            &msg_hash,
-        );
+        client.donate_stealth_integrated(&sender, &token, &ephem, &pid, &amount, &msg_hash);
 
         // Donor-specific stats must NOT be updated (privacy preserved)
         let stats = client.get_donor_stats(&sender);
@@ -11622,7 +11597,8 @@ mod tests {
         let (env, _cid, client, admin, pid) = setup();
 
         let stealth_cid = env.register_contract(None, crate::donation::contract::DonationContract);
-        let stealth_client = crate::donation::contract::DonationContractClient::new(&env, &stealth_cid);
+        let stealth_client =
+            crate::donation::contract::DonationContractClient::new(&env, &stealth_cid);
 
         client.set_stealth_donation_contract(&admin, &stealth_cid);
 
@@ -11632,21 +11608,16 @@ mod tests {
         let ephem = BytesN::from_array(&env, &[99u8; 33]);
         let msg_hash = BytesN::from_array(&env, &[5u8; 32]);
 
-        let donation_id = client.donate_stealth_integrated(
-            &sender,
-            &token,
-            &ephem,
-            &pid,
-            &amount,
-            &msg_hash,
-        );
+        let donation_id =
+            client.donate_stealth_integrated(&sender, &token, &ephem, &pid, &amount, &msg_hash);
 
         assert_eq!(donation_id, 1u64);
 
         // Verify DonationContract state
         let project_wallet = client.get_project(&pid).wallet;
         let viewing_key = BytesN::from_array(&env, &[0u8; 32]);
-        let stealth_donations = stealth_client.scan_stealth_donations(&project_wallet, &viewing_key);
+        let stealth_donations =
+            stealth_client.scan_stealth_donations(&project_wallet, &viewing_key);
 
         assert_eq!(stealth_donations.len(), 1);
         let sd = stealth_donations.get(0).unwrap();
@@ -11657,6 +11628,8 @@ mod tests {
         // Verify IndigoPayContract state
         assert_eq!(client.get_project(&pid).total_raised, amount);
         assert_eq!(client.get_global_stats().total_raised, amount);
+    }
+
     // ─── batch_donate tests ───────────────────────────────────────────────────
 
     #[test]
@@ -12405,5 +12378,3 @@ mod tests {
         assert_eq!(proj.total_raised, (10 + 40 + 16) * STROOP);
     }
 }
-
-
