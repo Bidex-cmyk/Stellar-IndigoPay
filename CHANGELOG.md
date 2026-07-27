@@ -18,7 +18,12 @@
 
 ### Bug Fixes
 
-* **backend:** standardize every direct admin-route error response through `sendAppError`, including validation, missing-resource, rate-limit, conflict, and internal failures
+* **backend:** invalidate impact endpoint caches on project status change (closes #016, grantfox GF-016)
+  - `PATCH /api/projects/:id/status` now sweeps `cache:v1:impact:project:<id>` in addition to the existing project detail, list, global stats and `cache:v1:impact:global` keys
+  - Fixes the transparency/impact dashboard serving pre-change data for up to 300s (the impact cache TTL) after a project is paused, completed or rejected
+  - Invalidation remains best-effort: a Redis outage still logs a warning and returns `200`, matching the behaviour of every other mutation endpoint
+  - Update the "Cache invalidation" tables in `docs/api.md` to document the impact keys
+  - Add 11 regression tests in `backend/src/routes/projects.test.js`, including an end-to-end case that warms `GET /api/impact/project/:id`, verifies `X-Cache: HIT`, pauses the project, and asserts the next read is a `MISS` with fresh figures
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
 * **backend:** bound `tags` in the project submission schema — at most 10 tags, each a non-empty trimmed string of at most 50 characters — to prevent database and search-index bloat from unbounded arrays (closes #520)

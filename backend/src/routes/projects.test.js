@@ -1123,3 +1123,222 @@ describe("POST /api/projects/admin/confirm", () => {
     expect(res.body.data.onChainVerified).toBe(true);
   });
 });
+
+describe("PATCH /api/projects/:id/status — cache invalidation", () => {
+  let app;
+  const projectId = "11111111-2222-3333-8888-555555555555";
+
+  beforeEach(() => {
+    app = buildApp();
+    jest.clearAllMocks();
+    redis.get.mockResolvedValue(null);
+    redis.set.mockResolvedValue(null);
+    redis.deletePattern.mockResolvedValue(null);
+  });
+
+  /**
+   * Mocks the two queries the handler runs (SELECT current row, UPDATE ... RETURNING *)
+   * plus the audit-log inserts, which fire through the same pool mock.
+   */
+  function mockStatusUpdate(status) {
+    pool.query.mockResolvedValue({
+      rows: [{ ...MOCK_PROJECT_ROW, status }],
+    });
+  }
+
+  test("invalidates the per-project impact cache key on status change", async () => {
+    mockStatusUpdate("paused");
+
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "paused", adminAddress: "admin" })
+      .expect(200);
+
+    expect(redis.deletePattern).toHaveBeenCalledWith(
+      `cache:v1:impact:project:${projectId}`,
+    );
+  });
+
+  test("invalidates the global impact cache key on status change", async () => {
+    mockStatusUpdate("paused");
+
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "paused", adminAddress: "admin" })
+      .expect(200);
+
+    expect(redis.deletePattern).toHaveBeenCalledWith("cache:v1:impact:global");
+  });
+
+  test("still invalidates project detail, list and global stats keys", async () => {
+    mockStatusUpdate("rejected");
+
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "rejected", reason: "incomplete", adminAddress: "admin" })
+      .expect(200);
+
+    expect(redis.deletePattern).toHaveBeenCalledWith("cache:v1:projects:list:*");
+    expect(redis.deletePattern).toHaveBeenCalledWith(
+      `cache:v1:projects:detail:${projectId}`,
+    );
+    expect(redis.deletePattern).toHaveBeenCalledWith("cache:v1:stats:global");
+  });
+
+  test("invalidates the documented key set exactly (docs/api.md parity)", async () => {
+    mockStatusUpdate("active");
+
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "active", adminAddress: "admin" })
+      .expect(200);
+
+    const invalidated = redis.deletePattern.mock.calls.map(([pattern]) => pattern);
+    expect(invalidated).toEqual([
+      "cache:v1:projects:list:*",
+      `cache:v1:projects:detail:${projectId}`,
+      "cache:v1:stats:global",
+      `cache:v1:impact:project:${projectId}`,
+      "cache:v1:impact:global",
+    ]);
+  });
+
+  test.each(["active", "rejected", "paused"])(
+    "invalidates impact caches when status becomes %s",
+    async (status) => {
+      mockStatusUpdate(status);
+
+      await request(app)
+        .patch(`/api/projects/${projectId}/status`)
+        .send({ status, adminAddress: "admin" })
+        .expect(200);
+
+      const invalidated = redis.deletePattern.mock.calls.map(([pattern]) => pattern);
+      expect(invalidated).toContain(`cache:v1:impact:project:${projectId}`);
+      expect(invalidated).toContain("cache:v1:impact:global");
+    },
+  );
+
+  test("does not invalidate any cache when the status payload is invalid", async () => {
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "bogus", adminAddress: "admin" })
+      .expect(400);
+
+    expect(redis.deletePattern).not.toHaveBeenCalled();
+  });
+
+  test("does not invalidate any cache when the project does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] }); // SELECT returns nothing
+
+    await request(app)
+      .patch("/api/projects/44444444-4444-4444-8444-444444444444/status")
+      .send({ status: "paused", adminAddress: "admin" })
+      .expect(404);
+
+    expect(redis.deletePattern).not.toHaveBeenCalled();
+  });
+
+  test("still returns 200 when impact cache invalidation fails (best-effort)", async () => {
+    mockStatusUpdate("paused");
+    redis.deletePattern.mockRejectedValue(new Error("redis down"));
+
+    const res = await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "paused", adminAddress: "admin" })
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(redis.deletePattern).toHaveBeenCalledWith(
+      `cache:v1:impact:project:${projectId}`,
+    );
+  });
+});
+
+describe("GET /api/impact/project/:id after a status change", () => {
+  const projectId = "11111111-2222-3333-8888-555555555555";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test("impact endpoint recomputes once its cache key has been invalidated", async () => {
+    // Real cache middleware + a tiny in-memory Redis stand-in, so this proves
+    // end-to-end that the key written by GET /api/impact/project/:id is the same
+    // key PATCH /:id/status sweeps.
+    const store = new Map();
+    redis.get.mockImplementation(async (key) =>
+      store.has(key) ? store.get(key) : null,
+    );
+    redis.set.mockImplementation(async (key, value) => {
+      store.set(key, value);
+    });
+    // Minimal Redis glob semantics: the codebase only ever uses exact keys or a
+    // single trailing "*" (e.g. "cache:v1:projects:list:*").
+    const matchesPattern = (pattern, key) =>
+      pattern.endsWith("*")
+        ? key.startsWith(pattern.slice(0, -1))
+        : key === pattern;
+    redis.deletePattern.mockImplementation(async (pattern) => {
+      for (const key of [...store.keys()]) {
+        if (matchesPattern(pattern, key)) store.delete(key);
+      }
+    });
+
+    const impactRouter = require("./impact");
+    const app = express();
+    app.use(express.json());
+    app.use("/api/projects", projectsRouter);
+    app.use("/api/impact", impactRouter);
+    app.use((err, _req, res, _next) => {
+      if (err instanceof AppError) return res.status(err.status).json(err.toJSON());
+      res.status(err.status || 500).json({ error: err.message });
+    });
+
+    // 1. Warm the impact cache (MISS → cached).
+    pool.query
+      .mockResolvedValueOnce({ rows: [MOCK_PROJECT_ROW] }) // project lookup
+      .mockResolvedValueOnce({
+        rows: [{ totalDonationsXLM: "5000", donorCount: 42 }],
+      }); // aggregate
+
+    const first = await request(app)
+      .get(`/api/impact/project/${projectId}`)
+      .expect(200);
+    expect(first.headers["x-cache"]).toBe("MISS");
+    expect(store.has(`cache:v1:impact:project:${projectId}`)).toBe(true);
+
+    // 2. Confirm it is genuinely served from cache.
+    const second = await request(app)
+      .get(`/api/impact/project/${projectId}`)
+      .expect(200);
+    expect(second.headers["x-cache"]).toBe("HIT");
+
+    // 3. Pause the project — this must evict the impact keys.
+    pool.query.mockResolvedValue({
+      rows: [{ ...MOCK_PROJECT_ROW, status: "paused" }],
+    });
+    await request(app)
+      .patch(`/api/projects/${projectId}/status`)
+      .send({ status: "paused", adminAddress: "admin" })
+      .expect(200);
+
+    expect(store.has(`cache:v1:impact:project:${projectId}`)).toBe(false);
+
+    // 4. Next impact read is a MISS and reflects the fresh figures.
+    pool.query.mockReset();
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ ...MOCK_PROJECT_ROW, status: "paused", raised_xlm: "6000" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ totalDonationsXLM: "6000", donorCount: 50 }],
+      });
+
+    const third = await request(app)
+      .get(`/api/impact/project/${projectId}`)
+      .expect(200);
+    expect(third.headers["x-cache"]).toBe("MISS");
+    expect(third.body.data.donorCount).toBe(50);
+  });
+});
