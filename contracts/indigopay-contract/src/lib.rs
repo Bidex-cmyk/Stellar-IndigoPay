@@ -33,9 +33,16 @@ pub mod donation;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
-    BytesN, Env, String, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol, Vec,
 };
+#[cfg(any(
+    feature = "usdc",
+    feature = "donation",
+    feature = "testutils",
+    feature = "zk",
+    feature = "impact"
+))]
+use soroban_sdk::{contractclient, token, Bytes};
 #[cfg(feature = "project_verification")]
 use soroban_sdk::{contracterror, panic_with_error};
 
@@ -506,7 +513,9 @@ const DEFAULT_DONATION_RATE_LIMIT_WINDOW: u32 = 720;
 // Bounds on caller-supplied voting durations. Floor (~1 hour) keeps the
 // window long enough to be observed; ceiling (~30 days) bounds storage TTL
 // pressure and prevents proposals from sitting open indefinitely.
+#[cfg(feature = "governance")]
 const MIN_VOTING_WINDOW_LEDGERS: u32 = 720; // 1 hour @ 5s/ledger
+#[cfg(feature = "governance")]
 const MAX_VOTING_WINDOW_LEDGERS: u32 = 518_400; // 30 days @ 5s/ledger
 
 // Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
@@ -519,6 +528,7 @@ const MAX_CO2_PER_XLM: u32 = 100_000;
 // downstream observers a 48-hour window to react to a pending upgrade
 // (e.g. by exiting their positions or signalling objections via
 // off-chain channels) before the WASM is swapped.
+#[cfg(feature = "upgrade")]
 const UPGRADE_TIMELOCK_LEDGERS: u32 = 34_560;
 
 // 7 days × 24 h × 3600 s ÷ 5 s per ledger = 120_960 ledgers. The minimum
@@ -526,11 +536,13 @@ const UPGRADE_TIMELOCK_LEDGERS: u32 = 34_560;
 // which `execute_emergency_withdrawal` can fire. Gives donors and observers
 // a 7-day window to object off-chain before contract-held funds are sent to
 // the new wallet.
+#[cfg(feature = "emergency")]
 const EMERGENCY_WITHDRAWAL_TIMELOCK: u32 = 120_960;
 
 // 24 hours × 3600 s / 5 s per ledger = 17 280 ledgers. The window after a
 // donation during which the donor may request a refund (subject to admin +
 // project wallet approval).
+#[cfg(feature = "refund")]
 const REFUND_COOLDOWN_LEDGERS: u32 = 17_280;
 
 // 24 hours × 3600 s / 5 s per ledger = 17 280 ledgers. The challenge window
@@ -547,6 +559,7 @@ const FORCE_REFUND_TIMELOCK_LEDGERS: u32 = 51_840;
 ///
 /// v1: original schema (no version tracking)
 /// v2: Symbol-keyed storage version added (#379)
+#[cfg(feature = "upgrade")]
 const CURRENT_STORAGE_VERSION: u32 = 2;
 /// Storage key for the schema version. Uses a Symbol (not a DataKey variant)
 /// to avoid XDR codegen overhead in the slim WASM build.
@@ -558,6 +571,7 @@ const STORAGE_VERSION_KEY: Symbol = symbol_short!("sv");
 const MAX_PLATFORM_FEE_BPS: u32 = 500;
 
 /// Read the stored admin set. Panics if not initialized.
+#[inline(never)]
 fn read_admin_set(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
@@ -594,10 +608,7 @@ fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
     }
 
     if valid_count < required_threshold {
-        panic!(
-            "Insufficient admin signatures: {}/{} required",
-            valid_count, required_threshold
-        );
+        panic!("Insufficient admin signatures");
     }
 }
 
@@ -1172,10 +1183,7 @@ fn migrate(env: &Env) {
         .get(&STORAGE_VERSION_KEY)
         .unwrap_or(1);
     if final_version != CURRENT_STORAGE_VERSION {
-        panic!(
-            "Migration incomplete: at version {} but target is {}",
-            final_version, CURRENT_STORAGE_VERSION
-        );
+        panic!("Migration incomplete");
     }
 }
 
@@ -1195,6 +1203,12 @@ fn migrate_v1_to_v2(_env: &Env) {
     //   env.storage().instance().remove(&OldKey);
 }
 
+#[cfg(any(
+    feature = "donation",
+    feature = "usdc",
+    feature = "zk",
+    feature = "testutils"
+))]
 pub fn calculate_badge(total_stroops: i128) -> BadgeTier {
     let xlm = total_stroops / STROOP;
     if xlm >= 2000 {
@@ -1590,6 +1604,7 @@ fn apply_campaign_goal_progress(project: &mut Project) -> bool {
     }
 }
 
+#[cfg(any(feature = "governance", feature = "delegation"))]
 pub fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
     match badge {
         BadgeTier::None => 0,
@@ -1601,6 +1616,7 @@ pub fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
 }
 
 /// Quadratic voting: credits available per badge tier.
+#[cfg(feature = "governance")]
 pub fn voting_credits_from_badge(badge: &BadgeTier) -> u32 {
     match badge {
         BadgeTier::None => 0,
@@ -1668,10 +1684,10 @@ impl IndigoPayContract {
             panic!("Contract already initialized");
         }
         if admins.is_empty() {
-            panic!("Admin set must not be empty");
+            panic!("Empty admin set");
         }
         if threshold == 0 || threshold > admins.len() {
-            panic!("Threshold must be between 1 and the number of admins");
+            panic!("Invalid threshold");
         }
         env.storage().instance().set(&DataKey::AdminSet, &admins);
         env.storage()
@@ -3815,6 +3831,7 @@ impl IndigoPayContract {
             })
     }
 
+    #[cfg(feature = "impact")]
     pub fn get_badge(env: Env, donor: Address) -> BadgeTier {
         let stats: DonorStats = env
             .storage()
@@ -3931,6 +3948,7 @@ impl IndigoPayContract {
 
     // ─── Placeholders ─────────────────────────────────────────────────────────
 
+    #[cfg(feature = "impact")]
     pub fn mint_impact_nft(env: Env, donor: Address, tier: BadgeTier) {
         donor.require_auth();
         require_not_paused(&env);
@@ -3972,6 +3990,7 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
+    #[cfg(feature = "impact")]
     pub fn has_nft(env: Env, donor: Address, tier: BadgeTier) -> bool {
         env.storage()
             .instance()
