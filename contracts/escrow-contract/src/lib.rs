@@ -2789,6 +2789,41 @@ mod tests {
     }
 
     #[test]
+    fn test_reputation_on_time_completion() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, contract) = setup(&env);
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let job_id = String::from_str(&env, "rep-on-time");
+        create_reputation_job(&env, &contract, &client, &freelancer, &job_id, 1_000);
+
+        contract.release_milestone(&client, &job_id, &0);
+        let reputation = contract.get_freelancer_reputation(&freelancer);
+        assert_eq!(reputation.completed_jobs, 1);
+        assert_eq!(reputation.on_time_completions, 1);
+    }
+
+    #[test]
+    fn test_reputation_late_completion() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, contract) = setup(&env);
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let job_id = String::from_str(&env, "rep-late");
+        create_reputation_job(&env, &contract, &client, &freelancer, &job_id, 1_000);
+
+        let deadline = contract.get_job(&job_id).unwrap().deadline;
+        env.ledger().set_sequence_number(deadline + 1);
+
+        contract.release_milestone(&client, &job_id, &0);
+        let reputation = contract.get_freelancer_reputation(&freelancer);
+        assert_eq!(reputation.completed_jobs, 1);
+        assert_eq!(reputation.on_time_completions, 0);
+    }
+
+    #[test]
     fn test_reputation_on_dispute() {
         let env = Env::default();
         env.mock_all_auths();
