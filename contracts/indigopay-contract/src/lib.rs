@@ -331,7 +331,6 @@ pub struct DonationChallenge {
     pub approved: bool,
 }
 
-
 #[contracttype]
 pub struct TokenConfig {
     pub token: Address,
