@@ -18,6 +18,7 @@
 
 ### Bug Fixes
 
+* **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
 * **backend:** invalidate impact endpoint caches on project status change (closes #016, grantfox GF-016)
   - `PATCH /api/projects/:id/status` now sweeps `cache:v1:impact:project:<id>` in addition to the existing project detail, list, global stats and `cache:v1:impact:global` keys
   - Fixes the transparency/impact dashboard serving pre-change data for up to 300s (the impact cache TTL) after a project is paused, completed or rejected
