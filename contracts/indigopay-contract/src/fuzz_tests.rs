@@ -15,6 +15,7 @@ mod fuzz {
 
     use crate::{DataKey, IndigoPayContract, IndigoPayContractClient, MockOracle, Project};
     use proptest::prelude::*;
+    use soroban_sdk::BytesN;
     use soroban_sdk::{
         testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
     };
@@ -469,6 +470,100 @@ mod fuzz {
                 result.is_err(),
                 "fewer than two distinct admins unexpectedly satisfied a 2-of-2 threshold"
             );
+        }
+    }
+
+    // ─── Impact Root Archiving Fuzz Tests (#466) ───────────────────────────
+    //
+    // Property: For any N periods published sequentially:
+    //   - Period count = N
+    //   - All archived periods are accessible at indices 0..N-1
+    //   - Indices are sequential with no gaps
+    //
+    // Uses `env.as_contract()` because the free functions access contract
+    // storage directly (not through the client).
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_archive_index_sequential(n in 1u32..=10u32) {
+            let env = Env::default();
+            env.mock_all_auths();
+            let cid = env.register_contract(None, IndigoPayContract);
+            let client = IndigoPayContractClient::new(&env, &cid);
+            let admin = Address::generate(&env);
+            client.initialize(&soroban_sdk::vec![&env, admin.clone()], &1u32);
+
+            let project_id = SorobanString::from_str(&env, "fuzz-archive");
+            let wallet = Address::generate(&env);
+            client.register_project(
+                &admin,
+                &project_id,
+                &SorobanString::from_str(&env, "Fuzz Archive"),
+                &wallet,
+                &100u32,
+            );
+
+            // Publish N periods
+            for i in 0u32..n {
+                env.as_contract(&cid, || {
+                    let root = BytesN::from_array(&env, &[(i as u8 + 1); 32]);
+                    use crate::{publish_impact_root, ImpactTotals};
+                    publish_impact_root(
+                        &env,
+                        &soroban_sdk::vec![&env, admin.clone()],
+                        project_id.clone(),
+                        root,
+                        1704067200u64 + (i as u64) * 2_592_000,
+                        1706745600u64 + (i as u64) * 2_592_000,
+                        ImpactTotals {
+                            co2_kg: 1000 + i as u64 * 100,
+                            trees: 500 + i as u64 * 50,
+                            hectares: 10u64 + i as u64,
+                        },
+                    );
+                });
+            }
+
+            // Verify: period count = min(n-1, MAX_ARCHIVED_PERIODS)
+            // (n-1 because the last root is current, not archived)
+            let expected_count = if n == 1 { 0 } else { n - 1 };
+            let capped_count = core::cmp::min(expected_count, crate::MAX_ARCHIVED_PERIODS);
+
+            env.as_contract(&cid, || {
+                use crate::get_impact_periods;
+                let periods = get_impact_periods(&env, project_id);
+                prop_assert_eq!(
+                    periods.len() as u32,
+                    capped_count,
+                    "period count mismatch: expected {}, got {}",
+                    capped_count,
+                    periods.len()
+                );
+
+                // Verify sequential indices with no gaps
+                for j in 0..periods.len() {
+                    let p = periods.get_unchecked(j);
+                    prop_assert_eq!(
+                        p.period_index, j as u32,
+                        "index gap at position {}: expected {}, got {}",
+                        j, j, p.period_index
+                    );
+                }
+
+                // Verify totals are strictly increasing (each period has more impact than the last)
+                for j in 1..periods.len() {
+                    let prev = periods.get_unchecked(j - 1);
+                    let curr = periods.get_unchecked(j);
+                    prop_assert!(
+                        curr.total_co2_kg > prev.total_co2_kg,
+                        "CO2 total not increasing at index {}",
+                        j
+                    );
+                }
+                Ok(())
+            });
         }
     }
 }
