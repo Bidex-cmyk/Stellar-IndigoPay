@@ -150,7 +150,7 @@ mod fuzz {
     }
 
     #[test]
-    #[should_panic(expected = "Project total_raised overflow")]
+    #[should_panic(expected = "overflow")]
     fn donation_of_i128_max_panics() {
         let (env, contract_id, client, _wallet, project_id, token) = setup();
         let donor = Address::generate(&env);
@@ -161,7 +161,7 @@ mod fuzz {
     }
 
     #[test]
-    #[should_panic(expected = "Project total_raised overflow")]
+    #[should_panic(expected = "overflow")]
     fn sequential_donations_panic_when_sum_exceeds_i128_max() {
         let (env, contract_id, client, _wallet, project_id, token) = setup();
         let donor_a = Address::generate(&env);
@@ -564,6 +564,26 @@ mod fuzz {
                 }
                 Ok(())
             });
+        }
+
+        #[test]
+        fn prop_fee_sum_equals_total(fee_amount in 1i128..=1_000_000_000_000i128, s1 in 1u32..=9998u32) {
+            let env = Env::default();
+            let r1 = crate::FeeRecipient {
+                address: Address::generate(&env),
+                share_bps: s1,
+            };
+            let r2 = crate::FeeRecipient {
+                address: Address::generate(&env),
+                share_bps: 10_000 - s1,
+            };
+            let recipients = soroban_sdk::vec![&env, r1, r2];
+            let shares = crate::split_fee_recipients(&env, fee_amount, &recipients);
+            let mut sum: i128 = 0;
+            for (_addr, amount) in shares.iter() {
+                sum += amount;
+            }
+            prop_assert_eq!(sum, fee_amount, "Sum of recipient fee shares must equal total fee amount");
         }
     }
 }

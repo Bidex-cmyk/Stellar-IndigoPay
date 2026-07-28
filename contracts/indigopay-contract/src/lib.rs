@@ -440,6 +440,13 @@ enum LegacyDataKey {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeRecipient {
+    pub address: Address,
+    pub share_bps: u32,
+}
+
+#[contracttype]
 pub enum DataKey {
     // Multi-sig admin set: Vec<Address> of authorized admin addresses.
     // Replaces the former single-admin `Admin` variant.
@@ -572,6 +579,8 @@ pub enum DataKey {
     // deployments without an override can fall back to the global policy.
     TokenRateLimitMax(Address),
     TokenRateLimitWindow(Address),
+    /// Platform fee split recipients and their share basis points (#434).
+    PlatformFeeRecipients,
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STROOP: i128 = 10_000_000;
@@ -1475,6 +1484,65 @@ fn split_fee(amount: i128, fee_bps: u32) -> (i128, i128) {
     let project_amount = amount.checked_sub(fee).expect("underflow");
     (project_amount, fee)
 }
+
+/// Read the configured platform fee recipients list (#434).
+/// Backward compatibility: if `PlatformTreasury` exists and `PlatformFeeRecipients` does not,
+/// returns a single recipient with 10000 bps (100%).
+#[cfg(any(feature = "fees", feature = "testutils"))]
+fn read_platform_fee_recipients(env: &Env) -> Vec<FeeRecipient> {
+    if let Some(recipients) = env
+        .storage()
+        .instance()
+        .get::<_, Vec<FeeRecipient>>(&DataKey::PlatformFeeRecipients)
+    {
+        recipients
+    } else if let Some(treasury) = env
+        .storage()
+        .instance()
+        .get::<_, Address>(&DataKey::PlatformTreasury)
+    {
+        soroban_sdk::vec![
+            env,
+            FeeRecipient {
+                address: treasury,
+                share_bps: 10_000,
+            }
+        ]
+    } else {
+        panic!("Platform treasury or fee recipients not configured");
+    }
+}
+
+/// Split total `fee_amount` into individual recipient shares based on `share_bps` (#434).
+/// Assigns any rounding remainder to the final recipient so that the sum of all
+/// allocated recipient amounts equals `fee_amount` exactly.
+#[cfg(feature = "fees")]
+fn split_fee_recipients(
+    env: &Env,
+    fee_amount: i128,
+    recipients: &Vec<FeeRecipient>,
+) -> Vec<(Address, i128)> {
+    let mut result: Vec<(Address, i128)> = Vec::new(env);
+    if fee_amount == 0 || recipients.is_empty() {
+        return result;
+    }
+    let mut allocated: i128 = 0;
+    let len = recipients.len();
+    for i in 0..len {
+        let r = recipients.get_unchecked(i);
+        let share_amount = if i == len - 1 {
+            fee_amount.checked_sub(allocated).expect("underflow")
+        } else {
+            fee_amount
+                .checked_mul(r.share_bps as i128)
+                .expect("overflow")
+                / 10_000
+        };
+        allocated = allocated.checked_add(share_amount).expect("overflow");
+        result.push_back((r.address.clone(), share_amount));
+    }
+    result
+}
 #[inline(never)]
 fn ensure_min_ttl(env: &Env, min_ledgers: u32) {
     env.storage()
@@ -1877,12 +1945,13 @@ fn process_donation_token(
 
     #[cfg(feature = "fees")]
     if fee_amount > 0 {
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::PlatformTreasury)
-            .expect("Platform treasury not configured");
-        token_client.transfer(donor, &treasury, &fee_amount);
+        let recipients = read_platform_fee_recipients(env);
+        let shares = split_fee_recipients(env, fee_amount, &recipients);
+        for (recipient_addr, amount) in shares.iter() {
+            if amount > 0 {
+                token_client.transfer(donor, &recipient_addr, &amount);
+            }
+        }
     }
     // Transfer remainder to project wallet.
 
@@ -2529,11 +2598,60 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&DataKey::PlatformTreasury, &treasury);
+        let single_recipient = FeeRecipient {
+            address: treasury.clone(),
+            share_bps: 10_000,
+        };
+        let recipients = soroban_sdk::vec![&env, single_recipient];
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeRecipients, &recipients);
         env.events().publish(
             (symbol_short!("treas_set"), signers.get(0).unwrap()),
             treasury,
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+    /// Admin-only (M-of-N): set the platform fee recipients and their split shares (#434).
+    ///
+    /// `recipients` must not be empty, and all recipient `share_bps` must sum to 10000 (100%).
+    ///
+    /// # Panics
+    /// - If `recipients` is empty.
+    /// - If sum of `share_bps` across `recipients` does not equal 10000.
+    #[cfg(feature = "fees")]
+    pub fn set_platform_fee_recipients(
+        env: Env,
+        signers: Vec<Address>,
+        recipients: Vec<FeeRecipient>,
+    ) {
+        require_admin_for_critical(&env, &signers);
+        require_not_paused(&env);
+        if recipients.is_empty() {
+            panic!("Fee recipients list cannot be empty");
+        }
+        let mut total_share: u32 = 0;
+        for r in recipients.iter() {
+            total_share = total_share
+                .checked_add(r.share_bps)
+                .expect("Fee recipient share calculation overflow");
+        }
+        if total_share != 10_000 {
+            panic!("Fee recipient shares must sum to 10000 bps (100%)");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeRecipients, &recipients);
+        env.events().publish(
+            (symbol_short!("recip_set"), signers.get(0).unwrap()),
+            recipients.len(),
+        );
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+    /// Public read-only: get the configured platform fee recipients and their shares (#434).
+    #[cfg(any(feature = "fees", feature = "testutils"))]
+    pub fn get_platform_fee_recipients(env: Env) -> Vec<FeeRecipient> {
+        read_platform_fee_recipients(&env)
     }
     // ─── Donations ────────────────────────────────────────────────────────────
     #[allow(clippy::too_many_arguments)]
@@ -3243,12 +3361,13 @@ impl IndigoPayContract {
 
         #[cfg(feature = "fees")]
         if fee_amount > 0 {
-            let treasury: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::PlatformTreasury)
-                .expect("Platform treasury not configured");
-            token_client.transfer(&contract_addr, &treasury, &fee_amount);
+            let recipients = read_platform_fee_recipients(&env);
+            let shares = split_fee_recipients(&env, fee_amount, &recipients);
+            for (recipient_addr, amount) in shares.iter() {
+                if amount > 0 {
+                    token_client.transfer(&contract_addr, &recipient_addr, &amount);
+                }
+            }
         }
         token_client.transfer(&contract_addr, &project.wallet, &project_amount);
         #[cfg(feature = "fees")]
@@ -10815,6 +10934,147 @@ mod tests {
         assert_eq!(p.total_raised, amount);
         let record = client.get_donation_record(&0u32);
         assert_eq!(record.amount, amount);
+    }
+    // ─── Configurable Platform Fee Splits (#434) ──────────────────────────────
+    #[cfg(feature = "fees")]
+    #[test]
+    fn test_multi_recipient_fee_split() {
+        let (env, _cid, client, admin, pid) = setup();
+        let r1 = Address::generate(&env);
+        let r2 = Address::generate(&env);
+        let r3 = Address::generate(&env);
+        let recipients = soroban_sdk::vec![
+            &env,
+            FeeRecipient {
+                address: r1.clone(),
+                share_bps: 5000,
+            },
+            FeeRecipient {
+                address: r2.clone(),
+                share_bps: 3000,
+            },
+            FeeRecipient {
+                address: r3.clone(),
+                share_bps: 2000,
+            },
+        ];
+        client.set_platform_fee_recipients(&signers1(&env, &admin), &recipients);
+        client.set_platform_fee(&signers1(&env, &admin), &200u32);
+
+        let stored = client.get_platform_fee_recipients();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored.get(0).unwrap().share_bps, 5000);
+
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let amount: i128 = 100 * STROOP;
+        StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+        client.donate(&token, &donor, &pid, &amount, &0u32);
+
+        let token_client = token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&r1), 10_000_000);
+        assert_eq!(token_client.balance(&r2), 6_000_000);
+        assert_eq!(token_client.balance(&r3), 4_000_000);
+        let p = client.get_project(&pid);
+        assert_eq!(token_client.balance(&p.wallet), 980_000_000);
+    }
+    #[cfg(feature = "fees")]
+    #[test]
+    #[should_panic(expected = "Fee recipient shares must sum to 10000 bps (100%)")]
+    fn test_recipient_shares_dont_sum_to_100_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let r1 = Address::generate(&env);
+        let r2 = Address::generate(&env);
+        let recipients = soroban_sdk::vec![
+            &env,
+            FeeRecipient {
+                address: r1,
+                share_bps: 5000,
+            },
+            FeeRecipient {
+                address: r2,
+                share_bps: 4000,
+            },
+        ];
+        client.set_platform_fee_recipients(&signers1(&env, &admin), &recipients);
+    }
+    #[cfg(feature = "fees")]
+    #[test]
+    #[should_panic(expected = "Fee recipients list cannot be empty")]
+    fn test_empty_fee_recipients_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let recipients = soroban_sdk::vec![&env];
+        client.set_platform_fee_recipients(&signers1(&env, &admin), &recipients);
+    }
+    #[cfg(feature = "fees")]
+    #[test]
+    fn test_single_recipient_migration() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let treasury = Address::generate(&env);
+        client.set_platform_treasury(&signers1(&env, &admin), &treasury);
+
+        let recipients = client.get_platform_fee_recipients();
+        assert_eq!(recipients.len(), 1);
+        let r0 = recipients.get(0).unwrap();
+        assert_eq!(r0.address, treasury);
+        assert_eq!(r0.share_bps, 10_000);
+
+        let r1 = Address::generate(&env);
+        let r2 = Address::generate(&env);
+        let new_recipients = soroban_sdk::vec![
+            &env,
+            FeeRecipient {
+                address: r1.clone(),
+                share_bps: 7000,
+            },
+            FeeRecipient {
+                address: r2.clone(),
+                share_bps: 3000,
+            },
+        ];
+        client.set_platform_fee_recipients(&signers1(&env, &admin), &new_recipients);
+        let updated = client.get_platform_fee_recipients();
+        assert_eq!(updated.len(), 2);
+        assert_eq!(updated.get(0).unwrap().address, r1);
+        assert_eq!(updated.get(1).unwrap().address, r2);
+    }
+    #[cfg(feature = "fees")]
+    #[test]
+    fn test_fee_distribution_exact_sum() {
+        let env = Env::default();
+        let r1 = Address::generate(&env);
+        let r2 = Address::generate(&env);
+        let r3 = Address::generate(&env);
+        let recipients = soroban_sdk::vec![
+            &env,
+            FeeRecipient {
+                address: r1,
+                share_bps: 3333,
+            },
+            FeeRecipient {
+                address: r2,
+                share_bps: 3333,
+            },
+            FeeRecipient {
+                address: r3,
+                share_bps: 3334,
+            },
+        ];
+        for fee_amount in [1i128, 3, 7, 10, 99, 100, 1000, 10_000_000] {
+            let shares = split_fee_recipients(&env, fee_amount, &recipients);
+            let mut sum: i128 = 0;
+            for (_addr, amount) in shares.iter() {
+                sum += amount;
+            }
+            assert_eq!(
+                sum, fee_amount,
+                "Exact sum match failed for fee_amount {}",
+                fee_amount
+            );
+        }
     }
     // ─── On-chain Impact Certificates (#382) ────────────────────────────────
     #[cfg(feature = "impact")]
