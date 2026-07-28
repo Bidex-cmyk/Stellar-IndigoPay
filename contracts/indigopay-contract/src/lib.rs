@@ -375,6 +375,12 @@ pub struct TokenConfig {
 }
 
 #[contracttype]
+enum LegacyDataKey {
+    // Encodes to the historical two-field `DonorRateLimit` storage key.
+    DonorRateLimit(Address, String),
+}
+
+#[contracttype]
 pub enum DataKey {
     // Multi-sig admin set: Vec<Address> of authorized admin addresses.
     // Replaces the former single-admin `Admin` variant.
@@ -400,8 +406,8 @@ pub enum DataKey {
     HasVoted(String, Address),
     // Per-donor per-project cumulative donation total for milestone NFT gating
     DonorProjectTotal(String, Address),
-    // Per-donor per-project sliding-window donation rate limit
-    DonorRateLimit(Address, String),
+    // Per-donor per-project per-token sliding-window donation rate limit.
+    DonorRateLimit(Address, String, Address),
     // Admin-configurable donation rate limit overrides (instance storage)
     DonationRateLimitMax,
     DonationRateLimitWindow,
@@ -497,10 +503,16 @@ pub enum DataKey {
     // Multi-token registry
     TokenConfig(Address),
     TokenList,
+    // Transitional key used by the initial multi-token implementation. New
+    // donations lazily migrate it to `DonorRateLimit`.
     DonorRateLimitPerToken(Address, String, Address),
     // Pending M-of-N force-refund escalation. Appended to preserve the
     // discriminants of all previously deployed DataKey variants.
     ForceRefund(u32),
+    // Per-token donation rate limit overrides. These are separate keys so
+    // deployments without an override can fall back to the global policy.
+    TokenRateLimitMax(Address),
+    TokenRateLimitWindow(Address),
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STROOP: i128 = 10_000_000;
@@ -1274,6 +1286,26 @@ fn anon_address(env: &Env) -> Address {
     ))
 }
 
+fn effective_token_rate_limit(env: &Env, token: &Address) -> (u32, u32) {
+    let max = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenRateLimitMax(token.clone()))
+        .or_else(|| env.storage().instance().get(&DataKey::DonationRateLimitMax))
+        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_MAX);
+    let window = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenRateLimitWindow(token.clone()))
+        .or_else(|| {
+            env.storage()
+                .instance()
+                .get(&DataKey::DonationRateLimitWindow)
+        })
+        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
+    (max, window)
+}
+
 /// Process a single donation's core logic: rate limiting, project validation,
 /// state updates (project, donor, NFT, globals), token transfers, and events.
 /// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
@@ -1292,30 +1324,38 @@ fn process_donation_token(
     anonymous: bool,
 ) {
     let current_ledger = env.ledger().sequence();
-    let max_donations: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::DonationRateLimitMax)
-        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_MAX);
-    let window_ledgers: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::DonationRateLimitWindow)
-        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
+    let (max_donations, window_ledgers) = effective_token_rate_limit(env, token);
 
-    let rate_key =
-        DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
-    let mut window: RateLimitWindow =
-        env.storage().instance().get(&rate_key).unwrap_or_else(|| {
-            let legacy_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone());
-            env.storage()
-                .instance()
-                .get(&legacy_key)
-                .unwrap_or(RateLimitWindow {
-                    window_start: current_ledger,
-                    count: 0,
-                })
-        });
+    let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone(), token.clone());
+    let mut window: RateLimitWindow = match env.storage().instance().get(&rate_key) {
+        Some(window) => window,
+        None => {
+            let transitional_key =
+                DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
+            match env.storage().instance().get(&transitional_key) {
+                Some(window) => {
+                    env.storage().instance().remove(&transitional_key);
+                    window
+                }
+                None => {
+                    let legacy_key =
+                        LegacyDataKey::DonorRateLimit(donor.clone(), project_id.clone());
+                    match env.storage().instance().get(&legacy_key) {
+                        Some(window) => {
+                            // Move the old donor/project window only once so its
+                            // count cannot be copied into every token window.
+                            env.storage().instance().remove(&legacy_key);
+                            window
+                        }
+                        None => RateLimitWindow {
+                            window_start: current_ledger,
+                            count: 0,
+                        },
+                    }
+                }
+            }
+        }
+    };
 
     if current_ledger - window.window_start >= window_ledgers {
         window.window_start = current_ledger;
@@ -4657,6 +4697,40 @@ impl IndigoPayContract {
             .get(&DataKey::DonationRateLimitWindow)
             .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
         (max, window)
+    }
+    /// Admin-only: Configure the donation rate limit for one token.
+    ///
+    /// This is a routine admin action. Both values must be positive.
+    pub fn set_token_rate_limit(
+        env: Env,
+        admin: Address,
+        token: Address,
+        max_donations: u32,
+        window_ledgers: u32,
+    ) {
+        require_admin_for_routine(&env, &admin);
+        require_not_paused(&env);
+        if max_donations == 0 {
+            panic!("max_donations must be positive");
+        }
+        if window_ledgers == 0 {
+            panic!("window_ledgers must be positive");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenRateLimitMax(token.clone()), &max_donations);
+        env.storage().instance().set(
+            &DataKey::TokenRateLimitWindow(token.clone()),
+            &window_ledgers,
+        );
+        env.events().publish(
+            (symbol_short!("tok_rate"), token),
+            (max_donations, window_ledgers),
+        );
+    }
+    /// Get a token's effective rate limit, falling back to the global policy.
+    pub fn get_token_rate_limit(env: Env, token: Address) -> (u32, u32) {
+        effective_token_rate_limit(&env, &token)
     }
     /// Admin-only: Set the price oracle contract address used by `donate_usdc`.
     /// The oracle must implement `OracleInterface::get_price()`.
@@ -8355,6 +8429,97 @@ mod tests {
             )
         );
     }
+    #[test]
+    fn test_set_token_rate_limit() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let xlm = Address::generate(&env);
+        let usdc = Address::generate(&env);
+
+        client.set_token_rate_limit(&admin, &xlm, &10, &720);
+        client.set_token_rate_limit(&admin, &usdc, &5, &1_440);
+
+        assert_eq!(client.get_token_rate_limit(&xlm), (10, 720));
+        assert_eq!(client.get_token_rate_limit(&usdc), (5, 1_440));
+    }
+    #[test]
+    #[should_panic(expected = "Only admin can perform this action")]
+    fn test_set_token_rate_limit_non_admin_fails() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let imposter = Address::generate(&env);
+        let token = Address::generate(&env);
+        client.set_token_rate_limit(&imposter, &token, &5, &100);
+    }
+    #[test]
+    fn test_per_token_rate_limit() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 3 * STROOP);
+        client.set_token_rate_limit(&admin, &token, &2, &100);
+
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+        client.donate(&token, &donor, &pid, &STROOP, &1);
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &2);
+        }));
+
+        assert!(blocked.is_err());
+        assert_eq!(client.get_project(&pid).total_raised, 2 * STROOP);
+    }
+    #[test]
+    fn test_per_token_rate_limit_fallback() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 2 * STROOP);
+        assert_eq!(
+            client.get_token_rate_limit(&token),
+            (
+                DEFAULT_DONATION_RATE_LIMIT_MAX,
+                DEFAULT_DONATION_RATE_LIMIT_WINDOW
+            )
+        );
+        client.set_donation_rate_limit(&admin, &1, &100);
+
+        assert_eq!(client.get_token_rate_limit(&token), (1, 100));
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &1);
+        }));
+
+        assert!(blocked.is_err());
+    }
+    #[test]
+    fn test_rate_limit_key_migration() {
+        let (env, cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 2 * STROOP);
+        let legacy_key = LegacyDataKey::DonorRateLimit(donor.clone(), pid.clone());
+        let token_key = DataKey::DonorRateLimit(donor.clone(), pid.clone(), token.clone());
+        let window_start = env.ledger().sequence();
+        env.as_contract(&cid, || {
+            env.storage().instance().set(
+                &legacy_key,
+                &RateLimitWindow {
+                    window_start,
+                    count: 1,
+                },
+            );
+        });
+        client.set_token_rate_limit(&admin, &token, &2, &100);
+
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+
+        env.as_contract(&cid, || {
+            assert!(!env.storage().instance().has(&legacy_key));
+            let migrated: RateLimitWindow =
+                env.storage().instance().get(&token_key).expect("migrated");
+            assert_eq!(migrated.window_start, window_start);
+            assert_eq!(migrated.count, 2);
+        });
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &1);
+        }));
+        assert!(blocked.is_err());
+    }
     // ─── Contract-level pause tests ─────────────────────────────────────────
     #[test]
     fn test_pause_blocks_donate() {
@@ -11516,7 +11681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_per_token_isolation() {
+    fn test_per_token_rate_limit_isolation() {
         let (env, _cid, client, admin, pid) = setup();
         let token_admin = Address::generate(&env);
         let xlm_token = env
@@ -11529,7 +11694,8 @@ mod tests {
 
         client.register_token(&admin, &xlm_token, &xlm_token, &symbol_short!("XLM"));
         client.register_token(&admin, &usdc_token, &mock_oracle, &symbol_short!("USDC"));
-        client.set_donation_rate_limit(&admin, &2u32, &720u32);
+        client.set_token_rate_limit(&admin, &xlm_token, &1u32, &720u32);
+        client.set_token_rate_limit(&admin, &usdc_token, &2u32, &720u32);
 
         let donor = Address::generate(&env);
         let amount = 10 * STROOP;
@@ -11537,16 +11703,16 @@ mod tests {
         soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token)
             .mint(&donor, &(100 * STROOP));
 
-        // Use up 2 donations for XLM
+        // Use up XLM's lower limit.
         client.donate_token(&xlm_token, &donor, &pid, &amount, &0u32);
-        client.donate_token(&xlm_token, &donor, &pid, &amount, &1u32);
 
-        // Third XLM donation panics due to rate limit
-        let res_xlm = client.try_donate_token(&xlm_token, &donor, &pid, &amount, &2u32);
+        // A second XLM donation is blocked.
+        let res_xlm = client.try_donate_token(&xlm_token, &donor, &pid, &amount, &1u32);
         assert!(res_xlm.is_err());
 
-        // USDC donation still succeeds because rate limit is per-token
+        // USDC has its own counter and a higher configured limit.
         client.donate_token(&usdc_token, &donor, &pid, &amount, &0u32);
+        client.donate_token(&usdc_token, &donor, &pid, &amount, &1u32);
         let stats = client.get_donor_stats(&donor);
         assert_eq!(stats.donation_count, 3);
     }
