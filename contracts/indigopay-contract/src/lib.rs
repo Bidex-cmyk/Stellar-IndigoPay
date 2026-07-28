@@ -3494,12 +3494,7 @@ impl IndigoPayContract {
     /// - If the caller is not an admin.
     /// - If the contract is paused.
     /// - If the project does not exist.
-    pub fn append_impact_root(
-        env: Env,
-        admin: Address,
-        project_id: String,
-        new_root: BytesN<32>,
-    ) {
+    pub fn append_impact_root(env: Env, admin: Address, project_id: String, new_root: BytesN<32>) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
         // Verify the project exists.
@@ -3511,11 +3506,7 @@ impl IndigoPayContract {
         let mmr_size_key = ImpactKey::ImpactMMRSize(project_id.clone());
         let mmr_peaks_key = ImpactKey::ImpactMMRPeaks(project_id.clone());
 
-        let leaf_count: u32 = env
-            .storage()
-            .instance()
-            .get(&mmr_size_key)
-            .unwrap_or(0);
+        let leaf_count: u32 = env.storage().instance().get(&mmr_size_key).unwrap_or(0);
         let mut peaks: Vec<BytesN<32>> = env
             .storage()
             .instance()
@@ -3530,12 +3521,7 @@ impl IndigoPayContract {
         env.storage().instance().set(&mmr_size_key, &new_count);
 
         env.events().publish(
-            (
-                symbol_short!("mmr_app"),
-                admin,
-                project_id,
-                new_count,
-            ),
+            (symbol_short!("mmr_app"), admin, project_id, new_count),
             new_root,
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
@@ -11164,7 +11150,10 @@ mod tests {
         let mut combined = [0u8; 64];
         combined[..32].copy_from_slice(&h0.to_array());
         combined[32..].copy_from_slice(&h1.to_array());
-        let expected: BytesN<32> = env.crypto().sha256(&Bytes::from_slice(&env, &combined)).into();
+        let expected: BytesN<32> = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, &combined))
+            .into();
         assert_eq!(peaks.get_unchecked(0), expected);
     }
     #[cfg(feature = "impact")]
@@ -11203,7 +11192,10 @@ mod tests {
         let mut combined = [0u8; 64];
         combined[..32].copy_from_slice(&h0.to_array());
         combined[32..].copy_from_slice(&h1.to_array());
-        let expected_peak0: BytesN<32> = env.crypto().sha256(&Bytes::from_slice(&env, &combined)).into();
+        let expected_peak0: BytesN<32> = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, &combined))
+            .into();
         assert_eq!(peaks.get_unchecked(0), expected_peak0);
         let h2 = compute_impact_leaf_hash(&env, &leaf_c);
         assert_eq!(peaks.get_unchecked(1), h2);
@@ -11453,8 +11445,10 @@ mod tests {
         // The spec requirement (2^20) is verified by the mathematical property:
         // peak_count = popcount(leaf_count), which is O(log leaf_count).
         // With 1024 leaves, max peaks = 10; with 2^20 leaves, max peaks = 20.
-        assert!(peaks2.len() <= n_leaves.ilog2() + 1,
-            "Peak count should be at most log2(leaf_count) + 1");
+        assert!(
+            peaks2.len() <= n_leaves.ilog2() + 1,
+            "Peak count should be at most log2(leaf_count) + 1"
+        );
     }
 
     // ─── Backward Compatibility: MMR + Single-Root Merkle (#430) ────────
@@ -11502,7 +11496,10 @@ mod tests {
         // Verify the original Merkle proof still works
         let proof = build_proof_for_leaf0(&env, &leaf_b);
         let result = client.verify_impact(&project_id, &report_id, &leaf_a, &proof, &0u32);
-        assert!(result, "Original single-root Merkle verification must still work alongside MMR");
+        assert!(
+            result,
+            "Original single-root Merkle verification must still work alongside MMR"
+        );
         // Verify the MMR still works
         let siblings: Vec<BytesN<32>> = Vec::new(&env);
         let peak_indices = soroban_sdk::vec![&env, 0u32];
@@ -11513,7 +11510,10 @@ mod tests {
             &0u32,
             &0u32,
         );
-        assert!(mmr_result, "MMR verification must still work alongside single-root Merkle");
+        assert!(
+            mmr_result,
+            "MMR verification must still work alongside single-root Merkle"
+        );
     }
 
     // ─── Time-Locked Donation Challenge Protocol Tests (#457) ───────────
