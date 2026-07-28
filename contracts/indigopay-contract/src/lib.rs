@@ -861,6 +861,45 @@ fn impact_merkle_key(env: &Env, project_id: &String, report_id: &String) -> Byte
         .into()
 }
 
+#[cfg(feature = "impact")]
+/// Append a new leaf hash to an MMR peak set.
+///
+/// Merges peaks from right to left whenever adding a leaf fills a mountain of equal height.
+/// The number of merges equals the number of trailing 1-bits in `leaf_count`.
+fn mmr_append_peaks(env: &Env, peaks: &mut Vec<BytesN<32>>, leaf_count: u32, new_leaf: BytesN<32>) {
+    let mut current_hash = new_leaf;
+    let merges = leaf_count.trailing_ones();
+    for _ in 0..merges {
+        if let Some(prev_peak) = peaks.pop_back() {
+            let mut combined = [0u8; 64];
+            combined[..32].copy_from_slice(&prev_peak.to_array());
+            combined[32..].copy_from_slice(&current_hash.to_array());
+            current_hash = env
+                .crypto()
+                .sha256(&Bytes::from_slice(env, &combined))
+                .into();
+        }
+    }
+    peaks.push_back(current_hash);
+}
+
+#[cfg(feature = "impact")]
+/// Verify an MMR proof against the peak at `peak_idx` in `peaks`.
+fn mmr_verify_proof(
+    env: &Env,
+    leaf_hash: &BytesN<32>,
+    siblings: &Vec<BytesN<32>>,
+    peaks: &Vec<BytesN<32>>,
+    peak_idx: u32,
+    leaf_index: u32,
+) -> bool {
+    let target_peak = match peaks.get(peak_idx) {
+        Some(p) => p,
+        None => return false,
+    };
+    verify_merkle_proof(env, leaf_hash, siblings, &target_peak, leaf_index)
+}
+
 // ─── Impact Root Archiving Functions (#466) ───────────────────────────────
 
 #[cfg(feature = "impact")]
@@ -2159,7 +2198,7 @@ impl IndigoPayContract {
             .publish((symbol_short!("sub_reg"), wallet), (parent_id, project_id));
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
-    #[cfg(any(feature = "batch", feature = "testutils"))]
+    #[cfg(any(feature = "batch", feature = "testutils", test))]
     pub fn batch_register_projects(env: Env, admin: Address, projects: Vec<ProjectInit>) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -11267,20 +11306,12 @@ mod tests {
             &100u32,
         );
         let donor_a = Address::generate(&env);
-        let donor_b = Address::generate(&env);
         let leaf_a = ImpactLeaf {
             donor: donor_a.clone(),
             donation_index: 0u32,
             co2_kg: 100u32,
             trees: 5u32,
             hectares: 2u32,
-        };
-        let leaf_b = ImpactLeaf {
-            donor: donor_b.clone(),
-            donation_index: 1u32,
-            co2_kg: 200u32,
-            trees: 10u32,
-            hectares: 4u32,
         };
         // Append leaf_a as first MMR root.
         let hash_a = compute_impact_leaf_hash(&env, &leaf_a);
