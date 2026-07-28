@@ -89,6 +89,9 @@ When the limit is exceeded (HTTP 429) an additional header is sent:
 | GET    | `/api/stats`                              | Sliding window | 60 req / 60 s                |
 | GET    | `/api/impact/*`                           | Sliding window | 60 req / 60 s                |
 | GET    | `/api/map`                                | Sliding window | 60 req / 60 s                |
+| POST   | `/api/attestations`                      | Sliding window | 10 req / 60 s                |
+| GET    | `/api/attestations`                      | Sliding window | 60 req / 60 s                |
+| GET    | `/api/oracle/price`                      | Sliding window | 60 req / 60 s                |
 | GET    | `/api/analytics/*`                        | **Token bucket** | Capacity: 10, Refill: 0.5/s (~30 req / min sustained) |
 | POST   | `/api/notifications`                      | Sliding window | 30 req / 60 s                |
 | POST   | `/api/subscriptions`                      | Sliding window | 20 req / 60 s                |

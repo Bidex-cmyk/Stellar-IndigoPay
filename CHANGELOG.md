@@ -12,6 +12,7 @@
 
 ### Bug Fixes
 
+* **backend:** add explicit rate-limit tiers for attestation and oracle endpoints and document the updated policy
 * **backend:** require admin authentication for pending project review endpoint (closes #516)
 * **backend:** surface geocoding failures as project creation warnings (closes #519)
 
