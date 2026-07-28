@@ -11331,4 +11331,875 @@ mod tests {
         let proj = client.get_project(&pid);
         assert_eq!(proj.total_raised, (10 + 40 + 16) * STROOP);
     }
+
+    // ─── 100 % coverage gap tests ────────────────────────────────────────────
+
+    /// Exercises donation/storage.rs set_stealth_counter (line 15) by calling
+    /// the storage function directly via env.as_contract.
+    #[test]
+    fn test_stealth_counter_storage_write() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        // Call set_stealth_donation_contract to cover line 3033
+        let contract_addr = Address::generate(&env);
+        client.set_stealth_donation_contract(&admin, &contract_addr);
+        let stored = client.get_stealth_donation_contract();
+        assert_eq!(stored, contract_addr);
+    }
+
+    /// Exercises donation/storage.rs add_project_donation persist (line 40)
+    /// by calling the storage function directly.
+    #[test]
+    fn test_add_project_donation_storage_write() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        // Directly call storage functions to cover lines 15 and 40
+        env.as_contract(&cid, || {
+            crate::donation::storage::set_stealth_counter(&env, 42u64);
+            let count = crate::donation::storage::get_stealth_counter(&env);
+            assert_eq!(count, 42);
+
+            let project_addr = Address::generate(&env);
+            crate::donation::storage::add_project_donation(&env, &project_addr, 1u64);
+            let donations = crate::donation::storage::get_project_donations(&env, &project_addr);
+            assert_eq!(donations.len(), 1);
+            assert_eq!(donations.first().unwrap(), 1u64);
+        });
+    }
+
+    /// Covers anon_address (lines 1294–1299).
+    #[test]
+    fn test_anon_address_is_callable() {
+        let env = Env::default();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let addr = env.as_contract(&id, || anon_address(&env));
+        // Just verify it's the sentinel address.
+        let expected = Address::from_string(&String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
+        assert_eq!(addr, expected);
+    }
+
+    /// Covers voting_weight_from_badge all variants (lines 1608–1616),
+    /// including Forest (173) and EarthGuardian (200) which were untested.
+    #[test]
+    fn test_voting_weight_all_tiers() {
+        assert_eq!(voting_weight_from_badge(&BadgeTier::None), 0);
+        assert_eq!(voting_weight_from_badge(&BadgeTier::Seedling), 100);
+        assert_eq!(voting_weight_from_badge(&BadgeTier::Tree), 141);
+        assert_eq!(voting_weight_from_badge(&BadgeTier::Forest), 173);
+        assert_eq!(voting_weight_from_badge(&BadgeTier::EarthGuardian), 200);
+    }
+
+    /// Covers initialize edge cases:
+    ///   - empty admin set (line 1687)
+    ///   - invalid threshold = 0 (line 1690)
+    ///   - GlobalTotalRaised / GlobalCO2OffsetGrams init (lines 1700, 1703)
+    ///   - STORAGE_VERSION_KEY init under #[cfg(feature = "upgrade")] (line 1709)
+    #[test]
+    #[should_panic(expected = "Empty admin set")]
+    fn test_initialize_empty_admins_panics() {
+        let env = Env::default();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        client.initialize(&Vec::new(&env), &1u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid threshold")]
+    fn test_initialize_zero_threshold_panics() {
+        let env = Env::default();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid threshold")]
+    fn test_initialize_threshold_exceeds_admins_panics() {
+        let env = Env::default();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &2u32);
+    }
+
+    /// Covers the GlobalTotalRaised, GlobalCO2OffsetGrams, and STORAGE_VERSION_KEY
+    /// writes in initialize (lines 1700, 1703, 1709).
+    #[test]
+    fn test_initialize_global_and_version_stored() {
+        let env = Env::default();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let stats = client.get_global_stats();
+        assert_eq!(stats.total_raised, 0);
+        assert_eq!(stats.co2_offset_grams, 0);
+        assert_eq!(stats.project_count, 0);
+    }
+
+    /// Covers pause_contract (line 4944) and unpause_contract (line 4955).
+    #[test]
+    fn test_contract_pause_unpause_roundtrip() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        assert!(!client.is_contract_paused());
+        client.pause_contract(&signers1(&env, &admin));
+        assert!(client.is_contract_paused());
+        client.unpause_contract(&signers1(&env, &admin));
+        assert!(!client.is_contract_paused());
+    }
+
+    /// Covers set_native_token (line 6403) and get_native_token (lines 6407-6408).
+    #[test]
+    fn test_set_get_native_token() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        assert_eq!(client.get_native_token(), None);
+        let native = Address::generate(&env);
+        client.set_native_token(&admin, &native);
+        assert_eq!(client.get_native_token(), Some(native.clone()));
+    }
+
+    /// Covers remove_token when already inactive panics (line 4537).
+    #[test]
+    #[should_panic(expected = "Token is already inactive")]
+    fn test_remove_token_already_inactive_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.register_token(&admin, &token, &oracle, &symbol_short!("TST"));
+        client.remove_token(&admin, &token);
+        client.remove_token(&admin, &token);
+    }
+
+    /// Covers add_admin edge case: duplicate admin (line 4877).
+    #[test]
+    #[should_panic(expected = "Address is already an admin")]
+    fn test_add_admin_duplicate_panics() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        client.add_admin(&signers1(&env, &admin), &admin);
+    }
+
+    /// Covers remove_admin edge cases:
+    ///   - Address not an admin (line 4893)
+    ///   - Last admin removal (line 4895)
+    ///   - Threshold exceeds new set size (lines 4904-4910)
+    #[test]
+    #[should_panic(expected = "Address is not an admin")]
+    fn test_remove_admin_not_admin_panics() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        let outsider = Address::generate(&env);
+        client.remove_admin(&signers1(&env, &admin), &outsider);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot remove last admin")]
+    fn test_remove_admin_last_admin_panics() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        client.remove_admin(&signers1(&env, &admin), &admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "call update_threshold first")]
+    fn test_remove_admin_threshold_exceeds_set_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let mut admins = Vec::new(&env);
+        admins.push_back(admin.clone());
+        admins.push_back(admin2.clone());
+        client.initialize(&admins, &2u32);
+        client.remove_admin(&signers2(&env, &admin, &admin2), &admin);
+    }
+
+    /// Covers update_threshold edge case: zero (line 4924).
+    #[test]
+    #[should_panic(expected = "Threshold must be between 1 and the number of admins")]
+    fn test_update_threshold_zero_panics() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        client.update_threshold(&signers1(&env, &admin), &0);
+    }
+
+    /// Covers update_threshold happy path (line 4928).
+    #[test]
+    fn test_update_threshold_happy() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let mut admins = Vec::new(&env);
+        admins.push_back(admin.clone());
+        admins.push_back(admin2.clone());
+        client.initialize(&admins, &2u32);
+        client.update_threshold(&signers2(&env, &admin, &admin2), &1);
+        assert_eq!(client.get_admin_threshold(), 1);
+    }
+
+    /// Covers set_donation_rate_limit validations: max_donations == 0 (line 4698)
+    /// and window_ledgers == 0 (line 4701).
+    #[test]
+    #[should_panic(expected = "max_donations must be positive")]
+    fn test_set_donation_rate_limit_zero_max_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        client.set_donation_rate_limit(&admin, &0, &100);
+    }
+
+    #[test]
+    #[should_panic(expected = "window_ledgers must be positive")]
+    fn test_set_donation_rate_limit_zero_window_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        client.set_donation_rate_limit(&admin, &5, &0);
+    }
+
+    /// Covers accept_admin stale old_admin (line 4832) and stale new_admin (line 4835).
+    #[test]
+    #[should_panic(expected = "old_admin no longer in admin set; transfer stale")]
+    fn test_accept_admin_old_admin_removed_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let mut admins = Vec::new(&env);
+        admins.push_back(admin.clone());
+        admins.push_back(admin2.clone());
+        client.initialize(&admins, &1u32);
+
+        let new_admin = Address::generate(&env);
+        client.transfer_admin(&signers1(&env, &admin), &admin2, &new_admin);
+        // Remove the old_admin from the set before accept
+        client.remove_admin(&signers1(&env, &admin), &admin2);
+        client.accept_admin();
+    }
+
+    /// Covers create_campaign for inactive project (line 2100).
+    #[test]
+    #[should_panic(expected = "Project is not active")]
+    fn test_create_campaign_inactive_project_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.deactivate_project(&admin, &pid);
+        client.create_campaign(
+            &admin,
+            &pid,
+            &(100 * STROOP),
+            &(env.ledger().sequence() + 100),
+        );
+    }
+
+    /// Covers create_campaign goal <= total_raised (line 2109).
+    #[test]
+    #[should_panic(expected = "Campaign goal must exceed amount already raised")]
+    fn test_create_campaign_goal_not_exceeding_raised_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, STROOP);
+        client.donate(&token, &donor, &pid, &STROOP, &0u32);
+        client.create_campaign(&admin, &pid, &STROOP, &(env.ledger().sequence() + 100));
+    }
+
+    /// Covers extend_campaign edge cases (lines 2136, 2140, 2143, 2146).
+    #[test]
+    #[should_panic(expected = "Campaign is not active")]
+    fn test_extend_campaign_not_active_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.extend_campaign(&admin, &pid, &(env.ledger().sequence() + 200));
+    }
+
+    #[test]
+    fn test_extend_campaign_deadline_passed_panics() {
+        let (env, cid, client, admin, pid) = setup();
+        let start = env.ledger().sequence();
+        client.create_campaign(&admin, &pid, &(100 * STROOP), &(start + 10));
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(start + 20);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.extend_campaign(&admin, &pid, &(start + 30));
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "New deadline must be after current deadline")]
+    fn test_extend_campaign_new_deadline_not_after_current_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        let start = env.ledger().sequence();
+        client.create_campaign(&admin, &pid, &(100 * STROOP), &(start + 100));
+        client.extend_campaign(&admin, &pid, &(start + 50));
+    }
+
+    /// Covers close_campaign after GoalReached -> Closed (line 2179-2180).
+    #[test]
+    fn test_close_campaign_after_goal_reached_sets_closed() {
+        let (env, _cid, client, admin, pid) = setup();
+        let goal = 50 * STROOP;
+        client.create_campaign(&admin, &pid, &goal, &(env.ledger().sequence() + 1_000));
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, goal);
+        client.donate(&token, &donor, &pid, &goal, &0u32);
+        assert_eq!(
+            client.get_project(&pid).campaign_status,
+            CampaignStatus::GoalReached
+        );
+        client.close_campaign(&admin, &pid);
+        assert_eq!(
+            client.get_project(&pid).campaign_status,
+            CampaignStatus::Closed
+        );
+    }
+
+    /// Covers close_campaign non-Active non-GoalReached panic (line 2182).
+    #[test]
+    #[should_panic(expected = "Campaign cannot be closed")]
+    fn test_close_campaign_none_status_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.close_campaign(&admin, &pid);
+    }
+
+    /// Covers pause_project storage save (line 2038) and resume_project (line 2065).
+    #[test]
+    fn test_pause_resume_project_full_flow() {
+        let (env, _cid, client, admin, pid) = setup();
+        let p = client.get_project(&pid);
+        assert!(!p.paused);
+
+        client.pause_project(&admin, &pid);
+        assert!(client.get_project(&pid).paused);
+
+        client.resume_project(&admin, &pid);
+        assert!(!client.get_project(&pid).paused);
+    }
+
+    /// Covers register_project duplicate panic (line 1730) and project save (line 1752).
+    #[test]
+    #[should_panic(expected = "Project already registered")]
+    fn test_register_project_duplicate_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        let wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Duplicate"),
+            &wallet,
+            &100u32,
+        );
+    }
+
+    /// Covers register_sub_project duplicate panic (line 1798).
+    #[test]
+    #[should_panic(expected = "Project already registered")]
+    fn test_register_sub_project_duplicate_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let parent = client.get_project(&pid);
+        let sub_id = String::from_str(&env, "sub-dup");
+        // First registration succeeds
+        client.register_sub_project(
+            &parent.wallet,
+            &sub_id,
+            &String::from_str(&env, "Sub One"),
+            &100u32,
+            &pid,
+        );
+        // Second registration with same id panics
+        client.register_sub_project(
+            &parent.wallet,
+            &sub_id,
+            &String::from_str(&env, "Sub Two"),
+            &100u32,
+            &pid,
+        );
+    }
+
+    /// Covers deactivate_project save (line 1964) and sub-project cascade (line 1981).
+    #[test]
+    fn test_deactivate_project_cascades_to_sub_projects() {
+        let (env, _cid, client, admin, pid) = setup();
+        let sub_id = String::from_str(&env, "sub-001");
+        // Sub-project wallet must match parent's wallet
+        let parent = client.get_project(&pid);
+        client.register_sub_project(
+            &parent.wallet,
+            &sub_id,
+            &String::from_str(&env, "Sub"),
+            &100u32,
+            &pid,
+        );
+
+        assert!(client.get_project(&pid).active);
+        assert!(client.get_project(&sub_id).active);
+
+        client.deactivate_project(&admin, &pid);
+        assert!(!client.get_project(&pid).active);
+        assert!(!client.get_project(&sub_id).active);
+    }
+
+    /// Covers median_u32 even-length path (lines 923-925).
+    #[test]
+    fn test_median_even_length() {
+        let env = Env::default();
+        let mut vals = Vec::new(&env);
+        vals.push_back(10u32);
+        vals.push_back(20u32);
+        vals.push_back(30u32);
+        vals.push_back(40u32);
+        assert_eq!(median_u32(&vals), 25);
+    }
+
+    #[test]
+    fn test_median_odd_length() {
+        let env = Env::default();
+        let mut vals = Vec::new(&env);
+        vals.push_back(10u32);
+        vals.push_back(30u32);
+        vals.push_back(20u32);
+        assert_eq!(median_u32(&vals), 20);
+    }
+
+    #[test]
+    fn test_median_single_element() {
+        let env = Env::default();
+        let mut vals = Vec::new(&env);
+        vals.push_back(42u32);
+        assert_eq!(median_u32(&vals), 42);
+    }
+
+    /// Covers impact_deviates_50_percent edge cases:
+    ///   - claimed == 0, verified > 0 (line 893)
+    ///   - claimed > verified branch (line 898)
+    #[test]
+    fn test_impact_deviates_50_percent_claimed_zero() {
+        assert!(impact_deviates_50_percent(0, 100));
+        assert!(!impact_deviates_50_percent(0, 0));
+    }
+
+    #[test]
+    fn test_impact_deviates_50_percent_claimed_greater_than_verified() {
+        assert!(impact_deviates_50_percent(200, 100));
+        assert!(!impact_deviates_50_percent(100, 80));
+        assert!(impact_deviates_50_percent(100, 49));
+    }
+
+    #[test]
+    fn test_impact_deviates_50_percent_boundaries() {
+        // Equal values: no deviation
+        assert!(!impact_deviates_50_percent(100, 100));
+        // diff = 50, 50*2 = 100 >= 100 → true (deviates)
+        assert!(impact_deviates_50_percent(100, 150));
+        // diff = 100, 100*2 = 200 >= 100 → true (deviates)
+        assert!(impact_deviates_50_percent(100, 200));
+        // Exact 50%: claimed=100, verified=50, diff=50, 50*2 >= 100 → true
+        assert!(impact_deviates_50_percent(100, 50));
+        // Below 50%: claimed=100, verified=51, diff=49, 49*2 < 100 → false
+        assert!(!impact_deviates_50_percent(100, 51));
+    }
+
+    /// Covers donate_token_with_privacy native token path (lines 4609-4614).
+    #[test]
+    fn test_donate_token_with_privacy_native_token() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        let amount = 10 * STROOP;
+        StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        client.set_native_token(&admin, &token);
+        client.register_token(&admin, &token, &token, &symbol_short!("XLM"));
+        client.donate_token_with_privacy(&token, &donor, &pid, &amount, &0u32, &true);
+    }
+
+    /// Covers donate with privacy token symbol lookup (line 1575 in process_donation).
+    #[test]
+    fn test_donate_with_privacy_registered_token_symbol() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        let amount = 5 * STROOP;
+        StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        client.register_token(&admin, &token, &token, &symbol_short!("XTST"));
+        client.donate_with_privacy(&token, &donor, &pid, &amount, &0u32, &true);
+        let record = client.get_donation_record(&0u32);
+        assert_eq!(record.currency, symbol_short!("XTST"));
+        assert!(record.anonymous);
+    }
+
+    /// Covers process_donation_token anonymous path:
+    ///   - anon_address call (line 1376)
+    ///   - AnonymousDonationCount increment (lines 1482-1489)
+    ///   - Project save (line 1405)
+    ///   - DonationCount save (line 1465)
+    ///   - GlobalTotalRaised save (line 1505)
+    ///   - GlobalCO2OffsetGrams save (line 1515)
+    #[test]
+    fn test_donate_anonymous_increments_anon_count() {
+        let (env, cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 10 * STROOP);
+
+        let anon_count = env.as_contract(&cid, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::AnonymousDonationCount)
+                .unwrap_or(0)
+        });
+        assert_eq!(anon_count, 0);
+
+        client.donate_with_privacy(&token, &donor, &pid, &(5 * STROOP), &0u32, &true);
+
+        let anon_count = env.as_contract(&cid, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::AnonymousDonationCount)
+                .unwrap_or(0)
+        });
+        assert_eq!(anon_count, 1);
+
+        // Anonymous donation should not update donor stats
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, 0);
+    }
+
+    /// Covers process_donation_token non-anonymous path ensures donor stats are updated.
+    #[test]
+    fn test_donate_non_anonymous_stats_updated() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 10 * STROOP);
+        client.donate(&token, &donor, &pid, &(5 * STROOP), &0u32);
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, 5 * STROOP);
+    }
+
+    /// Covers require_campaign_accepts_donation CampaignStatus::Closed (line 1238).
+    #[test]
+    #[should_panic(expected = "Campaign is closed")]
+    fn test_donate_after_campaign_closed_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.create_campaign(
+            &admin,
+            &pid,
+            &(100 * STROOP),
+            &(env.ledger().sequence() + 1_000),
+        );
+        client.close_campaign(&admin, &pid);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, STROOP);
+        client.donate(&token, &donor, &pid, &STROOP, &0u32);
+    }
+
+    /// Covers process_donation_token inactive project panic (line 1360).
+    #[test]
+    #[should_panic(expected = "Project is not accepting donations")]
+    fn test_donate_to_inactive_project_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.deactivate_project(&admin, &pid);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, STROOP);
+        client.donate(&token, &donor, &pid, &STROOP, &0u32);
+    }
+
+    /// Covers donate_stealth_integrated end-to-end with stealth contract.
+    #[test]
+    fn test_stealth_integrated_donate_flow() {
+        let (env, _cid, client, admin, pid) = setup();
+
+        // Register a DonationContract so the integrated path has a target
+        let stealth_addr = env.register_contract(None, crate::donation::contract::DonationContract);
+        client.set_stealth_donation_contract(&admin, &stealth_addr);
+
+        let donor = Address::generate(&env);
+        let amount = 20 * STROOP;
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        let ephem_pubkey = BytesN::from_array(&env, &[1u8; 33]);
+        let msg_hash = BytesN::from_array(&env, &[2u8; 32]);
+        client.donate_stealth_integrated(&donor, &token, &ephem_pubkey, &pid, &amount, &msg_hash);
+        let p = client.get_project(&pid);
+        assert_eq!(p.total_raised, amount);
+    }
+
+    /// Covers process_donation_token paused project branch (line 1362).
+    #[test]
+    #[should_panic(expected = "Project is temporarily paused")]
+    fn test_donate_to_paused_project_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.pause_project(&admin, &pid);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, STROOP);
+        client.donate(&token, &donor, &pid, &STROOP, &0u32);
+    }
+
+    /// Covers donate_asset_with_privacy branch that uses TokenConfig symbol (line 2362 etc.)
+    #[test]
+    fn test_donate_asset_with_privacy_registered_token() {
+        let (env, _cid, client, admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        let amount = 10 * STROOP;
+        StellarAssetClient::new(&env, &token).mint(&donor, &amount);
+
+        client.register_token(&admin, &token, &token, &symbol_short!("XTST"));
+        client.donate_asset_with_privacy(
+            &donor,
+            &pid,
+            &amount,
+            &symbol_short!("XTST"),
+            &0u32,
+            &true,
+        );
+        let record = client.get_donation_record(&0u32);
+        assert_eq!(record.currency, symbol_short!("XTST"));
+    }
+
+    /// Covers donate_asset_with_privacy CO2 computation and storage saves.
+    #[test]
+    fn test_donate_asset_with_privacy_saves_global_stats() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let amount = 10 * STROOP;
+        client.donate_asset_with_privacy(
+            &donor,
+            &pid,
+            &amount,
+            &symbol_short!("yXLM"),
+            &0u32,
+            &false,
+        );
+        let global = client.get_global_stats();
+        assert!(global.total_raised >= amount);
+    }
+
+    /// Covers the add_impact_verifier / remove_impact_verifier / is_impact_verifier
+    /// functions and their storage writes (line 3291).
+    #[test]
+    fn test_impact_verifier_lifecycle() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let verifier = Address::generate(&env);
+        assert!(!client.is_impact_verifier(&verifier));
+        client.add_impact_verifier(&admin, &verifier);
+        assert!(client.is_impact_verifier(&verifier));
+        client.remove_impact_verifier(&admin, &verifier);
+        assert!(!client.is_impact_verifier(&verifier));
+    }
+
+    /// Covers set_impact_report_threshold validation (line 3312) and save (line 3316).
+    #[test]
+    fn test_set_impact_report_threshold_happy() {
+        let (env, _cid, client, admin, _pid) = setup();
+        client.set_impact_report_threshold(&admin, &5u32);
+        // No dedicated getter — just ensures no panic.
+        assert!(true);
+    }
+
+    /// Covers clear_impact_flag storage remove (line 3331).
+    #[test]
+    fn test_clear_impact_flag_happy() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.clear_impact_flag(&admin, &pid);
+        // Just ensure no panic
+        assert!(true);
+    }
+
+    /// Covers set_usdc_token address save (line 4648).
+    #[test]
+    fn test_set_usdc_token_persists() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let usdc = Address::generate(&env);
+        client.set_usdc_token(&admin, &usdc.clone());
+        // Getter is get_usdc_token — call it
+        let stored = env.as_contract(&_cid, || {
+            env.storage()
+                .instance()
+                .get::<_, Address>(&DataKey::USDCTokenAddress)
+        });
+        assert_eq!(stored, Some(usdc));
+    }
+
+    /// Covers set_oracle address save (line 4738).
+    #[test]
+    fn test_set_oracle_persists() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let oracle = env.register_contract(None, MockOracle);
+        client.set_oracle(&admin, &oracle);
+        let stored = env.as_contract(&_cid, || {
+            env.storage()
+                .instance()
+                .get::<_, Address>(&DataKey::OracleAddress)
+        });
+        assert_eq!(stored, Some(oracle));
+    }
+
+    /// Covers propose_upgrade / cancel_upgrade storage ops
+    /// (lines 4988, 4991).
+    #[test]
+    fn test_upgrade_full_flow() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        client.propose_upgrade(&signers1(&env, &admin), &wasm_hash);
+        let pending = client.get_pending_upgrade();
+        assert_eq!(pending.as_ref().map(|(h, _)| h), Some(&wasm_hash));
+        client.cancel_upgrade(&signers1(&env, &admin));
+        assert_eq!(client.get_pending_upgrade(), None);
+    }
+
+    /// Covers propose_upgrade double propose rejected.
+    #[test]
+    #[should_panic(expected = "Upgrade already pending; cancel first")]
+    fn test_upgrade_double_propose_rejected() {
+        let (env, _cid, client, admin) = setup_admin_only();
+        let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+        client.propose_upgrade(&signers1(&env, &admin), &wasm_hash);
+        client.propose_upgrade(&signers1(&env, &admin), &wasm_hash);
+    }
+
+    /// Covers register_sub_project CO2 per XLM exceeds max (line 1801).
+    #[test]
+    #[should_panic(expected = "CO2 per XLM exceeds maximum")]
+    fn test_register_sub_project_co2_exceeds_max() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let parent = client.get_project(&pid);
+        let sub_id = String::from_str(&env, "sub-co2");
+        client.register_sub_project(
+            &parent.wallet,
+            &sub_id,
+            &String::from_str(&env, "High CO2"),
+            &1_000_001u32,
+            &pid,
+        );
+    }
+
+    /// Covers deactivate_project storage save for the project being deactivated.
+    #[test]
+    fn test_deactivate_project_saves_state() {
+        let (env, _cid, client, admin, pid) = setup();
+        assert!(client.get_project(&pid).active);
+        client.deactivate_project(&admin, &pid);
+        assert!(!client.get_project(&pid).active);
+    }
+
+    /// Covers update_project_co2_rate storage operations (lines 1987-2017).
+    #[test]
+    fn test_update_project_co2_rate_happy() {
+        let (env, _cid, client, admin, pid) = setup();
+        let p = client.get_project(&pid);
+        let original = p.co2_per_xlm;
+        client.update_project_co2_rate(&admin, &pid, &(original + 50));
+        assert_eq!(client.get_project(&pid).co2_per_xlm, original + 50);
+    }
+
+    #[test]
+    #[should_panic(expected = "rate must be greater than zero")]
+    fn test_update_project_co2_rate_zero_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.update_project_co2_rate(&admin, &pid, &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "CO2 per XLM exceeds maximum")]
+    fn test_update_project_co2_rate_exceeds_max_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.update_project_co2_rate(&admin, &pid, &1_000_001u32);
+    }
+
+    /// Covers resume_project when project is not paused (line 2059).
+    #[test]
+    #[should_panic(expected = "Project is not paused")]
+    fn test_resume_project_not_paused_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.resume_project(&admin, &pid);
+    }
+
+    /// Covers pause_project when already paused (line 2032).
+    #[test]
+    #[should_panic(expected = "Project is already paused")]
+    fn test_pause_project_already_paused_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.pause_project(&admin, &pid);
+        client.pause_project(&admin, &pid);
+    }
+
+    /// Covers pause_project when deactivated (line 2029).
+    #[test]
+    #[should_panic(expected = "Cannot pause a deactivated project")]
+    fn test_pause_project_deactivated_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.deactivate_project(&admin, &pid);
+        client.pause_project(&admin, &pid);
+    }
+
+    /// Covers the project_verification revoke_verification flow (line 3686).
+    #[test]
+    #[should_panic(expected = "HostError")]
+    fn test_revoke_verification_unknown_project_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let unknown = String::from_str(&env, "nonexistent");
+        client.revoke_verification(&signers1(&env, &admin), &unknown);
+    }
+
+    /// Covers add_verifier storage save path (line 3549).
+    #[test]
+    fn test_add_verifier_persists() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let v = Address::generate(&env);
+        client.add_verifier(&signers1(&env, &admin), &v);
+        assert!(client.is_verifier(&v));
+        assert!(client.get_verifier_set().contains(&v));
+    }
+
+    /// Covers remove_verifier storage save (line 3577).
+    #[test]
+    fn test_remove_verifier_persists() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let v = Address::generate(&env);
+        client.add_verifier(&signers1(&env, &admin), &v);
+        client.remove_verifier(&signers1(&env, &admin), &v);
+        assert!(!client.is_verifier(&v));
+    }
+
+    /// Covers set_verification_threshold save (line 3597).
+    #[test]
+    fn test_set_verification_threshold_happy() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let v1 = Address::generate(&env);
+        let v2 = Address::generate(&env);
+        client.add_verifier(&signers1(&env, &admin), &v1);
+        client.add_verifier(&signers1(&env, &admin), &v2);
+        client.set_verification_threshold(&signers2(&env, &admin, &v1), &2u32);
+        assert_eq!(client.get_verification_threshold(), 2);
+    }
 }
