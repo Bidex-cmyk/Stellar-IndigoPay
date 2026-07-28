@@ -136,6 +136,16 @@ project-scoped anonymous donation totals.
 
 ---
 
+## 9a. `tok_rate`
+
+**Description**: Emitted when the admin updates the donation rate limit for one token.
+
+| Event Name | Topics                       | Data                                                   | When Emitted                           |
+| ---------- | ---------------------------- | ------------------------------------------------------ | -------------------------------------- |
+| `tok_rate` | `["tok_rate", token_address]` | `{ "max_donations": u32, "window_ledgers": u32 }`      | When admin calls `set_token_rate_limit` |
+
+---
+
 ## 10. `admin_add`
 
 **Description**: Emitted when a new admin address is added to the multi-sig set.
