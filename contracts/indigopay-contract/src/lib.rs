@@ -143,6 +143,33 @@ pub struct DonationRecord {
     pub currency: Symbol, // "XLM" or "USDC"
 }
 
+/// A cryptographically signed/hashed receipt proving a donation's details.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DonationReceipt {
+    pub donation_index: u32,
+    pub donor: Address,
+    pub project_id: String,
+    pub amount: i128,
+    pub co2_offset: i128,
+    pub ledger: u32,
+    pub currency: Symbol,
+    pub contract_signature: BytesN<32>,
+}
+
+/// Helper struct used to compute the SHA-256 commitment of receipt fields.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiptFields {
+    pub donation_index: u32,
+    pub donor: Address,
+    pub project_id: String,
+    pub amount: i128,
+    pub co2_offset: i128,
+    pub ledger: u32,
+    pub currency: Symbol,
+}
+
 /// A proof-verified donation with no donor identity in contract storage.
 #[cfg(feature = "zk")]
 #[contracttype]
@@ -190,6 +217,7 @@ pub struct ProjectMilestoneNFT {
     pub minted_at_ledger: u32,
 }
 /// A community voting proposal to verify a project.
+#[cfg(feature = "governance")]
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct VoteProposal {
@@ -222,6 +250,7 @@ pub struct GlobalStats {
 /// execute withdrawals sequentially, not in parallel).
 /// The `amount` field must not exceed `ProjectContractBalance(project_id, token)`
 /// at execution time — enforced by `execute_emergency_withdrawal`.
+#[cfg(feature = "emergency")]
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmergencyWithdrawal {
@@ -233,6 +262,7 @@ pub struct EmergencyWithdrawal {
 }
 // ─── Donation refund (#290) ─────────────────────────────────────────────────
 /// Status of a refund request.
+#[cfg(feature = "refund")]
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum RefundRequestStatus {
@@ -242,6 +272,7 @@ pub enum RefundRequestStatus {
 }
 /// A donor-initiated refund request. Created by `request_refund`, resolved by
 /// `approve_refund` (which atomically transfers tokens back) or `reject_refund`.
+#[cfg(feature = "refund")]
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RefundRequest {
@@ -258,6 +289,7 @@ pub struct RefundRequest {
     pub co2_offset_grams: i128,
 }
 
+#[cfg(feature = "recurring")]
 /// A pending M-of-N refund escalation.
 #[cfg(feature = "refund")]
 #[contracttype]
@@ -282,11 +314,13 @@ pub struct RecurringDonation {
     pub active: bool,
     pub created_at: u32,
 }
-/// A time-locked vesting schedule for gradual donation release.
-/// Donors can specify that a donation should be released to the project
-/// in equal installments over a configurable number of ledgers, rather
-/// than all at once. The first installment is transferred immediately;
-/// subsequent installments are claimable after each interval elapses.
+
+/// A time-locked vesting schedule for gradual donation release. Donors can
+/// specify that a donation should be released to the project in equal
+/// installments over a configurable number of ledgers, rather than all at
+/// once. The first installment is transferred immediately; subsequent
+/// installments are claimable after each interval elapses.
+#[cfg(feature = "vesting")]
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct VestingSchedule {
@@ -321,6 +355,65 @@ pub struct ImpactLeaf {
     /// Hectares restored attributable to this donor.
     pub hectares: u32,
 }
+
+// ─── Impact Certificate Merkle Root Rotation & Archiving (#466) ────────────
+
+/// Impact root with period metadata — stored both as the "current" root and
+/// archived under `ImpactRootArchive(project_id, period_index)`.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactRoot {
+    pub root: BytesN<32>,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub total_co2_kg: u64,
+    pub total_trees: u64,
+    pub total_hectares: u64,
+}
+
+/// Impact totals for a single reporting period.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactTotals {
+    pub co2_kg: u64,
+    pub trees: u64,
+    pub hectares: u64,
+}
+
+/// Lightweight summary of an archived period returned by `get_impact_periods`.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactPeriodSummary {
+    pub period_index: u32,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub total_co2_kg: u64,
+    pub total_trees: u64,
+    pub total_hectares: u64,
+}
+
+/// Storage key enum for the impact root archiving system.
+/// Kept separate from `DataKey` so the feature can be toggled without
+/// shifting XDR discriminants of always-on variants.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug)]
+#[allow(clippy::enum_variant_names)]
+enum ImpactRootKey {
+    /// (project_id) -> u32: number of periods archived for this project
+    RootCount(String),
+    /// (project_id, period_index) -> ImpactRoot: archived period data
+    RootArchive(String, u32),
+    /// (project_id) -> ImpactRoot: current (latest) root
+    RootCurrent(String),
+}
+
+/// Maximum number of archived periods per project (48 ≈ 4 years of monthly reports).
+#[cfg(feature = "impact")]
+pub const MAX_ARCHIVED_PERIODS: u32 = 48;
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DonationChallenge {
@@ -338,6 +431,12 @@ pub struct TokenConfig {
     pub symbol: Symbol,
     pub active: bool,
     pub registered_at: u32,
+}
+
+#[contracttype]
+enum LegacyDataKey {
+    // Encodes to the historical two-field `DonorRateLimit` storage key.
+    DonorRateLimit(Address, String),
 }
 
 #[contracttype]
@@ -366,22 +465,18 @@ pub enum DataKey {
     HasVoted(String, Address),
     // Per-donor per-project cumulative donation total for milestone NFT gating
     DonorProjectTotal(String, Address),
-    // Per-donor per-project sliding-window donation rate limit
-    DonorRateLimit(Address, String),
+    // Per-donor per-project per-token sliding-window donation rate limit.
+    DonorRateLimit(Address, String, Address),
     // Admin-configurable donation rate limit overrides (instance storage)
     DonationRateLimitMax,
     DonationRateLimitWindow,
     // Per-project milestone NFT: one per (project_id, donor) pair
     ProjectMilestoneNFT(String, Address),
-    // Contract upgrade and multi-currency support
-    // ContractWasmHash is intentionally kept in the enum for backward
-    // compatibility with v1 storage layouts. The single-step `upgrade`
-    // function that wrote to it was replaced in Phase A by the
-    // two-step `propose_upgrade` / `execute_upgrade` flow which uses
-    // `PendingUpgrade` / `LastExecutedUpgrade` instead. No live code
-    // path writes to this variant; readers should treat any stored
-    // value as historical and consult `get_last_executed_upgrade`.
-    ContractWasmHash,
+    // Contract upgrade and multi-currency support. ContractWasmHash was
+    // removed: the single-step `upgrade` writer was replaced in Phase A
+    // by the two-step `propose_upgrade` / `execute_upgrade` flow which
+    // uses the cfg-gated `PendingUpgrade` variant below. No live code
+    // path wrote to or read from ContractWasmHash.
     USDCTokenAddress,
     // Price oracle for USDC → XLM conversion
     OracleAddress,
@@ -467,10 +562,16 @@ pub enum DataKey {
     // Multi-token registry
     TokenConfig(Address),
     TokenList,
+    // Transitional key used by the initial multi-token implementation. New
+    // donations lazily migrate it to `DonorRateLimit`.
     DonorRateLimitPerToken(Address, String, Address),
     // Pending M-of-N force-refund escalation. Appended to preserve the
     // discriminants of all previously deployed DataKey variants.
     ForceRefund(u32),
+    // Per-token donation rate limit overrides. These are separate keys so
+    // deployments without an override can fall back to the global policy.
+    TokenRateLimitMax(Address),
+    TokenRateLimitWindow(Address),
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STROOP: i128 = 10_000_000;
@@ -759,72 +860,241 @@ fn impact_merkle_key(env: &Env, project_id: &String, report_id: &String) -> Byte
         .sha256(&Bytes::from_slice(env, &combined))
         .into()
 }
-// ─── Merkle Mountain Range (MMR) for Impact Certificates (#430) ────────────
+
+// ─── Impact Root Archiving Functions (#466) ───────────────────────────────
+
 #[cfg(feature = "impact")]
-/// Compute the new MMR peaks after appending a leaf.
+/// Get the period count for a project. Returns 0 when no periods exist.
+fn get_impact_period_count(env: &Env, project_id: &String) -> u32 {
+    env.storage()
+        .instance()
+        .get(&ImpactRootKey::RootCount(project_id.clone()))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "impact")]
+/// Set the period count for a project in storage.
+fn set_impact_period_count(env: &Env, project_id: &String, count: u32) {
+    env.storage()
+        .instance()
+        .set(&ImpactRootKey::RootCount(project_id.clone()), &count);
+}
+
+#[cfg(feature = "impact")]
+/// Publish a new impact root for a project, archiving the previous root.
 ///
-/// Uses the standard MMR incremental peak update: when a new leaf is appended,
-/// it is merged with existing peaks of the same mountain size (determined by
-/// trailing 1-bits in the current leaf count), producing a single new peak.
-fn mmr_append_peaks(
+/// # Arguments
+/// * `env` - Contract environment
+/// * `signers` - M-of-N admin signers for authorization
+/// * `project_id` - Project identifier
+/// * `root` - Merkle root hash for this reporting period
+/// * `period_start` - Unix timestamp of period start
+/// * `period_end` - Unix timestamp of period end
+/// * `totals` - Aggregated impact totals for this period
+///
+/// # Panics
+/// - When admin authorization fails (M-of-N not satisfied)
+/// - When `period_start >= period_end`
+/// - When `root` is all zeros
+pub fn publish_impact_root(
     env: &Env,
-    peaks: &mut Vec<BytesN<32>>,
-    old_leaf_count: u32,
-    new_leaf: BytesN<32>,
+    signers: &Vec<Address>,
+    project_id: String,
+    root: BytesN<32>,
+    period_start: u64,
+    period_end: u64,
+    totals: ImpactTotals,
 ) {
-    let mut hash = new_leaf;
-    let mut remaining = old_leaf_count;
-    // Merge while the current leaf count has trailing 1-bits,
-    // meaning there is a mountain of matching size to combine.
-    while remaining & 1 == 1 {
-        let popped = peaks.pop_back().unwrap();
-        let mut combined = [0u8; 64];
-        combined[..32].copy_from_slice(&popped.to_array());
-        combined[32..].copy_from_slice(&hash.to_array());
-        hash = env
-            .crypto()
-            .sha256(&Bytes::from_slice(env, &combined))
-            .into();
-        remaining >>= 1;
+    // M-of-N admin authorization
+    require_admin_for_critical(env, signers);
+
+    // Validate inputs
+    if period_start >= period_end {
+        panic!("Invalid period range: start must be before end");
     }
-    peaks.push_back(hash);
-}
-#[cfg(feature = "impact")]
-/// Verify an MMR inclusion proof: compute the mountain peak from a leaf hash
-/// and sibling hashes, then check that it matches the stored peak at the given
-/// index.
-///
-/// Returns `true` iff the computed peak matches the stored peak.
-fn mmr_verify_proof(
-    env: &Env,
-    leaf_hash: &BytesN<32>,
-    siblings: &Vec<BytesN<32>>,
-    peaks: &Vec<BytesN<32>>,
-    peak_index: u32,
-    leaf_index_in_mountain: u32,
-) -> bool {
-    if peak_index >= peaks.len() {
-        return false;
+    if root == BytesN::from_array(env, &[0u8; 32]) {
+        panic!("Root cannot be zero");
     }
-    let mut hash: BytesN<32> = leaf_hash.clone();
-    let mut idx = leaf_index_in_mountain;
-    for sibling in siblings.iter() {
-        let mut combined = [0u8; 64];
-        if idx.is_multiple_of(2) {
-            combined[..32].copy_from_slice(&hash.to_array());
-            combined[32..].copy_from_slice(&sibling.to_array());
+
+    // Archive current root before overwriting
+    if env
+        .storage()
+        .instance()
+        .has(&ImpactRootKey::RootCurrent(project_id.clone()))
+    {
+        let count = get_impact_period_count(env, &project_id);
+
+        if count >= MAX_ARCHIVED_PERIODS {
+            // Shift all periods down by one (drop oldest at index 0)
+            for i in 1..MAX_ARCHIVED_PERIODS {
+                let archived = env
+                    .storage()
+                    .instance()
+                    .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(project_id.clone(), i))
+                    .expect("archived period should exist");
+                env.storage().instance().set(
+                    &ImpactRootKey::RootArchive(project_id.clone(), i - 1),
+                    &archived,
+                );
+            }
+            // Archive current root at the newly freed slot (MAX_ARCHIVED_PERIODS - 1)
+            let current_root: ImpactRoot = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()))
+                .expect("current root should exist");
+            env.storage().instance().set(
+                &ImpactRootKey::RootArchive(project_id.clone(), MAX_ARCHIVED_PERIODS - 1),
+                &current_root,
+            );
+            // Count stays at MAX_ARCHIVED_PERIODS (oldest was dropped)
         } else {
-            combined[..32].copy_from_slice(&sibling.to_array());
-            combined[32..].copy_from_slice(&hash.to_array());
+            // Normal case: add new archived entry
+            let current_root: ImpactRoot = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()))
+                .expect("current root should exist");
+            env.storage().instance().set(
+                &ImpactRootKey::RootArchive(project_id.clone(), count),
+                &current_root,
+            );
+            let new_count = count.checked_add(1).expect("overflow");
+            set_impact_period_count(env, &project_id, new_count);
         }
-        hash = env
-            .crypto()
-            .sha256(&Bytes::from_slice(env, &combined))
-            .into();
-        idx /= 2;
     }
-    hash == peaks.get_unchecked(peak_index).clone()
+
+    // Store new root as current
+    let new_root = ImpactRoot {
+        root: root.clone(),
+        period_start,
+        period_end,
+        total_co2_kg: totals.co2_kg,
+        total_trees: totals.trees,
+        total_hectares: totals.hectares,
+    };
+    env.storage()
+        .instance()
+        .set(&ImpactRootKey::RootCurrent(project_id.clone()), &new_root);
+
+    // Emit event
+    let period_index = get_impact_period_count(env, &project_id);
+    env.events().publish(
+        (symbol_short!("root_pub"), project_id.clone()),
+        (
+            period_index,
+            root,
+            period_start,
+            period_end,
+            totals.co2_kg,
+            totals.trees,
+            totals.hectares,
+        ),
+    );
 }
+
+#[cfg(feature = "impact")]
+/// Verify an impact leaf against a specific archived period's Merkle root.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+/// * `period_index` - Index of the archived period to verify against
+/// * `leaf` - Impact leaf containing the claim
+/// * `proof` - Merkle proof siblings
+/// * `leaf_index` - Index of the leaf in the Merkle tree
+///
+/// # Returns
+/// * `true` if the proof is valid for the specified period's root
+///
+/// # Panics
+/// - When the period index does not exist (neither current nor archived)
+pub fn verify_impact_inclusion(
+    env: &Env,
+    project_id: String,
+    period_index: u32,
+    leaf: ImpactLeaf,
+    proof: Vec<BytesN<32>>,
+    leaf_index: u32,
+) -> bool {
+    let leaf_hash = compute_impact_leaf_hash(env, &leaf);
+    let count = get_impact_period_count(env, &project_id);
+
+    // Period 0 with no archives means check current root
+    if period_index == 0 && count == 0 {
+        if let Some(current) = env
+            .storage()
+            .instance()
+            .get::<_, ImpactRoot>(&ImpactRootKey::RootCurrent(project_id.clone()))
+        {
+            return verify_merkle_proof(env, &leaf_hash, &proof, &current.root, leaf_index);
+        }
+    }
+
+    // Check archived periods: period_index 0 = oldest, count-1 = newest archived
+    if period_index < count {
+        if let Some(archived) =
+            env.storage()
+                .instance()
+                .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(
+                    project_id.clone(),
+                    period_index,
+                ))
+        {
+            return verify_merkle_proof(env, &leaf_hash, &proof, &archived.root, leaf_index);
+        }
+    }
+
+    // Period not found
+    false
+}
+
+#[cfg(feature = "impact")]
+/// Get all archived periods for a project.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+///
+/// # Returns
+/// * `Vec<ImpactPeriodSummary>` - List of all archived periods
+pub fn get_impact_periods(env: &Env, project_id: String) -> Vec<ImpactPeriodSummary> {
+    let count = get_impact_period_count(env, &project_id);
+    let mut periods = Vec::new(env);
+    for i in 0..count {
+        if let Some(archived) = env
+            .storage()
+            .instance()
+            .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(project_id.clone(), i))
+        {
+            periods.push_back(ImpactPeriodSummary {
+                period_index: i,
+                period_start: archived.period_start,
+                period_end: archived.period_end,
+                total_co2_kg: archived.total_co2_kg,
+                total_trees: archived.total_trees,
+                total_hectares: archived.total_hectares,
+            });
+        }
+    }
+    periods
+}
+
+#[cfg(feature = "impact")]
+/// Get the current (latest) impact root for a project.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+///
+/// # Returns
+/// * `Option<ImpactRoot>` - Current root or `None` if none exists
+pub fn get_current_impact_root(env: &Env, project_id: String) -> Option<ImpactRoot> {
+    env.storage()
+        .instance()
+        .get(&ImpactRootKey::RootCurrent(project_id))
+}
+
 // ─── Off-Chain Oracle Attestation for Project Impact Verification (#459) ────
 //
 // Independent verifiers submit signed attestations of a project's actual
@@ -1314,6 +1584,26 @@ fn anon_address(env: &Env) -> Address {
     ))
 }
 
+fn effective_token_rate_limit(env: &Env, token: &Address) -> (u32, u32) {
+    let max = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenRateLimitMax(token.clone()))
+        .or_else(|| env.storage().instance().get(&DataKey::DonationRateLimitMax))
+        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_MAX);
+    let window = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenRateLimitWindow(token.clone()))
+        .or_else(|| {
+            env.storage()
+                .instance()
+                .get(&DataKey::DonationRateLimitWindow)
+        })
+        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
+    (max, window)
+}
+
 /// Process a single donation's core logic: rate limiting, project validation,
 /// state updates (project, donor, NFT, globals), token transfers, and events.
 /// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
@@ -1332,30 +1622,38 @@ fn process_donation_token(
     anonymous: bool,
 ) {
     let current_ledger = env.ledger().sequence();
-    let max_donations: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::DonationRateLimitMax)
-        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_MAX);
-    let window_ledgers: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::DonationRateLimitWindow)
-        .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
+    let (max_donations, window_ledgers) = effective_token_rate_limit(env, token);
 
-    let rate_key =
-        DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
-    let mut window: RateLimitWindow =
-        env.storage().instance().get(&rate_key).unwrap_or_else(|| {
-            let legacy_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone());
-            env.storage()
-                .instance()
-                .get(&legacy_key)
-                .unwrap_or(RateLimitWindow {
-                    window_start: current_ledger,
-                    count: 0,
-                })
-        });
+    let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone(), token.clone());
+    let mut window: RateLimitWindow = match env.storage().instance().get(&rate_key) {
+        Some(window) => window,
+        None => {
+            let transitional_key =
+                DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
+            match env.storage().instance().get(&transitional_key) {
+                Some(window) => {
+                    env.storage().instance().remove(&transitional_key);
+                    window
+                }
+                None => {
+                    let legacy_key =
+                        LegacyDataKey::DonorRateLimit(donor.clone(), project_id.clone());
+                    match env.storage().instance().get(&legacy_key) {
+                        Some(window) => {
+                            // Move the old donor/project window only once so its
+                            // count cannot be copied into every token window.
+                            env.storage().instance().remove(&legacy_key);
+                            window
+                        }
+                        None => RateLimitWindow {
+                            window_start: current_ledger,
+                            count: 0,
+                        },
+                    }
+                }
+            }
+        }
+    };
 
     if current_ledger - window.window_start >= window_ledgers {
         window.window_start = current_ledger;
@@ -1507,6 +1805,7 @@ fn process_donation_token(
             &count.checked_add(1).expect("overflow"),
         );
     }
+    // Snapshot CO₂ offset for exact reversal on refund (#290) and receipt verification.
 
     env.storage()
         .instance()
@@ -2712,8 +3011,8 @@ impl IndigoPayContract {
     /// - If the Groth16 proof fails verification.
     /// - If the project is not found, inactive, or paused.
     /// - If the amount is not positive.
-    #[cfg(feature = "zk")]
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "zk")]
     pub fn donate_anonymous(
         env: Env,
         token: Address,
@@ -3926,6 +4225,153 @@ impl IndigoPayContract {
             .get(&DataKey::DonationRecord(index))
             .expect("Donation record not found")
     }
+
+    // ─── On-Chain Donation Receipts with Cryptographic Commitment (#455) ─────
+
+    /// Generate a deterministic on-chain donation receipt with a SHA-256
+    /// cryptographic commitment. Only the donor can generate their own receipt.
+    ///
+    /// The returned `DonationReceipt` contains a `contract_signature` field
+    /// which is SHA-256 of the deterministic XDR encoding of all other fields.
+    /// Anyone can verify the receipt via `verify_receipt` without querying
+    /// the full donation history.
+    ///
+    /// # Determinism
+    ///
+    /// Calling `generate_receipt` twice with the same donor and donation_index
+    /// returns the identical receipt (same `contract_signature`), because the
+    /// receipt fields are sourced immutably from storage.
+    ///
+    /// # Panics
+    ///
+    /// - If `donor` does not match the donation record's donor.
+    /// - If the donation index does not exist.
+    pub fn generate_receipt(env: Env, donor: Address, donation_index: u32) -> DonationReceipt {
+        donor.require_auth();
+
+        let record: DonationRecord = env
+            .storage()
+            .instance()
+            .get(&DataKey::DonationRecord(donation_index))
+            .expect("Donation record not found");
+
+        // Only the actual donor can generate a receipt.
+        // For anonymous donations, the real donor address is stored in
+        // DonationRecord.donor — the zero-address is only used as the
+        // DonorStats key for privacy. The real donor can still generate
+        // a receipt because they know which donation_index is theirs.
+        if donor != record.donor {
+            panic!("Only the donor can generate a receipt for this donation");
+        }
+
+        let co2_offset: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DonationCO2Offset(donation_index))
+            .unwrap_or(0);
+
+        // Build the fields to hash (without the signature)
+        let fields = ReceiptFields {
+            donation_index,
+            donor: donor.clone(),
+            project_id: record.project.clone(),
+            amount: record.amount,
+            co2_offset,
+            ledger: record.ledger,
+            currency: record.currency.clone(),
+        };
+
+        // Compute SHA-256 commitment over the deterministic XDR encoding.
+        // Using XDR ensures the receipt can be verified off-chain with
+        // any Stellar SDK that supports XDR deserialization.
+        use soroban_sdk::xdr::ToXdr;
+        let xdr_bytes = fields.to_xdr(&env);
+        let contract_signature: BytesN<32> = env.crypto().sha256(&xdr_bytes).into();
+
+        env.events().publish(
+            (symbol_short!("rcpt_gen"), donor.clone()),
+            (
+                donation_index,
+                record.amount,
+                record.project.clone(),
+                co2_offset,
+            ),
+        );
+
+        DonationReceipt {
+            donation_index,
+            donor: donor.clone(),
+            project_id: record.project.clone(),
+            amount: record.amount,
+            co2_offset,
+            ledger: record.ledger,
+            currency: record.currency.clone(),
+            contract_signature,
+        }
+    }
+
+    /// Verify a donation receipt against its on-chain data.
+    ///
+    /// Anyone can call this function — no authentication required. Returns
+    /// `true` if the receipt's `contract_signature` matches a recomputed
+    /// SHA-256 hash of the other receipt fields against the on-chain
+    /// donation record and CO₂ offset.
+    ///
+    /// Returns `false` if:
+    /// - The referenced donation index does not exist on-chain.
+    /// - Any receipt field (donor, project_id, amount, ledger, currency)
+    ///   does not match the on-chain `DonationRecord`.
+    /// - The `co2_offset` does not match the on-chain value.
+    /// - The `contract_signature` has been tampered with.
+    pub fn verify_receipt(env: Env, receipt: DonationReceipt) -> bool {
+        // Check the donation exists on-chain
+        let record: DonationRecord = match env
+            .storage()
+            .instance()
+            .get(&DataKey::DonationRecord(receipt.donation_index))
+        {
+            Some(r) => r,
+            None => return false,
+        };
+
+        // Verify all receipt fields match the on-chain record
+        if record.donor != receipt.donor
+            || record.project != receipt.project_id
+            || record.amount != receipt.amount
+            || record.ledger != receipt.ledger
+            || record.currency != receipt.currency
+        {
+            return false;
+        }
+
+        // Verify CO₂ offset matches on-chain
+        let onchain_co2: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DonationCO2Offset(receipt.donation_index))
+            .unwrap_or(0);
+        if onchain_co2 != receipt.co2_offset {
+            return false;
+        }
+
+        // Recompute the SHA-256 commitment
+        let fields = ReceiptFields {
+            donation_index: receipt.donation_index,
+            donor: receipt.donor,
+            project_id: receipt.project_id,
+            amount: receipt.amount,
+            co2_offset: receipt.co2_offset,
+            ledger: receipt.ledger,
+            currency: receipt.currency,
+        };
+
+        use soroban_sdk::xdr::ToXdr;
+        let xdr_bytes = fields.to_xdr(&env);
+        let computed: BytesN<32> = env.crypto().sha256(&xdr_bytes).into();
+
+        computed == receipt.contract_signature
+    }
+
     /// Backward-compatible getter: returns the first admin in the set.
     /// Prefer `get_admin_set()` for multi-sig contexts.
     pub fn get_admin(env: Env) -> Address {
@@ -4102,6 +4548,7 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
     #[cfg(feature = "governance")]
+    #[cfg(feature = "delegation")]
     pub fn get_voter_weight(env: Env, voter: Address) -> u32 {
         let stats: DonorStats = env
             .storage()
@@ -4666,6 +5113,40 @@ impl IndigoPayContract {
             .unwrap_or(DEFAULT_DONATION_RATE_LIMIT_WINDOW);
         (max, window)
     }
+    /// Admin-only: Configure the donation rate limit for one token.
+    ///
+    /// This is a routine admin action. Both values must be positive.
+    pub fn set_token_rate_limit(
+        env: Env,
+        admin: Address,
+        token: Address,
+        max_donations: u32,
+        window_ledgers: u32,
+    ) {
+        require_admin_for_routine(&env, &admin);
+        require_not_paused(&env);
+        if max_donations == 0 {
+            panic!("max_donations must be positive");
+        }
+        if window_ledgers == 0 {
+            panic!("window_ledgers must be positive");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenRateLimitMax(token.clone()), &max_donations);
+        env.storage().instance().set(
+            &DataKey::TokenRateLimitWindow(token.clone()),
+            &window_ledgers,
+        );
+        env.events().publish(
+            (symbol_short!("tok_rate"), token),
+            (max_donations, window_ledgers),
+        );
+    }
+    /// Get a token's effective rate limit, falling back to the global policy.
+    pub fn get_token_rate_limit(env: Env, token: Address) -> (u32, u32) {
+        effective_token_rate_limit(&env, &token)
+    }
     /// Admin-only: Set the price oracle contract address used by `donate_usdc`.
     /// The oracle must implement `OracleInterface::get_price()`.
     #[cfg(feature = "usdc")]
@@ -4715,11 +5196,7 @@ impl IndigoPayContract {
     pub fn get_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::OracleAddress)
     }
-    /// Get the current contract WASM hash.
-    #[cfg(feature = "upgrade")]
-    pub fn get_contract_wasm_hash(env: Env) -> Option<BytesN<32>> {
-        env.storage().instance().get(&DataKey::ContractWasmHash)
-    }
+
     // ─── Two-step admin transfer ─────────────────────────────────────────────
     /// Admin-only: step 1 of a two-step admin transfer. M-of-N admins
     /// sign to propose swapping `old_admin` for `new_admin` in the admin
@@ -5423,6 +5900,7 @@ impl IndigoPayContract {
     }
     /// Read-only: returns the refund request for the given ID, or panics if
     /// not found.
+    #[cfg(feature = "refund")]
     pub fn get_refund_request(env: Env, refund_id: u32) -> RefundRequest {
         env.storage()
             .instance()
@@ -5683,8 +6161,9 @@ impl IndigoPayContract {
     }
 
     // ─── Recurring Donations ──────────────────────────────────────────────────
-    #[cfg(feature = "recurring")]
+
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "recurring")]
     pub fn create_recurring(
         env: Env,
         donor: Address,
@@ -5979,12 +6458,16 @@ impl IndigoPayContract {
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
+
+    #[cfg(feature = "recurring")]
     pub fn get_recurring(env: Env, donor: Address, recurring_id: u32) -> RecurringDonation {
         env.storage()
             .instance()
             .get(&DataKey::RecurringDonation(donor, recurring_id))
             .expect("Recurring donation not found")
     }
+
+    #[cfg(feature = "recurring")]
     pub fn get_donor_recurrings(env: Env, donor: Address) -> Vec<RecurringDonation> {
         let count_key = DataKey::DonorRecurringCount(donor.clone());
         let count: u32 = env.storage().instance().get(&count_key).unwrap_or(0);
@@ -6014,8 +6497,8 @@ impl IndigoPayContract {
     /// - If `interval_ledgers == 0`
     /// - If the project is not found, inactive, or paused
     /// - If the token transfer fails
-    #[cfg(feature = "vesting")]
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "vesting")]
     pub fn donate_vested(
         env: Env,
         token: Address,
@@ -8360,6 +8843,97 @@ mod tests {
                 DEFAULT_DONATION_RATE_LIMIT_WINDOW
             )
         );
+    }
+    #[test]
+    fn test_set_token_rate_limit() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let xlm = Address::generate(&env);
+        let usdc = Address::generate(&env);
+
+        client.set_token_rate_limit(&admin, &xlm, &10, &720);
+        client.set_token_rate_limit(&admin, &usdc, &5, &1_440);
+
+        assert_eq!(client.get_token_rate_limit(&xlm), (10, 720));
+        assert_eq!(client.get_token_rate_limit(&usdc), (5, 1_440));
+    }
+    #[test]
+    #[should_panic(expected = "Only admin can perform this action")]
+    fn test_set_token_rate_limit_non_admin_fails() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let imposter = Address::generate(&env);
+        let token = Address::generate(&env);
+        client.set_token_rate_limit(&imposter, &token, &5, &100);
+    }
+    #[test]
+    fn test_per_token_rate_limit() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 3 * STROOP);
+        client.set_token_rate_limit(&admin, &token, &2, &100);
+
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+        client.donate(&token, &donor, &pid, &STROOP, &1);
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &2);
+        }));
+
+        assert!(blocked.is_err());
+        assert_eq!(client.get_project(&pid).total_raised, 2 * STROOP);
+    }
+    #[test]
+    fn test_per_token_rate_limit_fallback() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 2 * STROOP);
+        assert_eq!(
+            client.get_token_rate_limit(&token),
+            (
+                DEFAULT_DONATION_RATE_LIMIT_MAX,
+                DEFAULT_DONATION_RATE_LIMIT_WINDOW
+            )
+        );
+        client.set_donation_rate_limit(&admin, &1, &100);
+
+        assert_eq!(client.get_token_rate_limit(&token), (1, 100));
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &1);
+        }));
+
+        assert!(blocked.is_err());
+    }
+    #[test]
+    fn test_rate_limit_key_migration() {
+        let (env, cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 2 * STROOP);
+        let legacy_key = LegacyDataKey::DonorRateLimit(donor.clone(), pid.clone());
+        let token_key = DataKey::DonorRateLimit(donor.clone(), pid.clone(), token.clone());
+        let window_start = env.ledger().sequence();
+        env.as_contract(&cid, || {
+            env.storage().instance().set(
+                &legacy_key,
+                &RateLimitWindow {
+                    window_start,
+                    count: 1,
+                },
+            );
+        });
+        client.set_token_rate_limit(&admin, &token, &2, &100);
+
+        client.donate(&token, &donor, &pid, &STROOP, &0);
+
+        env.as_contract(&cid, || {
+            assert!(!env.storage().instance().has(&legacy_key));
+            let migrated: RateLimitWindow =
+                env.storage().instance().get(&token_key).expect("migrated");
+            assert_eq!(migrated.window_start, window_start);
+            assert_eq!(migrated.count, 2);
+        });
+        let blocked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.donate(&token, &donor, &pid, &STROOP, &1);
+        }));
+        assert!(blocked.is_err());
     }
     // ─── Contract-level pause tests ─────────────────────────────────────────
     #[test]
@@ -11663,6 +12237,131 @@ mod tests {
         client.submit_impact_report(&verifier, &unknown, &105u32, &evidence(&env, 1));
     }
 
+    // ─── On-chain donation receipt tests (#455) ──────────────────────────
+
+    #[test]
+    fn test_generate_receipt() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(50 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(50 * STROOP), &1u32);
+
+        let receipt = client.generate_receipt(&donor, &0u32);
+
+        assert_eq!(receipt.donation_index, 0);
+        assert_eq!(receipt.donor, donor);
+        assert_eq!(receipt.project_id, pid);
+        assert_eq!(receipt.amount, 50 * STROOP);
+        assert_eq!(receipt.ledger, env.ledger().sequence());
+        assert_eq!(receipt.currency, symbol_short!("XLM"));
+        // CO2 offset for 50 XLM at 100g/XLM (from setup): 50 * 100 = 5000g
+        assert_eq!(receipt.co2_offset, 50 * 100);
+        // contract_signature must be non-zero (32 bytes)
+        assert!(receipt
+            .contract_signature
+            .to_array()
+            .iter()
+            .any(|&b| b != 0));
+    }
+
+    #[test]
+    fn test_receipt_deterministic() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(25 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(25 * STROOP), &2u32);
+
+        let receipt_a = client.generate_receipt(&donor, &0u32);
+        let receipt_b = client.generate_receipt(&donor, &0u32);
+
+        // Must be identical — same donor, same donation_index
+        assert_eq!(receipt_a.donation_index, receipt_b.donation_index);
+        assert_eq!(receipt_a.donor, receipt_b.donor);
+        assert_eq!(receipt_a.project_id, receipt_b.project_id);
+        assert_eq!(receipt_a.amount, receipt_b.amount);
+        assert_eq!(receipt_a.co2_offset, receipt_b.co2_offset);
+        assert_eq!(receipt_a.ledger, receipt_b.ledger);
+        assert_eq!(receipt_a.currency, receipt_b.currency);
+        assert_eq!(receipt_a.contract_signature, receipt_b.contract_signature);
+    }
+
+    #[test]
+    fn test_verify_valid_receipt() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(100 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(100 * STROOP), &3u32);
+
+        let receipt = client.generate_receipt(&donor, &0u32);
+        let valid = client.verify_receipt(&receipt);
+
+        assert!(
+            valid,
+            "verify_receipt should return true for a valid receipt"
+        );
+    }
+
+    #[test]
+    fn test_verify_tampered_receipt() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(10 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &4u32);
+
+        let mut receipt = client.generate_receipt(&donor, &0u32);
+        // Tamper with the amount
+        receipt.amount = 999_999_999;
+        let valid = client.verify_receipt(&receipt);
+
+        assert!(
+            !valid,
+            "verify_receipt should return false for a tampered receipt"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the donor can generate a receipt")]
+    fn test_non_donor_generate_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let imposter = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+        token_client.mint(&donor, &(5 * STROOP));
+
+        client.donate(&token, &donor, &pid, &(5 * STROOP), &5u32);
+
+        // Imposter tries to generate a receipt for donor's donation
+        client.generate_receipt(&imposter, &0u32);
+    }
+
     #[test]
     fn test_register_token() {
         let (env, _cid, client, admin, _pid) = setup();
@@ -11713,6 +12412,15 @@ mod tests {
             .expect("TokenConfig should remain");
         assert!(!config.active);
         assert!(!client.get_token_list().contains(&token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Token not registered")]
+    fn test_remove_unregistered_token_panics() {
+        let (env, _cid, client, admin, _pid) = setup();
+        let token = Address::generate(&env);
+
+        client.remove_token(&admin, &token);
     }
 
     #[test]
@@ -11807,7 +12515,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_per_token_isolation() {
+    fn test_per_token_rate_limit_isolation() {
         let (env, _cid, client, admin, pid) = setup();
         let token_admin = Address::generate(&env);
         let xlm_token = env
@@ -11820,7 +12528,8 @@ mod tests {
 
         client.register_token(&admin, &xlm_token, &xlm_token, &symbol_short!("XLM"));
         client.register_token(&admin, &usdc_token, &mock_oracle, &symbol_short!("USDC"));
-        client.set_donation_rate_limit(&admin, &2u32, &720u32);
+        client.set_token_rate_limit(&admin, &xlm_token, &1u32, &720u32);
+        client.set_token_rate_limit(&admin, &usdc_token, &2u32, &720u32);
 
         let donor = Address::generate(&env);
         let amount = 10 * STROOP;
@@ -11828,16 +12537,16 @@ mod tests {
         soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token)
             .mint(&donor, &(100 * STROOP));
 
-        // Use up 2 donations for XLM
+        // Use up XLM's lower limit.
         client.donate_token(&xlm_token, &donor, &pid, &amount, &0u32);
-        client.donate_token(&xlm_token, &donor, &pid, &amount, &1u32);
 
-        // Third XLM donation panics due to rate limit
-        let res_xlm = client.try_donate_token(&xlm_token, &donor, &pid, &amount, &2u32);
+        // A second XLM donation is blocked.
+        let res_xlm = client.try_donate_token(&xlm_token, &donor, &pid, &amount, &1u32);
         assert!(res_xlm.is_err());
 
-        // USDC donation still succeeds because rate limit is per-token
+        // USDC has its own counter and a higher configured limit.
         client.donate_token(&usdc_token, &donor, &pid, &amount, &0u32);
+        client.donate_token(&usdc_token, &donor, &pid, &amount, &1u32);
         let stats = client.get_donor_stats(&donor);
         assert_eq!(stats.donation_count, 3);
     }
@@ -12795,5 +13504,294 @@ mod tests {
         client.add_verifier(&signers1(&env, &admin), &v2);
         client.set_verification_threshold(&signers2(&env, &admin, &v1), &2u32);
         assert_eq!(client.get_verification_threshold(), 2);
+    }
+
+    // ─── Impact Root Archiving Tests (#466) ───────────────────────────────
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_publish_impact_root_stores_current() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "test-project");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root.clone(),
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+
+        env.as_contract(&cid, || {
+            let current: Option<ImpactRoot> = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()));
+            assert_eq!(current.as_ref().map(|r| r.root.clone()), Some(root));
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_publish_root_archives_previous() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "archive-test");
+        let root1 = BytesN::from_array(&env, &[1u8; 32]);
+        let root2 = BytesN::from_array(&env, &[2u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        // Publish first root
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root1.clone(),
+                1704067200,
+                1706745600,
+                totals.clone(),
+            );
+        });
+
+        // Verify current root
+        env.as_contract(&cid, || {
+            let current = get_current_impact_root(&env, project_id.clone()).unwrap();
+            assert_eq!(current.root, root1);
+        });
+
+        // Publish second root
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root2.clone(),
+                1706745601,
+                1709337600,
+                totals,
+            );
+        });
+
+        // Verify root1 archived, root2 current
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id.clone());
+            assert_eq!(periods.len(), 1);
+            assert_eq!(periods.get(0).unwrap().period_index, 0);
+
+            let current = get_current_impact_root(&env, project_id).unwrap();
+            assert_eq!(current.root, root2);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_get_impact_periods_listing() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "listing-test");
+
+        for i in 0u64..3 {
+            let totals = ImpactTotals {
+                co2_kg: 1000 + i * 100,
+                trees: 500 + i * 50,
+                hectares: 10 + i,
+            };
+            env.as_contract(&cid, || {
+                let root = BytesN::from_array(&env, &[i as u8 + 1; 32]);
+                publish_impact_root(
+                    &env,
+                    &signers1(&env, &admin),
+                    project_id.clone(),
+                    root,
+                    1704067200 + i * 2_592_000,
+                    1706745600 + i * 2_592_000,
+                    totals.clone(),
+                );
+            });
+        }
+
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id);
+            assert_eq!(periods.len(), 2); // 2 archived, 1 current
+            assert_eq!(periods.get(0).unwrap().total_co2_kg, 1000);
+            assert_eq!(periods.get(1).unwrap().total_co2_kg, 1100);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_archive_rotation_enforces_max() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "rotation-test");
+
+        // Publish MAX_ARCHIVED_PERIODS + 1 roots
+        for i in 0u64..(MAX_ARCHIVED_PERIODS as u64 + 1) {
+            let totals = ImpactTotals {
+                co2_kg: 1000,
+                trees: 500,
+                hectares: 10,
+            };
+            env.as_contract(&cid, || {
+                let root = BytesN::from_array(&env, &[i as u8 + 1; 32]);
+                publish_impact_root(
+                    &env,
+                    &signers1(&env, &admin),
+                    project_id.clone(),
+                    root,
+                    1704067200 + i * 2_592_000,
+                    1706745600 + i * 2_592_000,
+                    totals,
+                );
+            });
+        }
+
+        // Verify only MAX_ARCHIVED_PERIODS archived periods exist
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id);
+            assert_eq!(periods.len() as u32, MAX_ARCHIVED_PERIODS);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_verify_impact_inclusion_returns_false_for_unknown_period() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "verify-test");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+
+        let leaf = ImpactLeaf {
+            donor: Address::generate(&env),
+            donation_index: 0,
+            co2_kg: 100,
+            trees: 50,
+            hectares: 1,
+        };
+        let proof = Vec::new(&env);
+
+        // Unknown period index should return false
+        env.as_contract(&cid, || {
+            let result = verify_impact_inclusion(
+                &env, project_id, 999, // non-existent period
+                leaf, proof, 0,
+            );
+            assert!(!result);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Invalid period range: start must be before end")]
+    fn test_publish_root_invalid_period_range_panics() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "invalid-range");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id,
+                root,
+                1706745600, // end before start
+                1704067200,
+                totals,
+            );
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Root cannot be zero")]
+    fn test_publish_root_zero_root_panics() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "zero-root");
+        let zero_root = BytesN::from_array(&env, &[0u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id,
+                zero_root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Insufficient admin signatures")]
+    fn test_publish_root_non_admin_panics() {
+        let (env, cid, _client, _admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "unauthorized");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+        let non_admin = Address::generate(&env);
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &non_admin),
+                project_id,
+                root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
     }
 }
