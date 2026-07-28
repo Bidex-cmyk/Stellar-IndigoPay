@@ -330,15 +330,7 @@ pub struct DonationChallenge {
     pub resolved: bool,
     pub approved: bool,
 }
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DonationChallenge {
-    pub challenged: bool,
-    pub challenger: Address,
-    pub challenged_at: u32,
-    pub resolved: bool,
-    pub approved: bool,
-}
+
 
 #[contracttype]
 pub struct TokenConfig {
@@ -525,9 +517,6 @@ const REFUND_COOLDOWN_LEDGERS: u32 = 17_280;
 // for high-value donations.
 const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
 
-// 24 hours × 3600 s / 5 s per ledger = 17 280 ledgers. The challenge window
-// for high-value donations.
-const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
 // 72 hours × 3600 s / 5 s per ledger = 51 840 ledgers. The delay between
 // M-of-N initiation and permissionless force-refund execution.
 #[cfg(feature = "refund")]
