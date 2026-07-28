@@ -838,4 +838,85 @@ mod fuzz {
             prop_assert!(bounded_disputed <= total_jobs);
         }
     }
+
+    // ─── Dedicated fuzz target for milestone percentage edge cases ────────────
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// Fuzz test specifically for milestone percentage validation in `create_job`.
+        /// Generates random percentage distributions (0-100, any sum) and verifies:
+        /// - If percentages sum to 100, `create_job` succeeds
+        /// - If percentages sum != 100, `create_job` panics
+        /// - Edge cases: individual percentages of 0, overflow scenarios
+        #[test]
+        fn fuzz_milestone_percentage_validation(
+            percentages in prop::collection::vec(0..=100u32, 1..10),
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let contract_id = env.register_contract(None, EscrowContract);
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            let admin = Address::generate(&env);
+            client.initialize(&signers1(&env, &admin), &1u32);
+
+            let client_addr = Address::generate(&env);
+            let freelancer_addr = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(token_admin)
+                .address();
+            StellarAssetClient::new(&env, &token).mint(&client_addr, &(MAX_AMOUNT * 10));
+
+            let total_sum: u32 = percentages.iter().sum();
+            let job_id = SorobanString::from_str(&env, "fuzz-percentage-test");
+
+            // Build milestones from percentages
+            let mut milestones: SorobanVec<Milestone> = SorobanVec::new(&env);
+            for (i, &pct) in percentages.iter().enumerate() {
+                milestones.push_back(Milestone {
+                    name: SorobanString::from_str(&env, &std::format!("M{}", i)),
+                    percentage: pct,
+                    released: false,
+                    disputed: false,
+                    oracle: None,
+                    verified: false,
+                    proof_hash: None,
+                });
+            }
+
+            // Try to create the job and catch any panic
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                client.create_job(
+                    &client_addr,
+                    &freelancer_addr,
+                    &job_id,
+                    &token,
+                    &100_000_000i128,  // 100 XLM in stroops
+                    &milestones,
+                    &RELEASE_AFTER,
+                );
+            }));
+
+            // Assert the expected behavior
+            if total_sum == 100 {
+                assert!(
+                    result.is_ok(),
+                    "create_job panicked unexpectedly when percentages summed to {} (valid sum)",
+                    total_sum
+                );
+                // Verify the job was actually created
+                let job = client.get_job(&job_id).unwrap();
+                assert_eq!(job.milestones.len(), percentages.len() as u32);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "create_job did NOT panic when percentages summed to {} (invalid sum)",
+                    total_sum
+                );
+            }
+        }
+    }
 }
