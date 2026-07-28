@@ -839,7 +839,6 @@ mod fuzz {
         }
     }
 
-        
     // ─── Dedicated fuzz target for milestone percentage edge cases ────────────
 
     proptest! {
@@ -962,7 +961,7 @@ mod fuzz {
             verified: false,
             proof_hash: None,
         });
-        
+
         let result_1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.create_job(
                 &client_addr,
@@ -974,7 +973,10 @@ mod fuzz {
                 &RELEASE_AFTER,
             );
         }));
-        assert!(result_1.is_ok(), "Job with valid sum [0, 100] should succeed");
+        assert!(
+            result_1.is_ok(),
+            "Job with valid sum [0, 100] should succeed"
+        );
 
         // Test case 2: Valid sum with multiple zeros (e.g., [0, 0, 100])
         let job_id_2 = SorobanString::from_str(&env, "multiple-zeros-test");
@@ -1006,7 +1008,7 @@ mod fuzz {
             verified: false,
             proof_hash: None,
         });
-        
+
         let result_2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.create_job(
                 &client_addr,
@@ -1018,7 +1020,10 @@ mod fuzz {
                 &RELEASE_AFTER,
             );
         }));
-        assert!(result_2.is_ok(), "Job with valid sum [0, 0, 100] should succeed");
+        assert!(
+            result_2.is_ok(),
+            "Job with valid sum [0, 0, 100] should succeed"
+        );
 
         // Test case 3: Invalid sum with overflow (percentages > 100 each)
         let job_id_3 = SorobanString::from_str(&env, "overflow-test");
@@ -1041,7 +1046,7 @@ mod fuzz {
             verified: false,
             proof_hash: None,
         });
-        
+
         let result_3 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.create_job(
                 &client_addr,
@@ -1053,7 +1058,10 @@ mod fuzz {
                 &RELEASE_AFTER,
             );
         }));
-        assert!(result_3.is_err(), "Job with invalid sum (overflow) should panic");
+        assert!(
+            result_3.is_err(),
+            "Job with invalid sum (overflow) should panic"
+        );
 
         // Test case 4: Only one milestone with 100% (valid)
         let job_id_4 = SorobanString::from_str(&env, "single-milestone-test");
@@ -1067,7 +1075,7 @@ mod fuzz {
             verified: false,
             proof_hash: None,
         });
-        
+
         let result_4 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.create_job(
                 &client_addr,
@@ -1079,7 +1087,9 @@ mod fuzz {
                 &RELEASE_AFTER,
             );
         }));
-        assert!(result_4.is_ok(), "Single milestone with 100% should succeed");
+        assert!(
+            result_4.is_ok(),
+            "Single milestone with 100% should succeed"
+        );
     }
-
 }
