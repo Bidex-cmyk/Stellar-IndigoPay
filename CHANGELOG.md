@@ -301,6 +301,18 @@
 
 All notable changes to this project will be documented in this file.
 
+
+### Tests
+
+* **escrow-contract:** add fuzz target for milestone percentage edge cases in `create_job` (closes #508)
+  - Add dedicated proptest strategy generating random milestone percentage distributions (0-100, 1-10 milestones)
+  - Verify `create_job` panics on invalid sum (sum != 100) and succeeds on valid sum (sum == 100)
+  - Covers edge cases: individual percentages of 0, various distributions, overflow scenarios
+  - Exercise at least 1,000 random milestone distributions with proptest (configured via `ProptestConfig::with_cases(1000)`)
+  - Add regression file `proptest-regressions/escrow_fuzz.txt` for replayable test cases
+  - Test passes locally with `cargo test --features testutils -p escrow-contract`
+
+
 ## [Unreleased]
 
 ### Added
