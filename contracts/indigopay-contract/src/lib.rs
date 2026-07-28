@@ -355,6 +355,65 @@ pub struct ImpactLeaf {
     /// Hectares restored attributable to this donor.
     pub hectares: u32,
 }
+
+// ─── Impact Certificate Merkle Root Rotation & Archiving (#466) ────────────
+
+/// Impact root with period metadata — stored both as the "current" root and
+/// archived under `ImpactRootArchive(project_id, period_index)`.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactRoot {
+    pub root: BytesN<32>,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub total_co2_kg: u64,
+    pub total_trees: u64,
+    pub total_hectares: u64,
+}
+
+/// Impact totals for a single reporting period.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactTotals {
+    pub co2_kg: u64,
+    pub trees: u64,
+    pub hectares: u64,
+}
+
+/// Lightweight summary of an archived period returned by `get_impact_periods`.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactPeriodSummary {
+    pub period_index: u32,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub total_co2_kg: u64,
+    pub total_trees: u64,
+    pub total_hectares: u64,
+}
+
+/// Storage key enum for the impact root archiving system.
+/// Kept separate from `DataKey` so the feature can be toggled without
+/// shifting XDR discriminants of always-on variants.
+#[cfg(feature = "impact")]
+#[contracttype]
+#[derive(Clone, Debug)]
+#[allow(clippy::enum_variant_names)]
+enum ImpactRootKey {
+    /// (project_id) -> u32: number of periods archived for this project
+    RootCount(String),
+    /// (project_id, period_index) -> ImpactRoot: archived period data
+    RootArchive(String, u32),
+    /// (project_id) -> ImpactRoot: current (latest) root
+    RootCurrent(String),
+}
+
+/// Maximum number of archived periods per project (48 ≈ 4 years of monthly reports).
+#[cfg(feature = "impact")]
+pub const MAX_ARCHIVED_PERIODS: u32 = 48;
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DonationChallenge {
@@ -797,6 +856,241 @@ fn impact_merkle_key(env: &Env, project_id: &String, report_id: &String) -> Byte
         .sha256(&Bytes::from_slice(env, &combined))
         .into()
 }
+
+// ─── Impact Root Archiving Functions (#466) ───────────────────────────────
+
+#[cfg(feature = "impact")]
+/// Get the period count for a project. Returns 0 when no periods exist.
+fn get_impact_period_count(env: &Env, project_id: &String) -> u32 {
+    env.storage()
+        .instance()
+        .get(&ImpactRootKey::RootCount(project_id.clone()))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "impact")]
+/// Set the period count for a project in storage.
+fn set_impact_period_count(env: &Env, project_id: &String, count: u32) {
+    env.storage()
+        .instance()
+        .set(&ImpactRootKey::RootCount(project_id.clone()), &count);
+}
+
+#[cfg(feature = "impact")]
+/// Publish a new impact root for a project, archiving the previous root.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `signers` - M-of-N admin signers for authorization
+/// * `project_id` - Project identifier
+/// * `root` - Merkle root hash for this reporting period
+/// * `period_start` - Unix timestamp of period start
+/// * `period_end` - Unix timestamp of period end
+/// * `totals` - Aggregated impact totals for this period
+///
+/// # Panics
+/// - When admin authorization fails (M-of-N not satisfied)
+/// - When `period_start >= period_end`
+/// - When `root` is all zeros
+pub fn publish_impact_root(
+    env: &Env,
+    signers: &Vec<Address>,
+    project_id: String,
+    root: BytesN<32>,
+    period_start: u64,
+    period_end: u64,
+    totals: ImpactTotals,
+) {
+    // M-of-N admin authorization
+    require_admin_for_critical(env, signers);
+
+    // Validate inputs
+    if period_start >= period_end {
+        panic!("Invalid period range: start must be before end");
+    }
+    if root == BytesN::from_array(env, &[0u8; 32]) {
+        panic!("Root cannot be zero");
+    }
+
+    // Archive current root before overwriting
+    if env
+        .storage()
+        .instance()
+        .has(&ImpactRootKey::RootCurrent(project_id.clone()))
+    {
+        let count = get_impact_period_count(env, &project_id);
+
+        if count >= MAX_ARCHIVED_PERIODS {
+            // Shift all periods down by one (drop oldest at index 0)
+            for i in 1..MAX_ARCHIVED_PERIODS {
+                let archived = env
+                    .storage()
+                    .instance()
+                    .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(project_id.clone(), i))
+                    .expect("archived period should exist");
+                env.storage().instance().set(
+                    &ImpactRootKey::RootArchive(project_id.clone(), i - 1),
+                    &archived,
+                );
+            }
+            // Archive current root at the newly freed slot (MAX_ARCHIVED_PERIODS - 1)
+            let current_root: ImpactRoot = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()))
+                .expect("current root should exist");
+            env.storage().instance().set(
+                &ImpactRootKey::RootArchive(project_id.clone(), MAX_ARCHIVED_PERIODS - 1),
+                &current_root,
+            );
+            // Count stays at MAX_ARCHIVED_PERIODS (oldest was dropped)
+        } else {
+            // Normal case: add new archived entry
+            let current_root: ImpactRoot = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()))
+                .expect("current root should exist");
+            env.storage().instance().set(
+                &ImpactRootKey::RootArchive(project_id.clone(), count),
+                &current_root,
+            );
+            let new_count = count.checked_add(1).expect("overflow");
+            set_impact_period_count(env, &project_id, new_count);
+        }
+    }
+
+    // Store new root as current
+    let new_root = ImpactRoot {
+        root: root.clone(),
+        period_start,
+        period_end,
+        total_co2_kg: totals.co2_kg,
+        total_trees: totals.trees,
+        total_hectares: totals.hectares,
+    };
+    env.storage()
+        .instance()
+        .set(&ImpactRootKey::RootCurrent(project_id.clone()), &new_root);
+
+    // Emit event
+    let period_index = get_impact_period_count(env, &project_id);
+    env.events().publish(
+        (symbol_short!("root_pub"), project_id.clone()),
+        (
+            period_index,
+            root,
+            period_start,
+            period_end,
+            totals.co2_kg,
+            totals.trees,
+            totals.hectares,
+        ),
+    );
+}
+
+#[cfg(feature = "impact")]
+/// Verify an impact leaf against a specific archived period's Merkle root.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+/// * `period_index` - Index of the archived period to verify against
+/// * `leaf` - Impact leaf containing the claim
+/// * `proof` - Merkle proof siblings
+/// * `leaf_index` - Index of the leaf in the Merkle tree
+///
+/// # Returns
+/// * `true` if the proof is valid for the specified period's root
+///
+/// # Panics
+/// - When the period index does not exist (neither current nor archived)
+pub fn verify_impact_inclusion(
+    env: &Env,
+    project_id: String,
+    period_index: u32,
+    leaf: ImpactLeaf,
+    proof: Vec<BytesN<32>>,
+    leaf_index: u32,
+) -> bool {
+    let leaf_hash = compute_impact_leaf_hash(env, &leaf);
+    let count = get_impact_period_count(env, &project_id);
+
+    // Period 0 with no archives means check current root
+    if period_index == 0 && count == 0 {
+        if let Some(current) = env
+            .storage()
+            .instance()
+            .get::<_, ImpactRoot>(&ImpactRootKey::RootCurrent(project_id.clone()))
+        {
+            return verify_merkle_proof(env, &leaf_hash, &proof, &current.root, leaf_index);
+        }
+    }
+
+    // Check archived periods: period_index 0 = oldest, count-1 = newest archived
+    if period_index < count {
+        if let Some(archived) =
+            env.storage()
+                .instance()
+                .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(
+                    project_id.clone(),
+                    period_index,
+                ))
+        {
+            return verify_merkle_proof(env, &leaf_hash, &proof, &archived.root, leaf_index);
+        }
+    }
+
+    // Period not found
+    false
+}
+
+#[cfg(feature = "impact")]
+/// Get all archived periods for a project.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+///
+/// # Returns
+/// * `Vec<ImpactPeriodSummary>` - List of all archived periods
+pub fn get_impact_periods(env: &Env, project_id: String) -> Vec<ImpactPeriodSummary> {
+    let count = get_impact_period_count(env, &project_id);
+    let mut periods = Vec::new(env);
+    for i in 0..count {
+        if let Some(archived) = env
+            .storage()
+            .instance()
+            .get::<_, ImpactRoot>(&ImpactRootKey::RootArchive(project_id.clone(), i))
+        {
+            periods.push_back(ImpactPeriodSummary {
+                period_index: i,
+                period_start: archived.period_start,
+                period_end: archived.period_end,
+                total_co2_kg: archived.total_co2_kg,
+                total_trees: archived.total_trees,
+                total_hectares: archived.total_hectares,
+            });
+        }
+    }
+    periods
+}
+
+#[cfg(feature = "impact")]
+/// Get the current (latest) impact root for a project.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `project_id` - Project identifier
+///
+/// # Returns
+/// * `Option<ImpactRoot>` - Current root or `None` if none exists
+pub fn get_current_impact_root(env: &Env, project_id: String) -> Option<ImpactRoot> {
+    env.storage()
+        .instance()
+        .get(&ImpactRootKey::RootCurrent(project_id))
+}
+
 // ─── Off-Chain Oracle Attestation for Project Impact Verification (#459) ────
 //
 // Independent verifiers submit signed attestations of a project's actual
@@ -12670,5 +12964,294 @@ mod tests {
         client.add_verifier(&signers1(&env, &admin), &v2);
         client.set_verification_threshold(&signers2(&env, &admin, &v1), &2u32);
         assert_eq!(client.get_verification_threshold(), 2);
+    }
+
+    // ─── Impact Root Archiving Tests (#466) ───────────────────────────────
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_publish_impact_root_stores_current() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "test-project");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root.clone(),
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+
+        env.as_contract(&cid, || {
+            let current: Option<ImpactRoot> = env
+                .storage()
+                .instance()
+                .get(&ImpactRootKey::RootCurrent(project_id.clone()));
+            assert_eq!(current.as_ref().map(|r| r.root.clone()), Some(root));
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_publish_root_archives_previous() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "archive-test");
+        let root1 = BytesN::from_array(&env, &[1u8; 32]);
+        let root2 = BytesN::from_array(&env, &[2u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        // Publish first root
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root1.clone(),
+                1704067200,
+                1706745600,
+                totals.clone(),
+            );
+        });
+
+        // Verify current root
+        env.as_contract(&cid, || {
+            let current = get_current_impact_root(&env, project_id.clone()).unwrap();
+            assert_eq!(current.root, root1);
+        });
+
+        // Publish second root
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root2.clone(),
+                1706745601,
+                1709337600,
+                totals,
+            );
+        });
+
+        // Verify root1 archived, root2 current
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id.clone());
+            assert_eq!(periods.len(), 1);
+            assert_eq!(periods.get(0).unwrap().period_index, 0);
+
+            let current = get_current_impact_root(&env, project_id).unwrap();
+            assert_eq!(current.root, root2);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_get_impact_periods_listing() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "listing-test");
+
+        for i in 0u64..3 {
+            let totals = ImpactTotals {
+                co2_kg: 1000 + i * 100,
+                trees: 500 + i * 50,
+                hectares: 10 + i,
+            };
+            env.as_contract(&cid, || {
+                let root = BytesN::from_array(&env, &[i as u8 + 1; 32]);
+                publish_impact_root(
+                    &env,
+                    &signers1(&env, &admin),
+                    project_id.clone(),
+                    root,
+                    1704067200 + i * 2_592_000,
+                    1706745600 + i * 2_592_000,
+                    totals.clone(),
+                );
+            });
+        }
+
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id);
+            assert_eq!(periods.len(), 2); // 2 archived, 1 current
+            assert_eq!(periods.get(0).unwrap().total_co2_kg, 1000);
+            assert_eq!(periods.get(1).unwrap().total_co2_kg, 1100);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_archive_rotation_enforces_max() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "rotation-test");
+
+        // Publish MAX_ARCHIVED_PERIODS + 1 roots
+        for i in 0u64..(MAX_ARCHIVED_PERIODS as u64 + 1) {
+            let totals = ImpactTotals {
+                co2_kg: 1000,
+                trees: 500,
+                hectares: 10,
+            };
+            env.as_contract(&cid, || {
+                let root = BytesN::from_array(&env, &[i as u8 + 1; 32]);
+                publish_impact_root(
+                    &env,
+                    &signers1(&env, &admin),
+                    project_id.clone(),
+                    root,
+                    1704067200 + i * 2_592_000,
+                    1706745600 + i * 2_592_000,
+                    totals,
+                );
+            });
+        }
+
+        // Verify only MAX_ARCHIVED_PERIODS archived periods exist
+        env.as_contract(&cid, || {
+            let periods = get_impact_periods(&env, project_id);
+            assert_eq!(periods.len() as u32, MAX_ARCHIVED_PERIODS);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    fn test_verify_impact_inclusion_returns_false_for_unknown_period() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "verify-test");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id.clone(),
+                root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+
+        let leaf = ImpactLeaf {
+            donor: Address::generate(&env),
+            donation_index: 0,
+            co2_kg: 100,
+            trees: 50,
+            hectares: 1,
+        };
+        let proof = Vec::new(&env);
+
+        // Unknown period index should return false
+        env.as_contract(&cid, || {
+            let result = verify_impact_inclusion(
+                &env, project_id, 999, // non-existent period
+                leaf, proof, 0,
+            );
+            assert!(!result);
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Invalid period range: start must be before end")]
+    fn test_publish_root_invalid_period_range_panics() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "invalid-range");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id,
+                root,
+                1706745600, // end before start
+                1704067200,
+                totals,
+            );
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Root cannot be zero")]
+    fn test_publish_root_zero_root_panics() {
+        let (env, cid, _client, admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "zero-root");
+        let zero_root = BytesN::from_array(&env, &[0u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &admin),
+                project_id,
+                zero_root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
+    }
+
+    #[cfg(feature = "impact")]
+    #[test]
+    #[should_panic(expected = "Insufficient admin signatures")]
+    fn test_publish_root_non_admin_panics() {
+        let (env, cid, _client, _admin, _pid) = setup();
+
+        let project_id = String::from_str(&env, "unauthorized");
+        let root = BytesN::from_array(&env, &[1u8; 32]);
+        let totals = ImpactTotals {
+            co2_kg: 1000,
+            trees: 500,
+            hectares: 10,
+        };
+        let non_admin = Address::generate(&env);
+
+        env.as_contract(&cid, || {
+            publish_impact_root(
+                &env,
+                &signers1(&env, &non_admin),
+                project_id,
+                root,
+                1704067200,
+                1706745600,
+                totals,
+            );
+        });
     }
 }
