@@ -202,7 +202,17 @@ project-scoped anonymous donation totals.
 
 | Event Name | Topics                              | Data | When Emitted                                |
 | ---------- | ----------------------------------- | ---- | ------------------------------------------- |
-| `ew_cncl`  | `["ew_cncl", admin, project_id]`   | `()` | When admin calls `cancel_emergency_withdrawal` |
+| `ew_cncl`  | `["ew_cncl", admin, project_id]`   | `token: Address` | When admin calls `cancel_emergency_withdrawal` or `cancel_all_emergency_withdrawals` |
+
+---
+
+## 15b. `ew_batch`
+
+**Description**: Emitted when batch emergency withdrawals are executed for a project.
+
+| Event Name | Topics                            | Data                | When Emitted                                     |
+| ---------- | --------------------------------- | ------------------- | ------------------------------------------------ |
+| `ew_batch` | `["ew_batch", project_id]`       | `executed_count: u32` | When calling `exec_all_emergency_withdrawals` |
 
 ---
 
