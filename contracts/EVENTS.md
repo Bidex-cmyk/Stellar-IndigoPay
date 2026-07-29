@@ -556,6 +556,92 @@ project's Merkle Mountain Range for cumulative impact certificate verification.
 | ----------- | ---------------------- | ---------------------- | ----------------------------------------- |
 | `recip_set` | `["recip_set", admin]` | `recipient_count: u32` | When admin calls `set_platform_fee_recipients` |
 
+---
+
+# Campaign-to-Escrow Integration Events (#426)
+
+Gated behind the `escrow` Cargo feature (opt-in). Bridges the indigopay-contract
+campaign system with the escrow-contract to enable milestone-based fund release
+for climate projects.
+
+## 43. `esc_set` (Escrow Contract Address Set)
+
+**Description**: Emitted when M-of-N admins configure the escrow contract address
+for campaign escrow integration.
+
+| Event Name | Topics          | Data                   | When Emitted                                     |
+| ---------- | --------------- | ---------------------- | ------------------------------------------------ |
+| `esc_set`  | `["esc_set"]`   | `escrow_contract: Address` | When admins call `set_escrow_contract_address` |
+
+---
+
+## 44. `camp_es` (Campaign with Escrow Created)
+
+**Description**: Emitted when an admin creates a campaign with milestone-based
+escrow for a project. The escrow job is not created yet — it is funded later
+via `fund_campaign_escrow_job` once donations accumulate.
+
+| Event Name | Topics                                 | Data                          | When Emitted                               |
+| ---------- | -------------------------------------- | ----------------------------- | ------------------------------------------ |
+| `camp_es`  | `["camp_es", admin, project_id]`       | `(goal: i128, deadline_ledger: u32)` | When admin calls `create_campaign_with_escrow` |
+
+---
+
+## 45. `esc_fnd` (Campaign Escrow Job Funded)
+
+**Description**: Emitted when an admin funds the escrow job for a campaign.
+The accumulated contract-held donations are transferred to the escrow contract
+and the escrow job is created with the project wallet as the freelancer.
+
+| Event Name | Topics                              | Data                                        | When Emitted                            |
+| ---------- | ----------------------------------- | ------------------------------------------- | --------------------------------------- |
+| `esc_fnd`  | `["esc_fnd", admin, project_id]`    | `(job_id: String, total_raised: i128)`      | When admin calls `fund_campaign_escrow_job` |
+
+---
+
+## 46. `esc_rel` (Campaign Milestone Released)
+
+**Description**: Emitted when an admin releases a milestone for an escrow campaign.
+Proxies through to the escrow contract's `release_milestone`.
+
+| Event Name | Topics                               | Data                       | When Emitted                                |
+| ---------- | ------------------------------------ | -------------------------- | ------------------------------------------- |
+| `esc_rel`  | `["esc_rel", admin, project_id]`     | `milestone_index: u32`     | When admin calls `release_campaign_milestone` |
+
+---
+
+## 47. `esc_clm` (Campaign Milestone Claimed)
+
+**Description**: Emitted when a project wallet claims a released milestone for
+an escrow campaign. Proxies through to the escrow contract's `claim_milestone`.
+
+| Event Name | Topics                                | Data                       | When Emitted                               |
+| ---------- | ------------------------------------- | -------------------------- | ------------------------------------------ |
+| `esc_clm`  | `["esc_clm", project_wallet, project_id]` | `milestone_index: u32` | When project wallet calls `claim_campaign_milestone` |
+
+---
+
+## 48. `esc_dsp` (Campaign Milestone Disputed)
+
+**Description**: Emitted when M-of-N admins dispute a milestone on an escrow
+campaign. Proxies through to the escrow contract's `dispute_milestone`.
+
+| Event Name | Topics                         | Data                       | When Emitted                                |
+| ---------- | ------------------------------ | -------------------------- | ------------------------------------------- |
+| `esc_dsp`  | `["esc_dsp", project_id]`      | `milestone_index: u32`     | When admins call `dispute_campaign_milestone` |
+
+---
+
+## 49. `esc_rsv` (Campaign Milestone Dispute Resolved)
+
+**Description**: Emitted when M-of-N admins resolve a milestone dispute on an
+escrow campaign. Proxies through to the escrow contract's
+`resolve_milestone_dispute`.
+
+| Event Name | Topics                         | Data                                    | When Emitted                                          |
+| ---------- | ------------------------------ | --------------------------------------- | ----------------------------------------------------- |
+| `esc_rsv`  | `["esc_rsv", project_id]`      | `(milestone_index: u32, approve: bool)` | When admins call `resolve_campaign_ms_dispute` |
+
 ## Usage Notes
 
 - All events follow Soroban's standard event format: `topics: Vec<Val>`, `data: Val`.
