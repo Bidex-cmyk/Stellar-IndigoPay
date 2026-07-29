@@ -546,6 +546,16 @@ project's Merkle Mountain Range for cumulative impact certificate verification.
 | ---------- | ----------------------------------------------- | ---------------- | ------------------------------------------ |
 | `mmr_app`  | `["mmr_app", admin, project_id, new_leaf_count]` | `new_root: BytesN<32>` | When admin calls `append_impact_root` |
 
+---
+
+## 42. `recip_set` (Platform Fee Recipients Set)
+
+**Description**: Emitted when M-of-N admins configure or update multi-recipient platform fee splits.
+
+| Event Name  | Topics                 | Data                   | When Emitted                              |
+| ----------- | ---------------------- | ---------------------- | ----------------------------------------- |
+| `recip_set` | `["recip_set", admin]` | `recipient_count: u32` | When admin calls `set_platform_fee_recipients` |
+
 ## Usage Notes
 
 - All events follow Soroban's standard event format: `topics: Vec<Val>`, `data: Val`.
