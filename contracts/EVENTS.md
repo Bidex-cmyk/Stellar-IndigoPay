@@ -533,7 +533,7 @@ model.
 - Events can be queried via Horizon or Soroban RPC tools.
 - Frontend / backend should listen to these for real-time updates, notifications, and leaderboard.
 
-**Last Updated**: July 28, 2026
+**Last Updated**: July 29, 2026
 
 ---
 
@@ -548,7 +548,31 @@ project's Merkle Mountain Range for cumulative impact certificate verification.
 
 ---
 
-## 42. `recip_set` (Platform Fee Recipients Set)
+## 43. `prop_clean` (Proposal Cleanup)
+
+**Description**: Emitted when a resolved governance proposal and all associated
+vote data are cleaned up after the 30-day grace period. Permissionless — anyone
+may call `cleanup_proposal` once the grace period has elapsed.
+
+| Event Name   | Topics                         | Data | When Emitted                             |
+| ------------ | ------------------------------ | ---- | ---------------------------------------- |
+| `prop_clean` | `["prop_clean", project_id]`   | `()` | After `cleanup_proposal` completes |
+
+---
+
+## 44. `vest_clean` (Vesting Schedule Cleanup)
+
+**Description**: Emitted when a completed or cancelled vesting schedule is
+removed from storage after the 30-day grace period. Permissionless — anyone may
+call `cleanup_vesting_schedule` once the grace period has elapsed.
+
+| Event Name   | Topics                                | Data | When Emitted                                  |
+| ------------ | ------------------------------------- | ---- | --------------------------------------------- |
+| `vest_clean` | `["vest_clean", donor, schedule_id]`  | `()` | After `cleanup_vesting_schedule` completes |
+
+---
+
+## 45. `recip_set` (Platform Fee Recipients Set)
 
 **Description**: Emitted when M-of-N admins configure or update multi-recipient platform fee splits.
 
@@ -563,4 +587,4 @@ project's Merkle Mountain Range for cumulative impact certificate verification.
 - Events can be queried via Horizon or Soroban RPC tools.
 - Frontend / backend should listen to these for real-time updates, notifications, and leaderboard.
 
-**Last Updated**: July 28, 2026
+**Last Updated**: July 29, 2026

@@ -226,6 +226,9 @@ pub struct VoteProposal {
     pub votes_against: u32,
     pub deadline_ledger: u32,
     pub resolved: bool,
+    /// Ledger sequence at which the proposal was resolved (0 if unresolved).
+    /// Appended for backward compatibility per UPGRADE.md.
+    pub resolved_at: u32,
 }
 /// Aggregated platform-wide counters returned by `get_global_stats`.
 ///
@@ -334,6 +337,9 @@ pub struct VestingSchedule {
     pub installments_released: u32,
     pub created_at: u32,
     pub token: Address,
+    /// Ledger sequence at which the schedule was completed or cancelled (0 if active).
+    /// Appended for backward compatibility per UPGRADE.md.
+    pub completed_at: u32,
 }
 /// An on-chain impact certificate leaf for a single donor's contribution.
 /// The platform constructs a Merkle tree of all donor impacts for a project's
@@ -630,6 +636,12 @@ const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
 // M-of-N initiation and permissionless force-refund execution.
 #[cfg(feature = "refund")]
 const FORCE_REFUND_TIMELOCK_LEDGERS: u32 = 51_840;
+
+// 30 days × 86400 s / 5 s per ledger = 518 400 ledgers. The post-resolution
+// or post-completion grace period during which stale proposal/vesting data
+// is preserved for indexers. After this window, anyone may call the
+// corresponding `cleanup_*` function to remove the storage entries.
+pub const GRACE_PERIOD_LEDGERS: u32 = 518_400;
 
 /// Current storage schema version. Bump this and add a migration step in
 /// `migrate()` whenever a struct layout, DataKey variant, or stored value
@@ -4682,6 +4694,7 @@ impl IndigoPayContract {
             votes_against: 0,
             deadline_ledger,
             resolved: false,
+            resolved_at: 0,
         };
         env.storage()
             .instance()
@@ -4917,6 +4930,7 @@ impl IndigoPayContract {
             panic!("Voting window not yet closed");
         }
         proposal.resolved = true;
+        proposal.resolved_at = env.ledger().sequence();
         if proposal.votes_for > proposal.votes_against {
             env.events()
                 .publish((symbol_short!("proj_ver"),), project_id.clone());
@@ -4944,6 +4958,7 @@ impl IndigoPayContract {
             panic!("Proposal already resolved");
         }
         proposal.resolved = true;
+        proposal.resolved_at = env.ledger().sequence();
         env.events().publish(
             (symbol_short!("prop_veto"), signers.get(0).unwrap()),
             project_id.clone(),
@@ -4952,6 +4967,56 @@ impl IndigoPayContract {
             .instance()
             .set(&DataKey::Proposal(project_id), &proposal);
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+    /// Clean up a resolved proposal and all associated vote data after the
+    /// grace period has elapsed. Permissionless — anyone can call this to
+    /// help keep on-chain storage lean. Emits `prop_clean` for indexers.
+    ///
+    /// # Panics
+    /// - If the proposal is not found.
+    /// - If the proposal is not resolved.
+    /// - If the grace period has not elapsed since resolution.
+    #[cfg(feature = "governance")]
+    pub fn cleanup_proposal(env: Env, project_id: String) {
+        let proposal: VoteProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::Proposal(project_id.clone()))
+            .expect("Proposal not found");
+        if !proposal.resolved {
+            panic!("Proposal is not resolved");
+        }
+        let current = env.ledger().sequence();
+        let cleanup_eligible_at = proposal
+            .resolved_at
+            .checked_add(GRACE_PERIOD_LEDGERS)
+            .expect("overflow");
+        if current < cleanup_eligible_at {
+            panic!("Grace period has not elapsed");
+        }
+        // Remove proposal.
+        env.storage()
+            .instance()
+            .remove(&DataKey::Proposal(project_id.clone()));
+        // Remove individual HasVoted entries by iterating the voter list
+        // BEFORE removing the VoterList itself.
+        let voter_list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::VoterList(project_id.clone()))
+            .unwrap_or(Vec::new(&env));
+        for voter in voter_list.iter() {
+            env.storage()
+                .instance()
+                .remove(&DataKey::HasVoted(project_id.clone(), voter));
+        }
+        // Remove voter list.
+        env.storage()
+            .instance()
+            .remove(&DataKey::VoterList(project_id.clone()));
+        // Emit event for indexer reconciliation.
+        env.events()
+            .publish((symbol_short!("prop_clean"), project_id), ());
     }
     /// Returns current vote counts and status for a proposal.
     #[cfg(feature = "governance")]
@@ -6709,6 +6774,7 @@ impl IndigoPayContract {
             installments_released: 1, // first installment is immediate
             created_at: env.ledger().sequence(),
             token: token.clone(),
+            completed_at: 0,
         };
         let schedule_key = DataKey::VestingSchedule(donor.clone(), schedule_id);
         env.storage().instance().set(&schedule_key, &schedule);
@@ -6766,6 +6832,10 @@ impl IndigoPayContract {
         schedule.next_installment_ledger = current_ledger
             .checked_add(schedule.interval_ledgers)
             .expect("overflow");
+        // Mark completed when all installments are released.
+        if schedule.installments_released >= schedule.installment_count {
+            schedule.completed_at = current_ledger;
+        }
         env.storage().instance().set(&schedule_key, &schedule);
         // Load project to get the wallet.
         let project: Project = env
@@ -6804,7 +6874,7 @@ impl IndigoPayContract {
     pub fn cancel_vesting(env: Env, donor: Address, schedule_id: u32) {
         donor.require_auth();
         let schedule_key = DataKey::VestingSchedule(donor.clone(), schedule_id);
-        let schedule: VestingSchedule = env
+        let mut schedule: VestingSchedule = env
             .storage()
             .instance()
             .get(&schedule_key)
@@ -6819,8 +6889,14 @@ impl IndigoPayContract {
             .checked_mul(schedule.amount_per_installment)
             .expect("overflow");
 
-        // Remove the schedule from storage.
-        env.storage().instance().remove(&schedule_key);
+        // Mark the schedule as cancelled with completed_at so it can be
+        // cleaned up after the grace period. The schedule is NOT removed
+        // immediately — see `cleanup_vesting_schedule`.
+        schedule.completed_at = env.ledger().sequence();
+        env.storage()
+            .instance()
+            .set(&schedule_key, &schedule);
+
         // ── Interaction: return unvested tokens from contract custody to donor.
         let contract_addr = env.current_contract_address();
         let token_client = token::Client::new(&env, &schedule.token);
@@ -6830,6 +6906,40 @@ impl IndigoPayContract {
             (schedule_id, unvested_amount),
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+    /// Clean up a completed or cancelled vesting schedule after the grace
+    /// period has elapsed. Permissionless — anyone can call this to help
+    /// keep on-chain storage lean. Emits `vest_clean` for indexers.
+    ///
+    /// # Panics
+    /// - If the schedule is not found.
+    /// - If the schedule is still active (not completed/cancelled).
+    /// - If the grace period has not elapsed since completion.
+    #[cfg(feature = "vesting")]
+    pub fn cleanup_vesting_schedule(env: Env, donor: Address, schedule_id: u32) {
+        let schedule_key = DataKey::VestingSchedule(donor.clone(), schedule_id);
+        let schedule: VestingSchedule = env
+            .storage()
+            .instance()
+            .get(&schedule_key)
+            .expect("Vesting schedule not found");
+        if schedule.completed_at == 0 {
+            panic!("Vesting schedule is still active");
+        }
+        let current = env.ledger().sequence();
+        let cleanup_eligible_at = schedule
+            .completed_at
+            .checked_add(GRACE_PERIOD_LEDGERS)
+            .expect("overflow");
+        if current < cleanup_eligible_at {
+            panic!("Grace period has not elapsed");
+        }
+        env.storage().instance().remove(&schedule_key);
+        // Emit event for indexer reconciliation.
+        env.events().publish(
+            (symbol_short!("vest_clean"), donor, schedule_id),
+            (),
+        );
     }
     /// Query a vesting schedule by donor and schedule ID.
     #[cfg(feature = "vesting")]
@@ -10861,6 +10971,226 @@ mod tests {
         let impostor = Address::generate(&env);
         client.cancel_vesting(&impostor, &schedule_id);
     }
+    // ─── Proposal cleanup tests (#433) ─────────────────────────────────────
+    #[cfg(feature = "governance")]
+    #[test]
+    fn test_cleanup_resolved_proposal() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+        let p = client.get_proposal(&pid);
+        assert!(p.resolved);
+        assert!(p.resolved_at > 0);
+        // Fast-forward past grace period.
+        env.ledger()
+            .set_sequence_number(p.resolved_at + GRACE_PERIOD_LEDGERS + 1);
+        extend_ttl(&env, &cid);
+        client.cleanup_proposal(&pid);
+        // Proposal should be gone.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.get_proposal(&pid);
+        }));
+        assert!(result.is_err(), "Proposal should be removed after cleanup");
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    #[should_panic(expected = "Proposal is not resolved")]
+    fn test_cleanup_unresolved_panics() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        extend_ttl(&env, &cid);
+        client.cleanup_proposal(&pid);
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    #[should_panic(expected = "Grace period has not elapsed")]
+    fn test_cleanup_before_grace_period_panics() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+        // Do NOT advance past grace period.
+        extend_ttl(&env, &cid);
+        client.cleanup_proposal(&pid);
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    #[should_panic(expected = "Proposal not found")]
+    fn test_cleanup_proposal_idempotent() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+        let p = client.get_proposal(&pid);
+        env.ledger()
+            .set_sequence_number(p.resolved_at + GRACE_PERIOD_LEDGERS + 1);
+        extend_ttl(&env, &cid);
+        client.cleanup_proposal(&pid);
+        // Second call should panic because proposal no longer exists.
+        client.cleanup_proposal(&pid);
+    }
+    // ─── Vesting cleanup tests (#433) ──────────────────────────────────────
+    #[cfg(feature = "vesting")]
+    #[test]
+    fn test_cleanup_vesting_completed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "cleanup-vest");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Cleanup Vest Project"),
+            &project_wallet,
+            &50u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 20_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        // 2 installments, 50 ledgers each.
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
+        // Claim 2nd (final) installment — sets completed_at.
+        env.ledger().set_sequence_number(100);
+        client.claim_vested_installment(&donor, &schedule_id);
+        let s = client.get_vesting_schedule(&donor, &schedule_id);
+        assert!(s.completed_at > 0);
+        // Fast-forward past grace period.
+        env.ledger()
+            .set_sequence_number(s.completed_at + GRACE_PERIOD_LEDGERS + 1);
+        client.cleanup_vesting_schedule(&donor, &schedule_id);
+        // Schedule should be gone.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.get_vesting_schedule(&donor, &schedule_id);
+        }));
+        assert!(
+            result.is_err(),
+            "Vesting schedule should be removed after cleanup"
+        );
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    #[should_panic(expected = "Vesting schedule is still active")]
+    fn test_cleanup_vesting_active_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "active-vest");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Active Vest Project"),
+            &project_wallet,
+            &50u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 30_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &3u32, &1000u32, &0u32);
+        // Schedule is still active — cleanup should panic.
+        client.cleanup_vesting_schedule(&donor, &schedule_id);
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    #[should_panic(expected = "Grace period has not elapsed")]
+    fn test_cleanup_vesting_before_grace_period_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "early-vest");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Early Vest Project"),
+            &project_wallet,
+            &50u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 20_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
+        // Complete the schedule.
+        env.ledger().set_sequence_number(100);
+        client.claim_vested_installment(&donor, &schedule_id);
+        // Do NOT advance past grace period.
+        client.cleanup_vesting_schedule(&donor, &schedule_id);
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    fn test_cleanup_vesting_cancelled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "cancel-vest");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Cancel Vest Project"),
+            &project_wallet,
+            &50u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 50_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &5u32, &720u32, &0u32);
+        // Cancel the schedule — sets completed_at.
+        client.cancel_vesting(&donor, &schedule_id);
+        // Schedule should still exist (with completed_at set).
+        let s = client.get_vesting_schedule(&donor, &schedule_id);
+        assert!(s.completed_at > 0);
+        // Fast-forward past grace period.
+        env.ledger()
+            .set_sequence_number(s.completed_at + GRACE_PERIOD_LEDGERS + 1);
+        client.cleanup_vesting_schedule(&donor, &schedule_id);
+        // Schedule should now be gone.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.get_vesting_schedule(&donor, &schedule_id);
+        }));
+        assert!(
+            result.is_err(),
+            "Cancelled vesting schedule should be removed after cleanup"
+        );
+    }
+
     // ─── Platform fee tests (#385) ───────────────────────────────────────────
     #[cfg(feature = "fees")]
     #[test]
