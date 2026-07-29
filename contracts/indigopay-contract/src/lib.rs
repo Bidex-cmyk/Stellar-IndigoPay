@@ -1516,7 +1516,8 @@ fn read_platform_fee_recipients(env: &Env) -> Vec<FeeRecipient> {
 /// Split total `fee_amount` into individual recipient shares based on `share_bps` (#434).
 /// Assigns any rounding remainder to the final recipient so that the sum of all
 /// allocated recipient amounts equals `fee_amount` exactly.
-#[cfg(feature = "fees")]
+#[cfg(any(feature = "fees", feature = "testutils"))]
+#[allow(dead_code)]
 fn split_fee_recipients(
     env: &Env,
     fee_amount: i128,
@@ -13156,14 +13157,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "max_donations must be positive")]
     fn test_set_donation_rate_limit_zero_max_panics() {
-        let (env, _cid, client, admin, _pid) = setup();
+        let (_env, _cid, client, admin, _pid) = setup();
         client.set_donation_rate_limit(&admin, &0, &100);
     }
 
     #[test]
     #[should_panic(expected = "window_ledgers must be positive")]
     fn test_set_donation_rate_limit_zero_window_panics() {
-        let (env, _cid, client, admin, _pid) = setup();
+        let (_env, _cid, client, admin, _pid) = setup();
         client.set_donation_rate_limit(&admin, &5, &0);
     }
 
@@ -13268,14 +13269,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Campaign cannot be closed")]
     fn test_close_campaign_none_status_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.close_campaign(&admin, &pid);
     }
 
     /// Covers pause_project storage save (line 2038) and resume_project (line 2065).
     #[test]
     fn test_pause_resume_project_full_flow() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         let p = client.get_project(&pid);
         assert!(!p.paused);
 
@@ -13454,7 +13455,7 @@ mod tests {
     ///   - GlobalCO2OffsetGrams save (line 1515)
     #[test]
     fn test_donate_anonymous_increments_anon_count() {
-        let (env, cid, client, admin, pid) = setup();
+        let (env, cid, client, _admin, pid) = setup();
         let donor = Address::generate(&env);
         let token = mint_xlm(&env, &donor, 10 * STROOP);
 
@@ -13583,7 +13584,7 @@ mod tests {
     /// Covers donate_asset_with_privacy CO2 computation and storage saves.
     #[test]
     fn test_donate_asset_with_privacy_saves_global_stats() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (env, _cid, client, _admin, pid) = setup();
         let donor = Address::generate(&env);
         let amount = 10 * STROOP;
         client.donate_asset_with_privacy(
@@ -13614,7 +13615,7 @@ mod tests {
     /// Covers set_impact_report_threshold validation (line 3312) and save (line 3316).
     #[test]
     fn test_set_impact_report_threshold_happy() {
-        let (env, _cid, client, admin, _pid) = setup();
+        let (_env, _cid, client, admin, _pid) = setup();
         client.set_impact_report_threshold(&admin, &5u32);
         // No dedicated getter — just ensures no panic.
         assert!(true);
@@ -13623,7 +13624,7 @@ mod tests {
     /// Covers clear_impact_flag storage remove (line 3331).
     #[test]
     fn test_clear_impact_flag_happy() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.clear_impact_flag(&admin, &pid);
         // Just ensure no panic
         assert!(true);
@@ -13700,7 +13701,7 @@ mod tests {
     /// Covers deactivate_project storage save for the project being deactivated.
     #[test]
     fn test_deactivate_project_saves_state() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         assert!(client.get_project(&pid).active);
         client.deactivate_project(&admin, &pid);
         assert!(!client.get_project(&pid).active);
@@ -13709,7 +13710,7 @@ mod tests {
     /// Covers update_project_co2_rate storage operations (lines 1987-2017).
     #[test]
     fn test_update_project_co2_rate_happy() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         let p = client.get_project(&pid);
         let original = p.co2_per_xlm;
         client.update_project_co2_rate(&admin, &pid, &(original + 50));
@@ -13719,14 +13720,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "rate must be greater than zero")]
     fn test_update_project_co2_rate_zero_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.update_project_co2_rate(&admin, &pid, &0u32);
     }
 
     #[test]
     #[should_panic(expected = "CO2 per XLM exceeds maximum")]
     fn test_update_project_co2_rate_exceeds_max_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.update_project_co2_rate(&admin, &pid, &1_000_001u32);
     }
 
@@ -13734,7 +13735,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Project is not paused")]
     fn test_resume_project_not_paused_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.resume_project(&admin, &pid);
     }
 
@@ -13742,7 +13743,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Project is already paused")]
     fn test_pause_project_already_paused_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.pause_project(&admin, &pid);
         client.pause_project(&admin, &pid);
     }
@@ -13751,7 +13752,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot pause a deactivated project")]
     fn test_pause_project_deactivated_panics() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (_env, _cid, client, admin, pid) = setup();
         client.deactivate_project(&admin, &pid);
         client.pause_project(&admin, &pid);
     }

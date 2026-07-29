@@ -531,7 +531,7 @@ mod fuzz {
             let expected_count = if n == 1 { 0 } else { n - 1 };
             let capped_count = core::cmp::min(expected_count, crate::MAX_ARCHIVED_PERIODS);
 
-            env.as_contract(&cid, || {
+            let _ = env.as_contract(&cid, || {
                 use crate::get_impact_periods;
                 let periods = get_impact_periods(&env, project_id);
                 prop_assert_eq!(
