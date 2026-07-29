@@ -939,6 +939,38 @@ test("Record donation and verify stats", async () => {
 
 ---
 
+## DAO Governance & Quadratic Voting
+
+Stellar-IndigoPay uses **Quadratic Voting** for community project verification proposals. 
+
+### Core Concepts
+
+- **Voting Credits**: Calculated based on donor badge tier (`Seedling`: 100, `Tree`: 141, `Forest`: 173, `EarthGuardian`: 200).
+- **Quadratic Cost**: The credit cost of casting $V$ votes on a proposal is $V^2$. Casting 1 vote costs 1 credit, 3 votes cost 9 credits, 10 votes cost 100 credits.
+- **Multi-Proposal Allocations**: Voters can allocate their credit pool across multiple proposals in a single transaction via `vote_on_proposals`.
+- **Tally Computation**: The quadratic tally for a proposal is computed as $\Sigma \sqrt{\text{credits\_spent\_per\_voter}}$ for both `for` and `against` votes.
+
+### Functions & TS Integration
+
+```typescript
+// Query remaining voting credits for a donor
+const credits: number = await contract.get_voting_credits({ donor });
+
+// Query proposal quadratic vote tally
+const [forVotes, againstVotes]: [number, number] = await contract.get_proposal_tally({ project_id });
+
+// Cast quadratic votes on multiple proposals
+await contract.vote_on_proposals({
+  voter,
+  allocations: [
+    { project_id: "proj-001", votes_for: 6, votes_against: 0, credits_spent: 36 },
+    { project_id: "proj-002", votes_for: 0, votes_against: 8, credits_spent: 64 },
+  ],
+});
+```
+
+---
+
 ## FAQ
 
 **Q: Can I call `donate()` without the donor's authorization?**
