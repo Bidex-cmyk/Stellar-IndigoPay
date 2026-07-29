@@ -4970,7 +4970,7 @@ impl IndigoPayContract {
     }
     /// Clean up a resolved proposal and all associated vote data after the
     /// grace period has elapsed. Permissionless — anyone can call this to
-    /// help keep on-chain storage lean. Emits `prop_clean` for indexers.
+    /// help keep on-chain storage lean. Emits `prop_cln` for indexers.
     ///
     /// # Panics
     /// - If the proposal is not found.
@@ -5016,7 +5016,7 @@ impl IndigoPayContract {
             .remove(&DataKey::VoterList(project_id.clone()));
         // Emit event for indexer reconciliation.
         env.events()
-            .publish((symbol_short!("prop_clean"), project_id), ());
+            .publish((symbol_short!("prop_cln"), project_id), ());
     }
     /// Returns current vote counts and status for a proposal.
     #[cfg(feature = "governance")]
@@ -6893,9 +6893,7 @@ impl IndigoPayContract {
         // cleaned up after the grace period. The schedule is NOT removed
         // immediately — see `cleanup_vesting_schedule`.
         schedule.completed_at = env.ledger().sequence();
-        env.storage()
-            .instance()
-            .set(&schedule_key, &schedule);
+        env.storage().instance().set(&schedule_key, &schedule);
 
         // ── Interaction: return unvested tokens from contract custody to donor.
         let contract_addr = env.current_contract_address();
@@ -6909,7 +6907,7 @@ impl IndigoPayContract {
     }
     /// Clean up a completed or cancelled vesting schedule after the grace
     /// period has elapsed. Permissionless — anyone can call this to help
-    /// keep on-chain storage lean. Emits `vest_clean` for indexers.
+    /// keep on-chain storage lean. Emits `vest_cln` for indexers.
     ///
     /// # Panics
     /// - If the schedule is not found.
@@ -6936,10 +6934,8 @@ impl IndigoPayContract {
         }
         env.storage().instance().remove(&schedule_key);
         // Emit event for indexer reconciliation.
-        env.events().publish(
-            (symbol_short!("vest_clean"), donor, schedule_id),
-            (),
-        );
+        env.events()
+            .publish((symbol_short!("vest_cln"), donor, schedule_id), ());
     }
     /// Query a vesting schedule by donor and schedule ID.
     #[cfg(feature = "vesting")]
@@ -11060,8 +11056,7 @@ mod tests {
         let total: i128 = 20_000_000;
         StellarAssetClient::new(&env, &token).mint(&donor, &total);
         // 2 installments, 50 ledgers each.
-        let schedule_id =
-            client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
         // Claim 2nd (final) installment — sets completed_at.
         env.ledger().set_sequence_number(100);
         client.claim_vested_installment(&donor, &schedule_id);
@@ -11137,8 +11132,7 @@ mod tests {
             .address();
         let total: i128 = 20_000_000;
         StellarAssetClient::new(&env, &token).mint(&donor, &total);
-        let schedule_id =
-            client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &2u32, &50u32, &0u32);
         // Complete the schedule.
         env.ledger().set_sequence_number(100);
         client.claim_vested_installment(&donor, &schedule_id);
@@ -11170,8 +11164,7 @@ mod tests {
             .address();
         let total: i128 = 50_000_000;
         StellarAssetClient::new(&env, &token).mint(&donor, &total);
-        let schedule_id =
-            client.donate_vested(&token, &donor, &pid, &total, &5u32, &720u32, &0u32);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &5u32, &720u32, &0u32);
         // Cancel the schedule — sets completed_at.
         client.cancel_vesting(&donor, &schedule_id);
         // Schedule should still exist (with completed_at set).

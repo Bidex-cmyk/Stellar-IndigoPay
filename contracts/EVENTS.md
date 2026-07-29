@@ -548,7 +548,7 @@ project's Merkle Mountain Range for cumulative impact certificate verification.
 
 ---
 
-## 43. `prop_clean` (Proposal Cleanup)
+## 43. `prop_cln` (Proposal Cleanup)
 
 **Description**: Emitted when a resolved governance proposal and all associated
 vote data are cleaned up after the 30-day grace period. Permissionless — anyone
@@ -556,11 +556,11 @@ may call `cleanup_proposal` once the grace period has elapsed.
 
 | Event Name   | Topics                         | Data | When Emitted                             |
 | ------------ | ------------------------------ | ---- | ---------------------------------------- |
-| `prop_clean` | `["prop_clean", project_id]`   | `()` | After `cleanup_proposal` completes |
+| `prop_cln` | `["prop_cln", project_id]`   | `()` | After `cleanup_proposal` completes |
 
 ---
 
-## 44. `vest_clean` (Vesting Schedule Cleanup)
+## 44. `vest_cln` (Vesting Schedule Cleanup)
 
 **Description**: Emitted when a completed or cancelled vesting schedule is
 removed from storage after the 30-day grace period. Permissionless — anyone may
@@ -568,7 +568,7 @@ call `cleanup_vesting_schedule` once the grace period has elapsed.
 
 | Event Name   | Topics                                | Data | When Emitted                                  |
 | ------------ | ------------------------------------- | ---- | --------------------------------------------- |
-| `vest_clean` | `["vest_clean", donor, schedule_id]`  | `()` | After `cleanup_vesting_schedule` completes |
+| `vest_cln` | `["vest_cln", donor, schedule_id]`  | `()` | After `cleanup_vesting_schedule` completes |
 
 ---
 

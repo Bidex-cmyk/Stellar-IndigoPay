@@ -70,8 +70,8 @@ appropriate event emissions for indexer reconciliation.
 
 | Event Name   | Topics                                | Data | Description                              |
 | ------------ | ------------------------------------- | ---- | ---------------------------------------- |
-| `prop_clean` | `["prop_clean", project_id]`          | `()` | Proposal & vote data removed from storage |
-| `vest_clean` | `["vest_clean", donor, schedule_id]`  | `()` | Vesting schedule removed from storage    |
+| `prop_cln` | `["prop_cln", project_id]`          | `()` | Proposal & vote data removed from storage |
+| `vest_cln` | `["vest_cln", donor, schedule_id]`  | `()` | Vesting schedule removed from storage    |
 
 ### Cargo Feature
 
