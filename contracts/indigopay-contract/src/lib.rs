@@ -11165,6 +11165,8 @@ mod tests {
         let total: i128 = 50_000_000;
         StellarAssetClient::new(&env, &token).mint(&donor, &total);
         let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &5u32, &720u32, &0u32);
+        // Advance ledger so cancel_vesting sets a non-zero completed_at.
+        env.ledger().set_sequence_number(1);
         // Cancel the schedule — sets completed_at.
         client.cancel_vesting(&donor, &schedule_id);
         // Schedule should still exist (with completed_at set).
