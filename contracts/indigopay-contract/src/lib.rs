@@ -6109,7 +6109,6 @@ impl IndigoPayContract {
             .unwrap_or(1)
     }
 
-
     // ─── Emergency withdrawal (7-day timelock) ─────────────────────────────────
     /// Admin-only: step 1 of the emergency withdrawal flow. Records a
     /// request to send `amount` of `token` from the contract's
@@ -6139,14 +6138,10 @@ impl IndigoPayContract {
         }
         migrate_legacy_ew_key_if_present(&env, &project_id);
 
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::EmergencyWithdrawal(
-                project_id.clone(),
-                token.clone(),
-            ))
-        {
+        if env.storage().instance().has(&DataKey::EmergencyWithdrawal(
+            project_id.clone(),
+            token.clone(),
+        )) {
             panic!("Emergency withdrawal already pending for this project");
         }
         let current_ledger = env.ledger().sequence();
@@ -6194,11 +6189,7 @@ impl IndigoPayContract {
         env.storage().instance().remove(&key);
 
         let tokens_key = DataKey::EmergencyWithdrawalTokens(project_id.clone());
-        if let Some(mut tokens) = env
-            .storage()
-            .instance()
-            .get::<_, Vec<Address>>(&tokens_key)
-        {
+        if let Some(mut tokens) = env.storage().instance().get::<_, Vec<Address>>(&tokens_key) {
             if let Some(idx) = tokens.iter().position(|t| t == token) {
                 tokens.remove(idx as u32);
             }
