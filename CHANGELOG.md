@@ -18,6 +18,7 @@
 
 ### Bug Fixes
 
+* **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
 * **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
 * **backend:** invalidate impact endpoint caches on project status change (closes #016, grantfox GF-016)
   - `PATCH /api/projects/:id/status` now sweeps `cache:v1:impact:project:<id>` in addition to the existing project detail, list, global stats and `cache:v1:impact:global` keys
