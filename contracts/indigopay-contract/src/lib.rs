@@ -700,6 +700,7 @@ const EMERGENCY_WITHDRAWAL_TIMELOCK: u32 = 120_960;
 const REFUND_COOLDOWN_LEDGERS: u32 = 17_280;
 // 24 hours × 3600 s / 5 s per ledger = 17 280 ledgers. The challenge window
 // for high-value donations.
+#[allow(dead_code)]
 const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
 
 // 72 hours × 3600 s / 5 s per ledger = 51 840 ledgers. The delay between
@@ -1026,6 +1027,7 @@ fn set_impact_period_count(env: &Env, project_id: &String, count: u32) {
 /// - When admin authorization fails (M-of-N not satisfied)
 /// - When `period_start >= period_end`
 /// - When `root` is all zeros
+#[cfg(feature = "impact")]
 pub fn publish_impact_root(
     env: &Env,
     signers: &Vec<Address>,
@@ -1139,6 +1141,7 @@ pub fn publish_impact_root(
 ///
 /// # Panics
 /// - When the period index does not exist (neither current nor archived)
+#[cfg(feature = "impact")]
 pub fn verify_impact_inclusion(
     env: &Env,
     project_id: String,
@@ -1766,6 +1769,7 @@ fn get_token_config_for_donate_token(env: &Env, token: &Address) -> TokenConfig 
     panic!("Token not registered");
 }
 
+#[allow(dead_code)]
 #[inline(never)]
 fn anon_address(env: &Env) -> Address {
     Address::from_string(&String::from_str(
@@ -4013,6 +4017,7 @@ impl IndigoPayContract {
     /// - If the caller is not an admin.
     /// - If the contract is paused.
     /// - If the project does not exist.
+    #[cfg(feature = "impact")]
     pub fn set_impact_merkle_root(
         env: Env,
         admin: Address,
@@ -4834,6 +4839,7 @@ impl IndigoPayContract {
     ///
     /// - If `donor` does not match the donation record's donor.
     /// - If the donation index does not exist.
+    #[cfg(feature = "donation")]
     pub fn generate_receipt(env: Env, donor: Address, donation_index: u32) -> DonationReceipt {
         donor.require_auth();
 
@@ -4911,6 +4917,7 @@ impl IndigoPayContract {
     ///   does not match the on-chain `DonationRecord`.
     /// - The `co2_offset` does not match the on-chain value.
     /// - The `contract_signature` has been tampered with.
+    #[cfg(feature = "donation")]
     pub fn verify_receipt(env: Env, receipt: DonationReceipt) -> bool {
         // Check the donation exists on-chain
         let record: DonationRecord = match env
@@ -5025,6 +5032,7 @@ impl IndigoPayContract {
     /// Mint a project milestone NFT when a donor's cumulative donation to a
     /// specific project exceeds 100 XLM. Minting is idempotent-blocked: a second
     /// call for the same (donor, project_id) pair panics.
+    #[cfg(feature = "donation")]
     pub fn mint_project_nft(env: Env, donor: Address, project_id: String) {
         donor.require_auth();
         require_not_paused(&env);
@@ -5061,11 +5069,13 @@ impl IndigoPayContract {
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
+    #[cfg(feature = "donation")]
     pub fn has_project_nft(env: Env, donor: Address, project_id: String) -> bool {
         env.storage()
             .instance()
             .has(&DataKey::ProjectMilestoneNFT(project_id, donor))
     }
+    #[cfg(feature = "donation")]
     pub fn get_project_nft(env: Env, donor: Address, project_id: String) -> ProjectMilestoneNFT {
         env.storage()
             .instance()
@@ -6679,6 +6689,7 @@ impl IndigoPayContract {
 
     /// Admin-only (M-of-N): set the minimum donation threshold that triggers a challenge period.
     /// Setting threshold to 0 disables the challenge system (backward compatible).
+    #[cfg(feature = "donation")]
     pub fn set_challenge_threshold(env: Env, signers: Vec<Address>, threshold: i128) {
         require_admin_for_critical(&env, &signers);
         require_not_paused(&env);
@@ -6696,6 +6707,7 @@ impl IndigoPayContract {
     }
 
     /// Read-only: get the configured challenge threshold in stroops (0 if disabled).
+    #[cfg(feature = "donation")]
     pub fn get_challenge_threshold(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -6704,6 +6716,7 @@ impl IndigoPayContract {
     }
 
     /// Badge holders (≥ Seedling) can challenge a donation exceeding the threshold within the 24h window.
+    #[cfg(feature = "donation")]
     pub fn challenge_donation(env: Env, challenger: Address, donation_index: u32, reason: String) {
         challenger.require_auth();
         require_not_paused(&env);
@@ -6765,6 +6778,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: resolve a pending challenge by either approving or rejecting (refunding) the donation.
+    #[cfg(feature = "donation")]
     pub fn resolve_challenge(env: Env, admin: Address, donation_index: u32, approve: bool) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -6883,6 +6897,7 @@ impl IndigoPayContract {
     }
 
     /// Read-only: get the challenge status for a donation index.
+    #[cfg(feature = "donation")]
     pub fn get_donation_challenge(env: Env, donation_index: u32) -> Option<DonationChallenge> {
         env.storage()
             .instance()
@@ -6890,6 +6905,7 @@ impl IndigoPayContract {
     }
 
     /// Read-only: check whether a donation is finalized.
+    #[cfg(feature = "donation")]
     pub fn is_donation_finalized(env: Env, donation_index: u32) -> bool {
         let record: DonationRecord = match env
             .storage()
@@ -6918,6 +6934,7 @@ impl IndigoPayContract {
     }
 
     /// Auto-finalize an unchallenged donation after the challenge window elapses.
+    #[cfg(feature = "donation")]
     pub fn auto_finalize(env: Env, donation_index: u32) -> bool {
         let finalized = Self::is_donation_finalized(env.clone(), donation_index);
         if finalized {
