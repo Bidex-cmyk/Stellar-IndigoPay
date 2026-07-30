@@ -286,7 +286,7 @@ No tokens move — the funds already settled on the source chain. The attestatio
 ### Rules
 
 - **Verified only.** A `Pending` attestation panics with `"Attestation is not verified"`; a `Revoked` one with `"Attestation was revoked"`.
-- **Settled once.** `DataKey::SettledAttestation(id)` is written before any donation effect, so a second call panics with `"Attestation already settled"`. Query it with `is_attestation_settled(attestation_id) -> bool`.
+- **Settled once.** `SettlementKey::SettledAttestation(id)` is written before any donation effect, so a second call panics with `"Attestation already settled"`. Query it with `is_attestation_settled(attestation_id) -> bool`. The key lives on its own feature-gated enum rather than on `DataKey` so it stays out of the slim `--no-default-features` build that CI size-checks; the wire encoding is the same either way, since `#[contracttype]` encodes an enum value by variant name plus payload.
 - **Project must exist.** The attestation's `project_id` must match a registered project, or the call panics with `"Attestation project is not registered"`. A failed settlement writes nothing, so registering the project and retrying works.
 - **Permissionless.** There is nothing to gate — the relayer already authorised the underlying record, and each attestation can only ever be credited once. Anyone may pay the fee to push a settlement through.
 - **Pausable.** The contract-wide pause flag blocks settlement like every other donation-path write.

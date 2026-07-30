@@ -700,9 +700,26 @@ pub enum DataKey {
     CampaignEscrowMilestones(String),
     /// Escrow job ID for a project's campaign: (project_id) -> String.
     CampaignEscrowJobId(String),
+}
+
+/// Storage keys for cross-chain attestation settlement (#439).
+///
+/// Kept off `DataKey` so the whole enum can be feature-gated: a
+/// `#[contracttype]` enum expands before `#[cfg]` is applied to its variants,
+/// so a `DataKey::SettledAttestation` variant would be compiled into the slim
+/// `--no-default-features` build — 495 bytes against a 64 KB CI budget with
+/// ~400 to spare — even though `settle_attestation` itself is gated out of it.
+///
+/// The wire encoding is unaffected by which enum a variant lives on:
+/// `#[contracttype]` encodes an enum value as its variant *name* plus payload,
+/// so this key writes exactly the `SettledAttestation(u64)` the issue
+/// specifies.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[contracttype]
+pub enum SettlementKey {
     /// Settlement marker for a cross-chain attestation id — present once
     /// `settle_attestation` has credited that attestation to the main
-    /// contract's donation stats. Prevents double-settlement (#439).
+    /// contract's donation stats. Prevents double-settlement.
     SettledAttestation(u64),
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -3265,7 +3282,7 @@ impl IndigoPayContract {
         require_not_paused(&env);
 
         // ── Checks (pre-call): fail fast and cheap on an obvious replay.
-        let settled_key = DataKey::SettledAttestation(attestation_id);
+        let settled_key = SettlementKey::SettledAttestation(attestation_id);
         if env.storage().instance().has(&settled_key) {
             panic!("Attestation already settled");
         }
@@ -3338,7 +3355,7 @@ impl IndigoPayContract {
     pub fn is_attestation_settled(env: Env, attestation_id: u64) -> bool {
         env.storage()
             .instance()
-            .has(&DataKey::SettledAttestation(attestation_id))
+            .has(&SettlementKey::SettledAttestation(attestation_id))
     }
 
     #[cfg(any(feature = "batch", feature = "donation", feature = "testutils"))]
