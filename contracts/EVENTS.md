@@ -676,6 +676,37 @@ escrow campaign. Proxies through to the escrow contract's
 | ---------- | ------------------------------ | --------------------------------------- | ----------------------------------------------------- |
 | `esc_rsv`  | `["esc_rsv", project_id]`      | `(milestone_index: u32, approve: bool)` | When admins call `resolve_campaign_ms_dispute` |
 
+---
+
+## 50. `att_settle` (Cross-Chain Attestation Settled)
+
+**Description**: Emitted when a verified cross-chain donation attestation is
+settled into the main contract's donation stats via `settle_attestation`. One
+event per attestation id — a second settlement of the same id panics with
+`"Attestation already settled"`, so this event never repeats.
+
+| Event Name   | Topics                                    | Data                                                                    | When Emitted                                     |
+| ------------ | ----------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------ |
+| `att_settle` | `["att_settle", donor, project_id]`       | `(attestation_id: u64, amount_xlm: i128, co2_grams: i128, donation_index: u32)` | When anyone calls `settle_attestation` on a `Verified` attestation |
+
+- `donor` and `project_id` come from the attestation record, not the caller —
+  `settle_attestation` is permissionless.
+- `amount_xlm` is the attested XLM value in stroops. It is credited to the
+  project's `total_raised`, the donor's `total_donated`, and
+  `GlobalTotalRaised`.
+- `co2_grams` is `amount_xlm / STROOP * project.co2_per_xlm`, the same formula
+  the native donation path uses.
+- `donation_index` is the index of the `DonationRecord` the settlement created.
+  That record carries the `XCHAIN` currency symbol, so indexers can separate
+  bridged donations from Stellar-native ones.
+
+A settlement also emits the events the shared donation path emits: `nft_mint`
+when the donor crosses into a new badge tier, and `camp_goal` when the
+credited amount takes a campaign over its goal. It emits **no** `donated`
+event — no tokens moved on Stellar.
+
+---
+
 ## Usage Notes
 
 - All events follow Soroban's standard event format: `topics: Vec<Val>`, `data: Val`.

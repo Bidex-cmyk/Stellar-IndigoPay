@@ -504,6 +504,61 @@ pub trait EscrowInterface {
     );
 }
 
+// ─── Cross-chain attestation settlement (#439) ─────────────────────────────
+/// Lifecycle of a cross-chain donation attestation.
+///
+/// Layout MUST match the attestation-contract's `AttestationStatus` enum
+/// exactly — variant names are what the XDR encoding carries, so renaming or
+/// reordering here silently breaks the cross-contract read.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttestationStatus {
+    Pending,
+    Verified,
+    Revoked,
+}
+
+/// A cross-chain donation attestation as recorded by the attestation-contract.
+///
+/// Layout MUST match the attestation-contract's `Attestation` struct exactly
+/// (field names and order) for cross-contract XDR decoding compatibility.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Attestation {
+    pub id: u64,
+    pub source_chain: String,
+    pub source_tx_hash: String,
+    pub donor: Address,
+    pub project_id: String,
+    /// USD-equivalent value, 6 decimals (USDC convention).
+    pub amount_usd: i128,
+    /// XLM-equivalent at the time of recording, in stroops. This is the figure
+    /// settlement credits to project, donor, and global counters.
+    pub amount_xlm: i128,
+    pub message_hash: u32,
+    pub status: AttestationStatus,
+    pub created_at_ledger: u32,
+    pub verified_at_ledger: u32,
+    /// The relayer that recorded the attestation.
+    pub created_by: Address,
+}
+
+/// Cross-contract client for the attestation contract. Only the single read
+/// that settlement needs is declared — settlement never mutates the
+/// attestation contract's state.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[contractclient(name = "AttestationClient")]
+pub trait AttestationInterface {
+    fn get_attestation(env: Env, id: u64) -> Attestation;
+}
+
+/// Currency symbol stamped on the `DonationRecord` a settlement creates, so
+/// indexers can tell cross-chain donations apart from Stellar-native ones.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+const XCHAIN_CURRENCY: Symbol = symbol_short!("XCHAIN");
+
 #[contracttype]
 pub enum DataKey {
     // Multi-sig admin set: Vec<Address> of authorized admin addresses.
@@ -645,6 +700,27 @@ pub enum DataKey {
     CampaignEscrowMilestones(String),
     /// Escrow job ID for a project's campaign: (project_id) -> String.
     CampaignEscrowJobId(String),
+}
+
+/// Storage keys for cross-chain attestation settlement (#439).
+///
+/// Kept off `DataKey` so the whole enum can be feature-gated: a
+/// `#[contracttype]` enum expands before `#[cfg]` is applied to its variants,
+/// so a `DataKey::SettledAttestation` variant would be compiled into the slim
+/// `--no-default-features` build — 495 bytes against a 64 KB CI budget with
+/// ~400 to spare — even though `settle_attestation` itself is gated out of it.
+///
+/// The wire encoding is unaffected by which enum a variant lives on:
+/// `#[contracttype]` encodes an enum value as its variant *name* plus payload,
+/// so this key writes exactly the `SettledAttestation(u64)` the issue
+/// specifies.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[contracttype]
+pub enum SettlementKey {
+    /// Settlement marker for a cross-chain attestation id — present once
+    /// `settle_attestation` has credited that attestation to the main
+    /// contract's donation stats. Prevents double-settlement.
+    SettledAttestation(u64),
 }
 // ─── Constants ────────────────────────────────────────────────────────────────
 const STROOP: i128 = 10_000_000;
@@ -1811,15 +1887,25 @@ fn effective_token_rate_limit(env: &Env, token: &Address) -> (u32, u32) {
     (max, window)
 }
 
-/// Process a single donation's core logic: rate limiting, project validation,
-/// state updates (project, donor, NFT, globals), token transfers, and events.
-/// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
-/// responsible for those.
+/// Apply every storage effect of a donation: project validation and totals,
+/// donor stats and badge, Impact NFT minting, the `DonationRecord`, and the
+/// global counters.
+///
+/// Shared by the native-token donation path (`process_donation_token`) and
+/// cross-chain attestation settlement (`settle_attestation`, #439) so both
+/// produce byte-identical on-chain state. Performs no auth, no paused check,
+/// no rate limiting, and no token transfer — callers own those.
+///
+/// `xlm_equivalent` drives every XLM-denominated counter and the CO₂
+/// calculation; `raw_amount` is what lands in the `DonationRecord` alongside
+/// `token_symbol`.
+///
+/// Returns the updated project, the CO₂ grams credited, and the index of the
+/// stored `DonationRecord`.
 #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
 #[allow(clippy::too_many_arguments)]
-fn process_donation_token(
+fn apply_donation_effects(
     env: &Env,
-    token: &Address,
     token_symbol: &Symbol,
     donor: &Address,
     project_id: &String,
@@ -1827,50 +1913,7 @@ fn process_donation_token(
     xlm_equivalent: i128,
     msg_hash: u32,
     anonymous: bool,
-) {
-    let current_ledger = env.ledger().sequence();
-    let (max_donations, window_ledgers) = effective_token_rate_limit(env, token);
-
-    let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone(), token.clone());
-    let mut window: RateLimitWindow = match env.storage().instance().get(&rate_key) {
-        Some(window) => window,
-        None => {
-            let transitional_key =
-                DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
-            match env.storage().instance().get(&transitional_key) {
-                Some(window) => {
-                    env.storage().instance().remove(&transitional_key);
-                    window
-                }
-                None => {
-                    let legacy_key =
-                        LegacyDataKey::DonorRateLimit(donor.clone(), project_id.clone());
-                    match env.storage().instance().get(&legacy_key) {
-                        Some(window) => {
-                            // Move the old donor/project window only once so its
-                            // count cannot be copied into every token window.
-                            env.storage().instance().remove(&legacy_key);
-                            window
-                        }
-                        None => RateLimitWindow {
-                            window_start: current_ledger,
-                            count: 0,
-                        },
-                    }
-                }
-            }
-        }
-    };
-
-    if current_ledger - window.window_start >= window_ledgers {
-        window.window_start = current_ledger;
-        window.count = 0;
-    }
-    if window.count >= max_donations {
-        panic!("Donation rate limit exceeded");
-    }
-    window.count = window.count.checked_add(1).expect("overflow");
-    env.storage().instance().set(&rate_key, &window);
+) -> (Project, i128, u32) {
     let mut project: Project = env
         .storage()
         .instance()
@@ -1908,9 +1951,6 @@ fn process_donation_token(
             co2_offset_grams: 0,
         });
     let prev_badge = donor_stats.badge.clone();
-    // ── Effects: all state writes BEFORE the external token transfer
-    //    (Checks-Effects-Interactions to defend against reentrancy from a
-    //    malicious token contract passed via `token`).
 
     // ── Effects: state updates using XLM equivalent
     project.total_raised = project
@@ -1947,7 +1987,6 @@ fn process_donation_token(
     env.storage()
         .instance()
         .set(&DataKey::DonorStats(stats_donor), &donor_stats);
-    // Track per-project cumulative donations for milestone NFT eligibility.
 
     // Track per-project cumulative donations for milestone NFT eligibility
     let proj_total_key = DataKey::DonorProjectTotal(project_id.clone(), donor.clone());
@@ -1958,7 +1997,6 @@ fn process_donation_token(
             .checked_add(xlm_equivalent)
             .expect("overflow"),
     );
-    // Auto-mint an Impact NFT when a donor reaches a new badge tier.
 
     // Auto-mint Impact NFT when donor reaches new badge tier
     if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
@@ -2035,6 +2073,84 @@ fn process_donation_token(
     env.storage()
         .instance()
         .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
+
+    (project, co2_increment, dc)
+}
+
+/// Process a single donation's core logic: rate limiting, project validation,
+/// state updates (project, donor, NFT, globals), token transfers, and events.
+/// Does NOT handle auth, paused-check, or ensure_min_ttl — the caller is
+/// responsible for those.
+#[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+#[allow(clippy::too_many_arguments)]
+fn process_donation_token(
+    env: &Env,
+    token: &Address,
+    token_symbol: &Symbol,
+    donor: &Address,
+    project_id: &String,
+    raw_amount: i128,
+    xlm_equivalent: i128,
+    msg_hash: u32,
+    anonymous: bool,
+) {
+    let current_ledger = env.ledger().sequence();
+    let (max_donations, window_ledgers) = effective_token_rate_limit(env, token);
+
+    let rate_key = DataKey::DonorRateLimit(donor.clone(), project_id.clone(), token.clone());
+    let mut window: RateLimitWindow = match env.storage().instance().get(&rate_key) {
+        Some(window) => window,
+        None => {
+            let transitional_key =
+                DataKey::DonorRateLimitPerToken(donor.clone(), project_id.clone(), token.clone());
+            match env.storage().instance().get(&transitional_key) {
+                Some(window) => {
+                    env.storage().instance().remove(&transitional_key);
+                    window
+                }
+                None => {
+                    let legacy_key =
+                        LegacyDataKey::DonorRateLimit(donor.clone(), project_id.clone());
+                    match env.storage().instance().get(&legacy_key) {
+                        Some(window) => {
+                            // Move the old donor/project window only once so its
+                            // count cannot be copied into every token window.
+                            env.storage().instance().remove(&legacy_key);
+                            window
+                        }
+                        None => RateLimitWindow {
+                            window_start: current_ledger,
+                            count: 0,
+                        },
+                    }
+                }
+            }
+        }
+    };
+
+    if current_ledger - window.window_start >= window_ledgers {
+        window.window_start = current_ledger;
+        window.count = 0;
+    }
+    if window.count >= max_donations {
+        panic!("Donation rate limit exceeded");
+    }
+    window.count = window.count.checked_add(1).expect("overflow");
+    env.storage().instance().set(&rate_key, &window);
+
+    // ── Effects: all state writes BEFORE the external token transfer
+    //    (Checks-Effects-Interactions to defend against reentrancy from a
+    //    malicious token contract passed via `token`).
+    let (project, _co2_increment, _donation_index) = apply_donation_effects(
+        env,
+        token_symbol,
+        donor,
+        project_id,
+        raw_amount,
+        xlm_equivalent,
+        msg_hash,
+        anonymous,
+    );
 
     #[cfg(feature = "fees")]
     let (project_amount, fee_amount) = split_fee(raw_amount, read_platform_fee_bps(env));
@@ -3129,6 +3245,117 @@ impl IndigoPayContract {
             anonymous,
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    // ─── Cross-chain attestation settlement (#439) ────────────────────────────
+    /// Settle a verified cross-chain donation attestation into this contract's
+    /// donation stats.
+    ///
+    /// Cross-chain donations are recorded on the attestation-contract, which
+    /// knows nothing about projects, donor badges, or the global CO₂ counter.
+    /// This is the bridge: it reads attestation `attestation_id` from
+    /// `attestation_contract` and, if that attestation is `Verified`, credits
+    /// it exactly as if the donor had donated `amount_xlm` stroops natively —
+    /// project `total_raised` and `donor_count`, donor stats and badge tier
+    /// (minting an Impact NFT on a tier upgrade), a `DonationRecord` stamped
+    /// with the `XCHAIN` currency symbol, and the global raised/CO₂ totals.
+    ///
+    /// No tokens move: the donation already settled on the source chain. The
+    /// attestation contract's own state is never mutated — the cross-contract
+    /// call is a pure read.
+    ///
+    /// Permissionless by design. There is nothing to gate: the attestation
+    /// contract's relayer already authorised the underlying record, and this
+    /// function can only ever credit a `Verified` attestation once. Anyone may
+    /// pay the fee to push a settlement through.
+    ///
+    /// Panics when:
+    ///  - the contract is paused,
+    ///  - the attestation id is unknown to the attestation contract,
+    ///  - the attestation is `Pending` or `Revoked`,
+    ///  - the attestation was already settled,
+    ///  - `amount_xlm` is not positive,
+    ///  - `project_id` does not match a registered project, or that project is
+    ///    inactive, paused, or its campaign is closed.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn settle_attestation(env: Env, attestation_contract: Address, attestation_id: u64) {
+        require_not_paused(&env);
+
+        // ── Checks (pre-call): fail fast and cheap on an obvious replay.
+        let settled_key = SettlementKey::SettledAttestation(attestation_id);
+        if env.storage().instance().has(&settled_key) {
+            panic!("Attestation already settled");
+        }
+
+        // ── Interaction: read-only cross-contract call. It happens before any
+        //    state write, so a malicious `attestation_contract` that reenters
+        //    here finds storage untouched. The post-call re-check below closes
+        //    that window: the reentrant call sets the settled marker, and the
+        //    outer frame then panics, reverting the whole transaction.
+        let attestation =
+            AttestationClient::new(&env, &attestation_contract).get_attestation(&attestation_id);
+
+        // ── Checks (post-call): everything below reads only the returned value
+        //    and this contract's storage.
+        if attestation.id != attestation_id {
+            panic!("Attestation id mismatch");
+        }
+        match attestation.status {
+            AttestationStatus::Verified => {}
+            AttestationStatus::Pending => panic!("Attestation is not verified"),
+            AttestationStatus::Revoked => panic!("Attestation was revoked"),
+        }
+        if attestation.amount_xlm <= 0 {
+            panic!("Attestation amount must be positive");
+        }
+        if env.storage().instance().has(&settled_key) {
+            panic!("Attestation already settled");
+        }
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::Project(attestation.project_id.clone()))
+        {
+            panic!("Attestation project is not registered");
+        }
+
+        // ── Effects: mark settled first so any nested frame sees the guard,
+        //    then apply the donation exactly as the native path would.
+        env.storage().instance().set(&settled_key, &true);
+        let (_project, co2_increment, donation_index) = apply_donation_effects(
+            &env,
+            &XCHAIN_CURRENCY,
+            &attestation.donor,
+            &attestation.project_id,
+            attestation.amount_xlm,
+            attestation.amount_xlm,
+            attestation.message_hash,
+            false,
+        );
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "att_settle"),
+                attestation.donor.clone(),
+                attestation.project_id.clone(),
+            ),
+            (
+                attestation_id,
+                attestation.amount_xlm,
+                co2_increment,
+                donation_index,
+            ),
+        );
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// True once `attestation_id` has been settled into this contract's
+    /// donation stats. Lets a relayer skip attestations already bridged (#439).
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn is_attestation_settled(env: Env, attestation_id: u64) -> bool {
+        env.storage()
+            .instance()
+            .has(&SettlementKey::SettledAttestation(attestation_id))
     }
 
     #[cfg(any(feature = "batch", feature = "donation", feature = "testutils"))]
@@ -8775,6 +9002,346 @@ mod tests {
         let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.votes_for, 10);
     }
+    // ─── Cross-chain attestation settlement (#439) ───────────────────────────
+    //
+    // These deploy the real attestation-contract next to this one rather than a
+    // mock, so `Attestation`'s mirrored layout is validated against the source
+    // of truth on every run — a renamed or reordered field breaks the decode
+    // here instead of on mainnet.
+    use attestation_contract::{AttestationContract, AttestationContractClient};
+
+    /// Both contracts wired up: an initialised IndigoPay contract with one
+    /// registered project, and an attestation contract with a relayer set.
+    #[allow(clippy::type_complexity)]
+    fn settlement_setup() -> (
+        Env,
+        IndigoPayContractClient<'static>,
+        AttestationContractClient<'static>,
+        Address, // attestation contract address
+        Address, // relayer
+        Address, // donor
+        String,  // project id
+    ) {
+        let (env, _cid, client, admin, pid) = setup();
+
+        let att_addr = env.register_contract(None, AttestationContract);
+        let att_client = AttestationContractClient::new(&env, &att_addr);
+        let att_admin = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        att_client.initialize(&att_admin);
+        att_client.set_relayer(&att_admin, &relayer);
+
+        let donor = Address::generate(&env);
+        let _ = admin;
+        (env, client, att_client, att_addr, relayer, donor, pid)
+    }
+
+    /// Record a cross-chain attestation for `donor`/`project_id` worth
+    /// `amount_xlm` stroops and return its id. Still `Pending` on return.
+    fn record_attestation(
+        env: &Env,
+        att_client: &AttestationContractClient<'static>,
+        relayer: &Address,
+        donor: &Address,
+        project_id: &String,
+        tx_hash: &str,
+        amount_xlm: i128,
+    ) -> u64 {
+        att_client.record_attestation(
+            relayer,
+            &String::from_str(env, "ethereum"),
+            &String::from_str(env, tx_hash),
+            donor,
+            project_id,
+            &1_000_000i128,
+            &amount_xlm,
+            &7u32,
+        )
+    }
+
+    /// Full flow: record → verify → settle. Every donation counter the native
+    /// path maintains must move by exactly the attested XLM amount.
+    #[test]
+    fn test_settle_verified_attestation() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let amount = 50 * STROOP;
+        let id = record_attestation(&env, &att_client, &relayer, &donor, &pid, "0xabc", amount);
+        att_client.verify_attestation(&id);
+
+        assert!(!client.is_attestation_settled(&id));
+        client.settle_attestation(&att_addr, &id);
+        assert!(client.is_attestation_settled(&id));
+
+        // Project totals.
+        let project = client.get_project(&pid);
+        assert_eq!(project.total_raised, amount);
+        assert_eq!(project.donor_count, 1);
+
+        // Donor stats — the test project offsets 100 g of CO₂ per XLM.
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, amount);
+        assert_eq!(stats.donation_count, 1);
+        assert_eq!(stats.co2_offset_grams, 50 * 100);
+        assert_eq!(stats.badge, BadgeTier::Seedling);
+
+        // Crossing into Seedling mints the tier's Impact NFT.
+        assert!(client.has_nft(&donor, &BadgeTier::Seedling));
+
+        // Global counters.
+        assert_eq!(client.get_global_total(), amount);
+        assert_eq!(client.get_global_co2(), 50 * 100);
+        assert_eq!(client.get_donation_count(), 1);
+
+        // Donation record, tagged so indexers can tell it apart from a
+        // Stellar-native donation.
+        let record = client.get_donation_record(&0u32);
+        assert_eq!(record.donor, donor);
+        assert_eq!(record.project, pid);
+        assert_eq!(record.amount, amount);
+        assert_eq!(record.currency, symbol_short!("XCHAIN"));
+        assert_eq!(record.message_hash, 7u32);
+        assert!(!record.anonymous);
+    }
+
+    /// A settled attestation must be indistinguishable from a native donation
+    /// of the same size, so the two paths can share leaderboards and totals.
+    #[test]
+    fn test_settle_matches_native_donation_stats() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let amount = 120 * STROOP;
+
+        // Native donation from a different donor, for comparison.
+        let native_donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&native_donor, &amount);
+        client.donate(&token, &native_donor, &pid, &amount, &7u32);
+
+        let id = record_attestation(&env, &att_client, &relayer, &donor, &pid, "0xdef", amount);
+        att_client.verify_attestation(&id);
+        client.settle_attestation(&att_addr, &id);
+
+        let native = client.get_donor_stats(&native_donor);
+        let settled = client.get_donor_stats(&donor);
+        assert_eq!(settled.total_donated, native.total_donated);
+        assert_eq!(settled.donation_count, native.donation_count);
+        assert_eq!(settled.co2_offset_grams, native.co2_offset_grams);
+        assert_eq!(settled.badge, native.badge);
+        assert_eq!(settled.badge, BadgeTier::Tree);
+
+        // Both donations landed on the same project.
+        assert_eq!(client.get_project(&pid).total_raised, 2 * amount);
+        assert_eq!(client.get_project(&pid).donor_count, 2);
+        assert_eq!(client.get_global_total(), 2 * amount);
+    }
+
+    #[test]
+    #[should_panic(expected = "Attestation is not verified")]
+    fn test_settle_pending_attestation_panics() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let id = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0xpending",
+            10 * STROOP,
+        );
+        // Never verified.
+        client.settle_attestation(&att_addr, &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Attestation was revoked")]
+    fn test_settle_revoked_attestation_panics() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let id = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0xrevoked",
+            10 * STROOP,
+        );
+        att_client.verify_attestation(&id);
+        // A deep reorg on the source chain orphaned the tx — the attestation
+        // contract's admin revokes it before anyone settles.
+        att_client.revoke_attestation(&att_client.get_admin(), &id);
+        client.settle_attestation(&att_addr, &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Attestation already settled")]
+    fn test_settle_double_panics() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let id = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0xdouble",
+            25 * STROOP,
+        );
+        att_client.verify_attestation(&id);
+        client.settle_attestation(&att_addr, &id);
+        client.settle_attestation(&att_addr, &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Attestation project is not registered")]
+    fn test_settle_unmatched_project_panics() {
+        let (env, client, att_client, att_addr, relayer, donor, _pid) = settlement_setup();
+        let unknown = String::from_str(&env, "proj-unknown");
+        let id = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &unknown,
+            "0xnoproject",
+            25 * STROOP,
+        );
+        att_client.verify_attestation(&id);
+        client.settle_attestation(&att_addr, &id);
+    }
+
+    /// A failed settlement must leave no trace — in particular it must not
+    /// consume the attestation id, so the project can be registered and the
+    /// settlement retried.
+    #[test]
+    fn test_settle_retry_after_project_registered() {
+        let (env, _cid, client, admin, pid) = setup();
+        let att_addr = env.register_contract(None, AttestationContract);
+        let att_client = AttestationContractClient::new(&env, &att_addr);
+        let att_admin = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        att_client.initialize(&att_admin);
+        att_client.set_relayer(&att_admin, &relayer);
+        let _ = pid;
+
+        let donor = Address::generate(&env);
+        let late = String::from_str(&env, "proj-late");
+        let id = record_attestation(&env, &att_client, &relayer, &donor, &late, "0xlate", STROOP);
+        att_client.verify_attestation(&id);
+
+        // First attempt fails because the project does not exist yet.
+        assert!(client.try_settle_attestation(&att_addr, &id).is_err());
+        assert!(!client.is_attestation_settled(&id));
+
+        client.register_project(
+            &admin,
+            &late,
+            &String::from_str(&env, "Late Project"),
+            &Address::generate(&env),
+            &100u32,
+        );
+        client.settle_attestation(&att_addr, &id);
+        assert!(client.is_attestation_settled(&id));
+        assert_eq!(client.get_project(&late).total_raised, STROOP);
+    }
+
+    /// Settlement is a donation-path write, so the global pause switch must
+    /// stop it like every other one.
+    #[test]
+    #[should_panic(expected = "Contract is paused")]
+    fn test_settle_while_paused_panics() {
+        let (env, _cid, client, admin, pid) = setup();
+        let att_addr = env.register_contract(None, AttestationContract);
+        let att_client = AttestationContractClient::new(&env, &att_addr);
+        let att_admin = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        att_client.initialize(&att_admin);
+        att_client.set_relayer(&att_admin, &relayer);
+
+        let donor = Address::generate(&env);
+        let id = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0xpaused",
+            10 * STROOP,
+        );
+        att_client.verify_attestation(&id);
+        client.pause_contract(&signers1(&env, &admin));
+        client.settle_attestation(&att_addr, &id);
+    }
+
+    /// Two attestations for the same donor and project both settle, and their
+    /// effects accumulate rather than overwrite.
+    #[test]
+    fn test_settle_multiple_attestations_accumulate() {
+        let (env, client, att_client, att_addr, relayer, donor, pid) = settlement_setup();
+        let first = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0x1",
+            30 * STROOP,
+        );
+        let second = record_attestation(
+            &env,
+            &att_client,
+            &relayer,
+            &donor,
+            &pid,
+            "0x2",
+            80 * STROOP,
+        );
+        att_client.verify_attestation(&first);
+        att_client.verify_attestation(&second);
+
+        client.settle_attestation(&att_addr, &first);
+        client.settle_attestation(&att_addr, &second);
+
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, 110 * STROOP);
+        assert_eq!(stats.donation_count, 2);
+        assert_eq!(stats.badge, BadgeTier::Tree);
+        // donor_count counts unique donors, not donations.
+        assert_eq!(client.get_project(&pid).donor_count, 1);
+        assert_eq!(client.get_donation_count(), 2);
+    }
+
+    /// The settlement event carries the attestation id, the credited amount,
+    /// the CO₂ grams, and the donation index it produced.
+    #[test]
+    fn test_settle_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+
+        let (env, cid, client, _admin, pid) = setup();
+        let att_addr = env.register_contract(None, AttestationContract);
+        let att_client = AttestationContractClient::new(&env, &att_addr);
+        let att_admin = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        att_client.initialize(&att_admin);
+        att_client.set_relayer(&att_admin, &relayer);
+
+        let donor = Address::generate(&env);
+        let amount = 40 * STROOP;
+        let id = record_attestation(&env, &att_client, &relayer, &donor, &pid, "0xevent", amount);
+        att_client.verify_attestation(&id);
+        client.settle_attestation(&att_addr, &id);
+
+        // `settle_attestation` is the last top-level call, so `all()` still
+        // holds its events — see `assert_last_event_contains`.
+        let events = env.events().all().filter_by_contract(&cid);
+        let rendered = std::format!("{:?}", events.events().last().unwrap());
+        assert!(
+            rendered.contains("att_settle"),
+            "expected `att_settle` in event, got: {}",
+            rendered
+        );
+    }
+
     // ─── ProjectMilestoneNFT tests (#205) ────────────────────────────────────
     #[test]
     fn test_mint_project_nft_success() {
