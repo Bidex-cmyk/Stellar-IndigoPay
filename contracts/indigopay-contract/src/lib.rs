@@ -1027,7 +1027,6 @@ fn set_impact_period_count(env: &Env, project_id: &String, count: u32) {
 /// - When admin authorization fails (M-of-N not satisfied)
 /// - When `period_start >= period_end`
 /// - When `root` is all zeros
-#[cfg(feature = "impact")]
 pub fn publish_impact_root(
     env: &Env,
     signers: &Vec<Address>,
@@ -1141,7 +1140,6 @@ pub fn publish_impact_root(
 ///
 /// # Panics
 /// - When the period index does not exist (neither current nor archived)
-#[cfg(feature = "impact")]
 pub fn verify_impact_inclusion(
     env: &Env,
     project_id: String,
@@ -4017,7 +4015,6 @@ impl IndigoPayContract {
     /// - If the caller is not an admin.
     /// - If the contract is paused.
     /// - If the project does not exist.
-    #[cfg(feature = "impact")]
     pub fn set_impact_merkle_root(
         env: Env,
         admin: Address,
