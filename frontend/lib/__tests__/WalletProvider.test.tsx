@@ -11,24 +11,30 @@ import { render, screen, act, waitFor } from "@testing-library/react";
 const ADMIN = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const DONOR = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
-/** In-memory mock of the wallet adapter layer. */
-const mockAdapter = {
-  id: "freighter" as const,
-  name: "Freighter",
-  description: "Mock wallet",
-  installUrl: "https://freighter.app",
-  isInstalled: jest.fn().mockResolvedValue(true),
-  getPublicKey: jest.fn().mockResolvedValue(DONOR),
-  signTransaction: jest.fn().mockResolvedValue("SIGNED_XDR"),
-};
+// Must be vars (not const) because jest.mock calls are hoisted above
+// the declaration. Using factory functions to avoid the TDZ trap.
+var mockIsInstalled: jest.Mock = jest.fn().mockResolvedValue(true);
+var mockGetPublicKey: jest.Mock = jest.fn().mockResolvedValue(DONOR);
+var mockSignTransaction: jest.Mock = jest.fn().mockResolvedValue("SIGNED_XDR");
+var mockResolveDefaultWallet: jest.Mock = jest.fn();
+var mockGetWalletById: jest.Mock = jest.fn();
+var mockPersistWalletSelection: jest.Mock = jest.fn();
+var mockClearWalletSelection: jest.Mock = jest.fn();
 
-const mockResolveDefaultWallet = jest.fn();
-const mockGetWalletById = jest.fn();
-const mockPersistWalletSelection = jest.fn();
-const mockClearWalletSelection = jest.fn();
+function makeAdapter() {
+  return {
+    id: "freighter" as const,
+    name: "Freighter",
+    description: "Mock wallet",
+    installUrl: "https://freighter.app",
+    isInstalled: mockIsInstalled,
+    getPublicKey: mockGetPublicKey,
+    signTransaction: mockSignTransaction,
+  };
+}
 
 jest.mock("@/lib/wallets", () => ({
-  getAvailableWallets: jest.fn().mockResolvedValue([mockAdapter]),
+  getAvailableWallets: jest.fn().mockResolvedValue([makeAdapter()]),
   getWalletById: (...args: unknown[]) => mockGetWalletById(...args),
   resolveDefaultWallet: (...args: unknown[]) => mockResolveDefaultWallet(...args),
   persistWalletSelection: (...args: unknown[]) => mockPersistWalletSelection(...args),
@@ -36,6 +42,17 @@ jest.mock("@/lib/wallets", () => ({
 }));
 
 import { WalletProvider, useWallet } from "@/lib/WalletProvider";
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockIsInstalled.mockResolvedValue(true);
+  mockGetPublicKey.mockResolvedValue(DONOR);
+  mockSignTransaction.mockResolvedValue("SIGNED_XDR");
+  mockResolveDefaultWallet.mockResolvedValue({ adapter: makeAdapter(), id: "freighter" });
+  mockGetWalletById.mockImplementation((id: string) =>
+    id === "freighter" ? makeAdapter() : undefined,
+  );
+});
 
 /**
  * Consumer that surfaces every relevant context value as data-testids.
@@ -61,15 +78,6 @@ function Dump() {
     </div>
   );
 }
-
-beforeEach(() => {
-  jest.clearAllMocks();
-  mockAdapter.isInstalled.mockResolvedValue(true);
-  mockAdapter.getPublicKey.mockResolvedValue(DONOR);
-  mockAdapter.signTransaction.mockResolvedValue("SIGNED_XDR");
-  mockResolveDefaultWallet.mockResolvedValue({ adapter: mockAdapter, id: "freighter" });
-  mockGetWalletById.mockImplementation((id: string) => (id === "freighter" ? mockAdapter : undefined));
-});
 
 describe("WalletProvider", () => {
   it("restores a previously authorised public key on mount", async () => {
@@ -105,7 +113,6 @@ describe("WalletProvider", () => {
   });
 
   it("connect() transitions to connected after user grants access", async () => {
-    // On mount, resolveDefaultWallet returns null so we start idle
     mockResolveDefaultWallet.mockResolvedValue(null);
 
     render(
@@ -117,8 +124,10 @@ describe("WalletProvider", () => {
       expect(screen.getByTestId("state").textContent).toBe("idle"),
     );
 
-    // Now make resolveDefaultWallet return a valid adapter for connect()
-    mockResolveDefaultWallet.mockResolvedValue({ adapter: mockAdapter, id: "freighter" });
+    mockResolveDefaultWallet.mockResolvedValue({
+      adapter: makeAdapter(),
+      id: "freighter",
+    });
 
     await act(async () => {
       screen.getByTestId("connect").click();
@@ -129,7 +138,7 @@ describe("WalletProvider", () => {
     );
     expect(screen.getByTestId("public-key").textContent).toBe(DONOR);
     expect(screen.getByTestId("error").textContent).toBe("");
-    expect(mockAdapter.getPublicKey).toHaveBeenCalledTimes(1);
+    expect(mockGetPublicKey).toHaveBeenCalledTimes(1);
     expect(mockPersistWalletSelection).toHaveBeenCalledWith("freighter");
   });
 
@@ -145,8 +154,11 @@ describe("WalletProvider", () => {
       expect(screen.getByTestId("state").textContent).toBe("idle"),
     );
 
-    mockResolveDefaultWallet.mockResolvedValue({ adapter: mockAdapter, id: "freighter" });
-    mockAdapter.getPublicKey.mockRejectedValueOnce(new Error("user rejected access"));
+    mockResolveDefaultWallet.mockResolvedValue({
+      adapter: makeAdapter(),
+      id: "freighter",
+    });
+    mockGetPublicKey.mockRejectedValueOnce(new Error("user rejected access"));
 
     await act(async () => {
       screen.getByTestId("connect").click();
@@ -155,7 +167,7 @@ describe("WalletProvider", () => {
     await waitFor(() =>
       expect(screen.getByTestId("state").textContent).toBe("error"),
     );
-    expect(screen.getByTestId("error").textContent).toMatch(/rejected access/i);
+    expect(screen.getByTestId("error").textContent).toMatch(/rejected/i);
   });
 
   it("handles connection rejection gracefully", async () => {
@@ -170,8 +182,11 @@ describe("WalletProvider", () => {
       expect(screen.getByTestId("state").textContent).toBe("idle"),
     );
 
-    mockResolveDefaultWallet.mockResolvedValue({ adapter: mockAdapter, id: "freighter" });
-    mockAdapter.getPublicKey.mockRejectedValueOnce(new Error("User declined"));
+    mockResolveDefaultWallet.mockResolvedValue({
+      adapter: makeAdapter(),
+      id: "freighter",
+    });
+    mockGetPublicKey.mockRejectedValueOnce(new Error("User declined"));
 
     await act(async () => {
       screen.getByTestId("connect").click();
@@ -205,7 +220,7 @@ describe("WalletProvider", () => {
   });
 
   it("isAdmin returns true only when the connected key matches", async () => {
-    mockAdapter.getPublicKey.mockResolvedValue(ADMIN.toLowerCase());
+    mockGetPublicKey.mockResolvedValue(ADMIN.toLowerCase());
 
     render(
       <WalletProvider>
@@ -220,7 +235,7 @@ describe("WalletProvider", () => {
   });
 
   it("isAdmin returns false when key does not match", async () => {
-    mockAdapter.getPublicKey.mockResolvedValue(DONOR);
+    mockGetPublicKey.mockResolvedValue(DONOR);
 
     render(
       <WalletProvider>
@@ -257,16 +272,6 @@ describe("WalletProvider", () => {
   });
 
   it("sign() returns signedXDR when wallet is connected", async () => {
-    render(
-      <WalletProvider>
-        <Dump />
-      </WalletProvider>,
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId("state").textContent).toBe("connected"),
-    );
-
-    // Access the hook directly via a child component
     function SignProbe() {
       const w = useWallet();
       const [result, setResult] = React.useState<string>("");

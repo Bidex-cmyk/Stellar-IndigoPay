@@ -72,7 +72,7 @@ The frontend is deployed on Vercel and connected to Stellar Testnet. You can bro
 | 🏭 **Hosting**              | [Vercel](https://vercel.com)                                        |
 | 🔑 **Wallet**               | [Freighter](https://freighter.app) (switch to Testnet)              |
 | 💰 **Testnet XLM**          | [Friendbot](https://friendbot.stellar.org)                          |
-| 📦 **Contract ID (Testnet)**| _See [Deployment](#-deployment) section below_                      |
+| 📦 **Contract ID (Testnet)**| [`CAPE7IB3...INPE2`](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) |
 
 ---
 
@@ -315,34 +315,71 @@ The script outputs the deployed `CONTRACT_ID`. Set it in your `.env` files:
 
 ```bash
 # frontend/.env.local
-NEXT_PUBLIC_CONTRACT_ID=<your-deployed-contract-id>
+NEXT_PUBLIC_CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
 
 # backend/.env
-CONTRACT_ID=<your-deployed-contract-id>
+CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
 ```
 
-> **Deployed Testnet contract ID:** _Set `NEXT_PUBLIC_CONTRACT_ID` in your Vercel env vars after deployment._
+> **Deployed Testnet contract ID:** `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2`
+>
+> | Detail | Value |
+> |--------|-------|
+> | **Contract ID** | `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2` |
+> | **Network** | Stellar Testnet |
+> | **Deploy TX** | [`70ec8c68...`](https://stellar.expert/explorer/testnet/tx/70ec8c6814b15dd9b5b81414e62d90fcf17a2321cffac2d398fe62dfea2602ef) |
+> | **Init TX** | [`63eb9a72...`](https://stellar.expert/explorer/testnet/tx/63eb9a72fbf93c1413b58a33fe108f261203d157981a8b165d730a0556ec7e95) |
+> | **Contract Interaction TX** | [`8db770da...`](https://stellar.expert/explorer/testnet/tx/8db770da90023b480204531aca9c1d9c10e2b6587fd2d5f4ffb3c3d3666bea22) — `register_project` |
+> | **Explorer** | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) |
+> | **WASM Size** | 51 KB (slim; within 64 KB limit) |
 
 #### Contract interaction example
 
 ```typescript
-import { Contract, nativeToScVal, rpc, Address } from "@stellar/stellar-sdk";
+import { Contract, scValToNative, Address } from "@stellar/stellar-sdk";
 
+const CONTRACT_ID = "CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2";
 const contract = new Contract(CONTRACT_ID);
 
 // Read global donation total (free, simulated call)
-const total = await contract.call("get_global_total");
-console.log("Total XLM raised:", scValToNative(total.result.retval));
+const result = await contract.call("get_global_total");
+console.log("Total XLM raised:", scValToNative(result.retval));
 
-// Make a donation (requires wallet signature)
-const tx = await buildContractDonationTransaction({
-  contractId: CONTRACT_ID,
-  tokenAddress: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-  donor: publicKey,
-  projectId: "project-001",
-  amount: "10",
-  msgHash: hashMessage("Supporting climate action!"),
-});
+// Read a registered project
+const project = await contract.call("get_project",
+  scValToNative({ project_id: "project-001" }));
+console.log("Project:", scValToNative(project.retval));
+
+// Read project count
+const count = await contract.call("get_project_count");
+console.log("Projects registered:", scValToNative(count.retval));
+```
+
+#### Contract interaction via Stellar CLI
+
+```bash
+# Read a project
+stellar contract invoke \
+  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --source deployer --network testnet \
+  -- get_project --project_id project-001
+
+# Register a new project (requires admin key)
+stellar contract invoke \
+  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --source deployer --network testnet \
+  -- register_project \
+  --admin GCRTWQ6NCS6XZPPYATVLZYLY5BBRGMA3J5VTQNTICQL4TZLXHZTEGAXC \
+  --project_id project-002 \
+  --name 'Solar Kenya Initiative' \
+  --wallet GCRTWQ6NCS6XZPPYATVLZYLY5BBRGMA3J5VTQNTICQL4TZLXHZTEGAXC \
+  --co2_per_xlm 6200
+
+# Get global stats
+stellar contract invoke \
+  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --source deployer --network testnet \
+  -- get_global_stats
 ```
 
 See [`docs/contract-integration.md`](docs/contract-integration.md) for the full partner SDK guide with TypeScript, Go, and Python examples.
