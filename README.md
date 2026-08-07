@@ -13,6 +13,9 @@
 
 [![Stellar](https://img.shields.io/badge/Stellar-Powered-6366F1?logo=stellar)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Contracts-7C3AED)](https://soroban.stellar.org)
+[![Live Demo](https://img.shields.io/badge/Live-Demo-10B981?logo=vercel)](https://stellar-indigo-pay.vercel.app)
+[![Testnet Deployed](https://img.shields.io/badge/Contract-Testnet-8B5CF6?logo=stellar)](https://stellar.expert/explorer/testnet/contract/CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT)
+[![Demo Video](https://img.shields.io/badge/Demo-Video-EF4444?logo=youtube)](#-demo-video)
 [![Node 20](https://img.shields.io/badge/Node-20%20LTS-339933?logo=node.js)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript)](https://www.typescriptlang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev)
