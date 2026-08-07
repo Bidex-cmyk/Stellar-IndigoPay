@@ -1,8 +1,6 @@
 <div align="center">
 
-# ✦ Stellar-IndigoPay
-
-### Fund the planet. One XLM at a time.
+<img src="assets/logo.svg" alt="Stellar-IndigoPay — Fund the planet. One XLM at a time." width="520" />
 
 [![MIT License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-6366F1.svg)](CONTRIBUTING.md)
