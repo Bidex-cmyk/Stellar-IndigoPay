@@ -96,6 +96,13 @@ export default function DonateForm({
     setMessage(initialMessage);
   }, [initialMessage]);
 
+  // Track a refresh counter so we can trigger balance re-fetch after
+  // a successful transaction without depending on publicKey/currency
+  // changing (which they don't after a donation).
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+
+  const refreshBalances = () => setBalanceRefreshKey((k) => k + 1);
+
   useEffect(() => {
     let mounted = true;
     async function loadBalances() {
@@ -128,7 +135,8 @@ export default function DonateForm({
     return () => {
       mounted = false;
     };
-  }, [publicKey, currency]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey, currency, balanceRefreshKey]);
 
   const { errors, validate, clearField } = useFormValidation(donationSchema);
   const [validationAnnouncement, setValidationAnnouncement] = useState<string>("");
@@ -294,6 +302,7 @@ export default function DonateForm({
         const result = await submitTransaction(createSigned);
         setTxHash(result.hash);
 
+        refreshBalances();
         setStep("success");
         onSuccess?.();
         return;
@@ -362,6 +371,7 @@ export default function DonateForm({
           amountXLM: amountNum.toString(),
         });
 
+        refreshBalances();
         setStep("success");
         onSuccess?.();
         return;
@@ -408,8 +418,12 @@ export default function DonateForm({
       setStep("submitting");
       const result = await submitTransaction(signedXDR);
       setTxHash(result.hash);
-        setStep("recording");
-        await recordDonationMutation.mutateAsync({
+
+      setStep("recording");
+      // Record via React Query mutation (revalidates the donation feed) and
+      // also via the direct API call for immediate persistence.
+      await Promise.all([
+        recordDonationMutation.mutateAsync({
           projectId: project.id,
           donorAddress: publicKey,
           amount: amountNum.toString(),
@@ -417,24 +431,24 @@ export default function DonateForm({
           message: message.trim() || undefined,
           transactionHash: result.hash,
           idempotencyKey,
-        });
-
-      setStep("recording");
-      await recordDonation({
-        projectId: project.id,
-        donorAddress: publicKey,
-        amount: amountNum.toString(),
-        currency: currency,
-        message: message.trim() || undefined,
-        transactionHash: result.hash,
-        idempotencyKey,
-      });
+        }),
+        recordDonation({
+          projectId: project.id,
+          donorAddress: publicKey,
+          amount: amountNum.toString(),
+          currency: currency,
+          message: message.trim() || undefined,
+          transactionHash: result.hash,
+          idempotencyKey,
+        }),
+      ]);
 
       trackEvent("donation_confirmed", {
         projectId: project.id,
         amountXLM: currency === "XLM" ? amountNum.toString() : undefined,
       });
 
+      refreshBalances();
       setStep("success");
       onSuccess?.();
     } catch (err: unknown) {
@@ -479,6 +493,19 @@ export default function DonateForm({
           has been sent to <span className="font-semibold">{project.name}</span>
           .
         </p>
+
+        {/* Updated balance after donation */}
+        {xlmBalance !== null && (
+          <div className="mb-4 p-3 bg-[rgba(99,102,241,0.04)] dark:bg-[rgba(129,140,248,0.06)] border border-[rgba(99,102,241,0.10)] dark:border-[rgba(129,140,248,0.12)] rounded-xl">
+            <p className="text-xs text-[#64748B] dark:text-[#94A3B8] font-body">
+              Updated Balance
+            </p>
+            <p className="text-lg font-display font-bold text-[#0F172A] dark:text-[#E2E8F0]">
+              {formatXLM(parseFloat(xlmBalance))} XLM
+            </p>
+          </div>
+        )}
+
         {donorBadge && (
           <div className="mb-4 p-4 bg-[rgba(99,102,241,0.06)] border border-[rgba(99,102,241,0.12)] rounded-xl">
             <p className="text-sm font-semibold text-[#0F172A] dark:text-[#E2E8F0] mb-1">
