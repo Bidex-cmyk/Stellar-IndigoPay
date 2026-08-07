@@ -1,19 +1,22 @@
 /**
  * __tests__/WalletConnect.test.tsx
  *
- * Behavioral tests for WalletConnect covering connect/disconnect flow,
- * address display, error handling, and Freighter detection.
+ * Behavioral tests for WalletConnect covering multi-wallet detection,
+ * connection flow, error handling, and the no-wallets-installed state.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import WalletConnect from "../WalletConnect";
 
-const mockConnectWallet = jest.fn();
-const mockIsFreighterInstalled = jest.fn();
+// Mock the wallet registry to return controlled wallet lists
+const mockGetAvailableWallets = jest.fn();
 
-jest.mock("@/lib/wallet", () => ({
-  connectWallet: (...args: unknown[]) => mockConnectWallet(...args),
-  isFreighterInstalled: (...args: unknown[]) => mockIsFreighterInstalled(...args),
+jest.mock("@/lib/wallets", () => ({
+  getAvailableWallets: (...args: unknown[]) => mockGetAvailableWallets(...args),
+  getWalletById: jest.fn(),
+  resolveDefaultWallet: jest.fn(),
+  persistWalletSelection: jest.fn(),
+  clearWalletSelection: jest.fn(),
 }));
 
 jest.mock("@/lib/analytics", () => ({
@@ -38,101 +41,110 @@ jest.mock("@/lib/i18n", () => ({
   }),
 }));
 
+function makeWalletAdapter(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "freighter",
+    name: "Freighter",
+    description: "The most popular Stellar wallet.",
+    installUrl: "https://freighter.app",
+    isInstalled: jest.fn().mockResolvedValue(true),
+    getPublicKey: jest.fn().mockResolvedValue("GABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890"),
+    signTransaction: jest.fn().mockResolvedValue("signed-xdr"),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
-  mockIsFreighterInstalled.mockResolvedValue(true);
+  // Default: one wallet (Freighter) is available
+  mockGetAvailableWallets.mockResolvedValue([makeWalletAdapter()]);
 });
 
 describe("WalletConnect", () => {
-  it("renders the connect button when no wallet is connected", () => {
+  it("shows detection spinner while discovering wallets", () => {
+    // Don't resolve the promise — stay in "detecting" state
+    mockGetAvailableWallets.mockReturnValue(new Promise(() => {}));
     render(<WalletConnect onConnect={jest.fn()} />);
-    expect(
-      screen.getByRole("button", { name: /connect freighter wallet/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/detecting stellar wallets/i)).toBeInTheDocument();
   });
 
-  it("calls connectWallet on button click and invokes onConnect", async () => {
+  it("shows install prompt when no wallets are detected", async () => {
+    mockGetAvailableWallets.mockResolvedValue([]);
+    render(<WalletConnect onConnect={jest.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText(/install a stellar wallet/i)).toBeInTheDocument();
+    });
+    // Shows install links for other wallets
+    expect(screen.getByText(/Albedo/)).toBeInTheDocument();
+    expect(screen.getByText(/xBull/)).toBeInTheDocument();
+    expect(screen.getByText(/Rabet/)).toBeInTheDocument();
+  });
+
+  it("renders wallet options when wallets are available", async () => {
+    mockGetAvailableWallets.mockResolvedValue([
+      makeWalletAdapter({ id: "freighter", name: "Freighter" }),
+      makeWalletAdapter({ id: "albedo", name: "Albedo" }),
+    ]);
+    render(<WalletConnect onConnect={jest.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Freighter")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Albedo")).toBeInTheDocument();
+    expect(screen.getByText(/2 wallets detected/i)).toBeInTheDocument();
+  });
+
+  it("calls getPublicKey and onConnect when a wallet is clicked", async () => {
     const user = userEvent.setup();
     const onConnect = jest.fn();
-    mockConnectWallet.mockResolvedValue({
-      publicKey: "GABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
-      error: null,
-    });
+    const adapter = makeWalletAdapter();
+    mockGetAvailableWallets.mockResolvedValue([adapter]);
 
     render(<WalletConnect onConnect={onConnect} />);
-    await user.click(
-      screen.getByRole("button", { name: /connect freighter wallet/i }),
-    );
 
-    expect(mockConnectWallet).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getByText("Freighter")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("wallet-option-freighter"));
+
+    expect(adapter.getPublicKey).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(onConnect).toHaveBeenCalledWith(
         "GABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
+        "freighter",
       );
     });
   });
 
-  it("shows error message when connection fails", async () => {
+  it("shows error message when wallet connection fails", async () => {
     const user = userEvent.setup();
-    mockConnectWallet.mockResolvedValue({
-      publicKey: null,
-      error: "Connection rejected.",
+    const adapter = makeWalletAdapter({
+      getPublicKey: jest.fn().mockRejectedValue(new Error("Connection rejected.")),
     });
+    mockGetAvailableWallets.mockResolvedValue([adapter]);
 
     render(<WalletConnect onConnect={jest.fn()} />);
-    await user.click(
-      screen.getByRole("button", { name: /connect freighter wallet/i }),
-    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Freighter")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("wallet-option-freighter"));
 
     await waitFor(() => {
       expect(screen.getByText("Connection rejected.")).toBeInTheDocument();
     });
   });
 
-  it("opens Freighter install page when wallet is not installed", async () => {
-    const user = userEvent.setup();
-    mockIsFreighterInstalled.mockResolvedValue(false);
-    const openSpy = jest.spyOn(window, "open").mockImplementation();
-
+  it("shows single connect button when only one wallet is available", async () => {
+    mockGetAvailableWallets.mockResolvedValue([makeWalletAdapter()]);
     render(<WalletConnect onConnect={jest.fn()} />);
-    await user.click(
-      screen.getByRole("button", { name: /connect freighter wallet/i }),
-    );
 
     await waitFor(() => {
-      expect(openSpy).toHaveBeenCalledWith("https://freighter.app", "_blank");
+      expect(screen.getByTestId("wallet-option-freighter")).toBeInTheDocument();
     });
-    openSpy.mockRestore();
-  });
-
-  it("shows the Freighter installation link", () => {
-    render(<WalletConnect onConnect={jest.fn()} />);
-    expect(screen.getByText(/install freighter/i)).toHaveAttribute(
-      "href",
-      "https://freighter.app",
-    );
-  });
-
-  it("displays a loading spinner while connecting", async () => {
-    const user = userEvent.setup();
-    let resolveConnect!: (value: { publicKey: string | null; error: string | null }) => void;
-    mockConnectWallet.mockImplementation(
-      () => new Promise((resolve) => { resolveConnect = resolve; }),
-    );
-
-    render(<WalletConnect onConnect={jest.fn()} />);
-    await user.click(
-      screen.getByRole("button", { name: /connect freighter wallet/i }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText(/connecting/i)).toBeInTheDocument();
-    });
-
-    resolveConnect({ publicKey: null, error: null });
-
-    await waitFor(() => {
-      expect(screen.queryByText(/connecting/i)).not.toBeInTheDocument();
-    });
+    // Only one wallet card shown
+    expect(screen.queryByTestId("wallet-option-albedo")).not.toBeInTheDocument();
   });
 });
