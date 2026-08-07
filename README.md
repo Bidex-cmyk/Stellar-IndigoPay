@@ -290,6 +290,39 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 ---
 
+## 📸 Screenshots
+
+| # | Screenshot | Description |
+|---|-----------|-------------|
+| 1 | ![Wallet Options](screenshots/01-wallet-options.png) | Wallet options available — multi-wallet picker with Freighter, Albedo, xBull, Rabet |
+| 2 | ![Wallet Connected](screenshots/02-wallet-connected.png) | Wallet connected state showing the active Stellar public key |
+| 3 | ![Balance Displayed](screenshots/03-balance-displayed.png) | XLM balance displayed in the donor dashboard |
+| 4 | ![Transaction Success](screenshots/04-transaction-success.png) | Successful Testnet transaction — donation confirmation |
+| 5 | ![Transaction Result](screenshots/05-transaction-result.png) | Transaction result with hash and Stellar Expert link |
+| 6 | ![Mobile Responsive](screenshots/06-mobile-responsive.png) | Mobile responsive UI (iPhone X viewport, 375×812) |
+| 7 | ![CI/CD Pipeline](screenshots/07-ci-pipeline.png) | CI/CD pipeline running on GitHub Actions |
+| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 421 passing tests across 47 suites |
+
+---
+
+## 🎥 Demo Video
+
+A 2-minute walkthrough demonstrating the complete donor flow:
+
+1. Connect wallet (multi-wallet picker)
+2. View XLM balance
+3. Browse climate projects
+4. Make a testnet donation
+5. View transaction confirmation on Stellar Expert
+6. Check updated balance and dashboard
+7. Mobile responsive view
+
+> **📹 Watch the demo:** _[Demo video link will be added here — record using Loom, Screen Studio, or OBS and paste the link]_
+>
+> **Recording script:** See [`scripts/demo-script.md`](scripts/demo-script.md) for a step-by-step guide.
+
+---
+
 ## 🚢 Deployment
 
 | Environment           | Path                                                                                                                                                                                                       |
