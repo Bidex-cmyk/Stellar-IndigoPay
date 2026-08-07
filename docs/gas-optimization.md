@@ -5,8 +5,11 @@
 Soroban gas costs are determined by CPU instructions, memory usage, and storage I/O. This document catalogs the optimization strategies applied to the IndigoPay contract and benchmarks gas usage per transaction type on Stellar Testnet.
 
 **Network:** Stellar Testnet  
-**Contract ID:** `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2`  
-**WASM Size:** 51 KB (slim build, within 64 KB limit)
+**Slim Contract ID:** `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2` (51 KB, core registry)  
+**Optimized Contract ID:** `CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT` (103 KB, donation + campaign)  
+**Latest Deploy TX:** [`17af18015e4f65cc3e2013947fa1aae76e1034216738fa7b4ce6ca084c46eeb7`](https://stellar.expert/explorer/testnet/tx/17af18015e4f65cc3e2013947fa1aae76e1034216738fa7b4ce6ca084c46eeb7)  
+**Latest Init TX:** [`8d5bb1b93a6e87221f110c09612c02a07f8efa46195c17361960a84944b497a0`](https://stellar.expert/explorer/testnet/tx/8d5bb1b93a6e87221f110c09612c02a07f8efa46195c17361960a84944b497a0)  
+**Donation TX:** [`b577a3b449e5f2614c055208d3e35f6e7654ba41d8f9cd9eb7f07de2c6e47c96`](https://stellar.expert/explorer/testnet/tx/b577a3b449e5f2614c055208d3e35f6e7654ba41d8f9cd9eb7f07de2c6e47c96) (100 XLM donation with NFT mint + event emission)
 
 ---
 

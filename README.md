@@ -72,7 +72,8 @@ The frontend is deployed on Vercel and connected to Stellar Testnet. You can bro
 | 🏭 **Hosting**              | [Vercel](https://vercel.com)                                        |
 | 🔑 **Wallet**               | [Freighter](https://freighter.app) (switch to Testnet)              |
 | 💰 **Testnet XLM**          | [Friendbot](https://friendbot.stellar.org)                          |
-| 📦 **Contract ID (Testnet)**| [`CAPE7IB3...INPE2`](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) |
+| 📦 **Slim Contract ID (Testnet)** | [`CAPE7IB3...INPE2`](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) |
+| 📦 **Optimized Contract ID (Testnet)** | [`CCG3QSD...J6BT`](https://stellar.expert/explorer/testnet/contract/CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT) |
 
 ---
 
@@ -354,17 +355,18 @@ NEXT_PUBLIC_CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
 CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
 ```
 
-> **Deployed Testnet contract ID:** `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2`
+> **Deployed Testnet contract IDs:**
 >
-> | Detail | Value |
-> |--------|-------|
-> | **Contract ID** | `CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2` |
-> | **Network** | Stellar Testnet |
-> | **Deploy TX** | [`70ec8c68...`](https://stellar.expert/explorer/testnet/tx/70ec8c6814b15dd9b5b81414e62d90fcf17a2321cffac2d398fe62dfea2602ef) |
-> | **Init TX** | [`63eb9a72...`](https://stellar.expert/explorer/testnet/tx/63eb9a72fbf93c1413b58a33fe108f261203d157981a8b165d730a0556ec7e95) |
-> | **Contract Interaction TX** | [`8db770da...`](https://stellar.expert/explorer/testnet/tx/8db770da90023b480204531aca9c1d9c10e2b6587fd2d5f4ffb3c3d3666bea22) — `register_project` |
-> | **Explorer** | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) |
-> | **WASM Size** | 51 KB (slim; within 64 KB limit) |
+> | Detail | Slim Contract | Optimized Contract |
+> |--------|--------------|-------------------|
+> | **Contract ID** | `CAPE7IB3...INPE2` | `CCG3QSD...J6BT` |
+> | **Features** | Core registry + reads | donation + campaign + full feature set |
+> | **WASM Size** | 51 KB (slim) | 103 KB (wasm-opt -Oz) |
+> | **Deploy TX** | [`70ec8c68...`](https://stellar.expert/explorer/testnet/tx/70ec8c6814b15dd9b5b81414e62d90fcf17a2321cffac2d398fe62dfea2602ef) | [`17af1801...`](https://stellar.expert/explorer/testnet/tx/17af18015e4f65cc3e2013947fa1aae76e1034216738fa7b4ce6ca084c46eeb7) |
+> | **Init TX** | [`63eb9a72...`](https://stellar.expert/explorer/testnet/tx/63eb9a72fbf93c1413b58a33fe108f261203d157981a8b165d730a0556ec7e95) | [`8d5bb1b9...`](https://stellar.expert/explorer/testnet/tx/8d5bb1b93a6e87221f110c09612c02a07f8efa46195c17361960a84944b497a0) |
+> | **Contract Interaction TX** | `register_project` [`8db770da...`](https://stellar.expert/explorer/testnet/tx/8db770da90023b480204531aca9c1d9c10e2b6587fd2d5f4ffb3c3d3666bea22) | `register_project` [`de40c0ab...`](https://stellar.expert/explorer/testnet/tx/de40c0ab5837c59a471b37640a33ee9e445f3aac308cb4e59b4ebd95191a215f) |
+> | **Donation TX** | — | [`b577a3b4...`](https://stellar.expert/explorer/testnet/tx/b577a3b449e5f2614c055208d3e35f6e7654ba41d8f9cd9eb7f07de2c6e47c96) |
+> | **Explorer** | [View](https://stellar.expert/explorer/testnet/contract/CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2) | [View](https://stellar.expert/explorer/testnet/contract/CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT) |
 
 #### Contract interaction example
 
