@@ -23,7 +23,7 @@
 [![Expo](https://img.shields.io/badge/Expo-Android%20%2B%20iOS-000020?logo=expo)](https://expo.dev)
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-26A5E4?logo=telegram)](https://t.me/StellarIndigoPay)
 
-[**🌐 Web App**](https://stellarindigopay.com) · [**📱 Mobile App**](https://expo.dev/) · [**🧩 Chrome Extension**](https://chrome.google.com/webstore/) · [**📚 Docs**](docs/README.md) · [**💬 Telegram**](https://t.me/StellarIndigoPay) · [**🚀 Quick Start**](#-quick-start)
+[**🌐 Live Demo**](https://stellar-indigo-pay.vercel.app) · [**📱 Mobile App**](https://expo.dev/) · [**🧩 Chrome Extension**](https://chrome.google.com/webstore/) · [**📚 Docs**](docs/README.md) · [**💬 Telegram**](https://t.me/StellarIndigoPay) · [**🚀 Quick Start**](#-quick-start)
 
 </div>
 
@@ -56,6 +56,23 @@ The same platform ships as:
 - 🤖 **AI impact summaries** — every project gets a plain-language explainer of where donations go, generated and cached server-side.
 - 🔔 **Webhooks for partners** — signed, retried, dead-lettered milestone events for any project that wants them.
 - 🛰 **Production-grade ops** — Helm, ArgoCD, Prometheus, Alertmanager with PagerDuty/Slack routing, monthly restore drills, SBOM + cosign signing.
+
+---
+
+## 🌐 Live Demo
+
+**🔗 [stellar-indigo-pay.vercel.app](https://stellar-indigo-pay.vercel.app)**
+
+The frontend is deployed on Vercel and connected to Stellar Testnet. You can browse projects, connect your Freighter wallet (switched to Testnet), and make test donations immediately — no local setup required.
+
+| Item                        | Value                                                               |
+| --------------------------- | ------------------------------------------------------------------- |
+| 🌐 **Live URL**             | [stellar-indigo-pay.vercel.app](https://stellar-indigo-pay.vercel.app) |
+| ⛓️ **Network**              | Stellar Testnet                                                     |
+| 🏭 **Hosting**              | [Vercel](https://vercel.com)                                        |
+| 🔑 **Wallet**               | [Freighter](https://freighter.app) (switch to Testnet)              |
+| 💰 **Testnet XLM**          | [Friendbot](https://friendbot.stellar.org)                          |
+| 📦 **Contract ID (Testnet)**| _See [Deployment](#-deployment) section below_                      |
 
 ---
 
@@ -277,12 +294,58 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 | Environment           | Path                                                                                                                                                                                                       |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🌐 **Vercel (live)**  | [stellar-indigo-pay.vercel.app](https://stellar-indigo-pay.vercel.app) — production frontend on Stellar Testnet                                                                                            |
 | Kubernetes (raw YAML) | [`k8s/`](k8s/) — namespace, configmap, secret, postgres, backend, frontend, ingress, HPA, PDB, NetworkPolicies, ExternalSecret                                                                             |
 | Helm chart            | [`helm/indigopay/`](helm/indigopay/) — chart-driven reconciliation, tested in CI with `helm lint` + `helm template`                                                                                        |
 | GitOps                | [`gitops/argocd-application.yaml`](gitops/argocd-application.yaml) + [`gitops/argo-rollouts-canary.yaml`](gitops/argo-rollouts-canary.yaml) for progressive delivery with Prometheus success-rate analysis |
 | Local dev             | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`                                                                                                                                        |
 | CI test               | `docker compose -f docker-compose.test.yml up`                                                                                                                                                             |
 | Mainnet launch        | [`docs/deployment-mainnet.md`](docs/deployment-mainnet.md)                                                                                                                                                 |
+
+### 📦 Contract Deployment
+
+**Deploy the IndigoPay contract to Stellar Testnet:**
+
+```bash
+chmod +x scripts/deploy-contract.sh
+./scripts/deploy-contract.sh testnet alice
+```
+
+The script outputs the deployed `CONTRACT_ID`. Set it in your `.env` files:
+
+```bash
+# frontend/.env.local
+NEXT_PUBLIC_CONTRACT_ID=<your-deployed-contract-id>
+
+# backend/.env
+CONTRACT_ID=<your-deployed-contract-id>
+```
+
+> **Deployed Testnet contract ID:** _Set `NEXT_PUBLIC_CONTRACT_ID` in your Vercel env vars after deployment._
+
+#### Contract interaction example
+
+```typescript
+import { Contract, nativeToScVal, rpc, Address } from "@stellar/stellar-sdk";
+
+const contract = new Contract(CONTRACT_ID);
+
+// Read global donation total (free, simulated call)
+const total = await contract.call("get_global_total");
+console.log("Total XLM raised:", scValToNative(total.result.retval));
+
+// Make a donation (requires wallet signature)
+const tx = await buildContractDonationTransaction({
+  contractId: CONTRACT_ID,
+  tokenAddress: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+  donor: publicKey,
+  projectId: "project-001",
+  amount: "10",
+  msgHash: hashMessage("Supporting climate action!"),
+});
+```
+
+See [`docs/contract-integration.md`](docs/contract-integration.md) for the full partner SDK guide with TypeScript, Go, and Python examples.
 
 Container images are multi-stage (`builder` + `runner`), pinned to `node:20.18.1-alpine` LTS, built with `npm ci --omit=dev`, and signed with cosign on release tags.
 
