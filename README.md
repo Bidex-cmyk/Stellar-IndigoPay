@@ -23,7 +23,7 @@
 [![Expo](https://img.shields.io/badge/Expo-Android%20%2B%20iOS-000020?logo=expo)](https://expo.dev)
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-26A5E4?logo=telegram)](https://t.me/StellarIndigoPay)
 
-[**🌐 Live Demo**](https://stellar-indigo-pay.vercel.app) · [**📱 Mobile App**](https://expo.dev/) · [**🧩 Chrome Extension**](https://chrome.google.com/webstore/) · [**📚 Docs**](docs/README.md) · [**💬 Telegram**](https://t.me/StellarIndigoPay) · [**🚀 Quick Start**](#-quick-start)
+[**🌐 Live Demo**](https://stellar-indigo-pay.vercel.app) · [**📱 Mobile App**](mobile/) · [**🧩 Chrome Extension**](extension/) · [**📚 Docs**](docs/README.md) · [**💬 Telegram**](https://t.me/StellarIndigoPay) · [**🚀 Quick Start**](#-quick-start)
 
 </div>
 
@@ -37,11 +37,11 @@ The same platform ships as:
 
 | Surface                  | What it is                                                                      | Built with                                 |
 | ------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------ |
-| 🌐 **Web app**           | Full-featured donor dashboard, project browse, leaderboard, AI impact summaries | Next.js 14 · React · TypeScript · Tailwind |
-| 📱 **Mobile app**        | On-the-go donations, QR-scan-to-give, biometric auth, push receipts             | React Native · Expo · expo-router          |
-| 🧩 **Browser extension** | Detect Stellar addresses on any page, donate in one click                       | Manifest V3 · Webpack                      |
-| ⛓️ **Soroban contracts** | On-chain donation ledger, badges, governance, upgrades, NFT minting             | Rust 1.91 · WASM `wasm32v1-none`           |
-| 🛠 **Backend API**        | Metadata, leaderboard, webhooks, AI summaries, admin                            | Node.js 20 · Express · Postgres · pg-boss  |
+| 🌐 **Web app**           | Donor dashboard, project browse, leaderboard, AI impact summaries, multi-wallet | Next.js 14 · React · TypeScript · Tailwind |
+| 📱 **Mobile app**        | QR-scan-to-give, biometric auth, secure wallet storage, push receipts           | React Native · Expo · expo-router          |
+| 🧩 **Browser extension** | Detect Stellar addresses on any page, donate in one click                       | Manifest V3 · Webpack (Chrome + Firefox)   |
+| ⛓️ **4 Soroban contracts** | Donation ledger, escrow, attestation bridge, price oracle                      | Rust · WASM `wasm32v1-none`                |
+| 🛠 **Backend API**        | Metadata, leaderboard, webhooks, AI summaries, admin, event streaming           | Node.js 20 · Express · Postgres · pg-boss  |
 
 ---
 
@@ -52,9 +52,11 @@ The same platform ships as:
 - 🪪 **No accounts** — your Stellar keypair is your identity. No email, no password, no recovery phone.
 - 🏷 **Reputation you own** — Impact badges (🌱 Seedling, 🌳 Tree, 🌲 Forest, 🌍 Earth Guardian) and Impact NFTs are wallet-bound and travel with you across dApps.
 - 💱 **Multi-currency** — Donate in XLM or USDC. USDC amounts are converted via a configurable on-chain price oracle.
-- 🗳 **Community governance** — Badge holders vote to verify new projects. On-chain proposals with configurable voting windows.
-- 🤖 **AI impact summaries** — every project gets a plain-language explainer of where donations go, generated and cached server-side.
-- 🔔 **Webhooks for partners** — signed, retried, dead-lettered milestone events for any project that wants them.
+- 🗳 **Community governance** — Badge holders vote to verify new projects using quadratic voting. On-chain proposals with configurable voting windows.
+- 🤖 **AI impact summaries** — every project gets a plain-language explainer of where donations go, generated via Anthropic Claude and cached server-side.
+- 🔔 **Webhooks for partners** — signed (HMAC-SHA256), retried (6-attempt backoff), dead-lettered milestone events.
+- 🌉 **Cross-chain attestation** — verifiable on-chain records that a donation originated from another chain (Ethereum, Polygon, etc.).
+- ⚡ **Real-time events** — SSE and Socket.IO streams for live donation ticker and Soroban contract event synchronization.
 - 🛰 **Production-grade ops** — Helm, ArgoCD, Prometheus, Alertmanager with PagerDuty/Slack routing, monthly restore drills, SBOM + cosign signing.
 
 ---
@@ -169,12 +171,14 @@ That's it. No account creation, no email verification, no KYC.
         └────────────────┘  └────────────┘  └──────┬───────┘
                                                    │
                                                    ▼
-                                       ┌────────────────────────┐
-                                       │  Soroban               │
-                                       │  IndigoPay Contract    │
-                                       │  (Rust / WASM)         │
-                                       │  Source of truth       │
-                                       └────────────────────────┘
+                                       ┌──────────────────────────────┐
+                                       │  Soroban Contracts            │
+                                       │  • IndigoPay (donation ledger)│
+                                       │  • Escrow (milestone payouts) │
+                                       │  • Attestation (cross-chain)  │
+                                       │  • Oracle (price feed)        │
+                                       │  Source of truth              │
+                                       └──────────────────────────────┘
 ```
 
 **Key design choices** (full rationale in [`docs/architecture.md`](docs/architecture.md)):
@@ -220,30 +224,45 @@ That's it. No account creation, no email verification, no KYC.
 
 ### ⛓️ Soroban contracts (`contracts/`)
 
-| Capability                | Entry points                                                                                                                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Project registry**      | `register_project`, `batch_register_projects`, `update_project_co2_rate`, `pause_project`, `resume_project`, `deactivate_project`, `deactivate_all_projects`                                                                             |
-| **Donations**             | `donate(token, donor, project_id, amount, msg_hash)`, `donate_usdc(…)` with on-chain price oracle                                                                                                                              |
-| **Reputation**            | `get_donor_stats`, `get_badge`, tier calculation (`None` / `Seedling` / `Tree` / `Forest` / `EarthGuardian`)                                                                                                                             |
-| **NFTs**                  | `mint_impact_nft(donor, tier)`, `mint_project_nft(donor, project_id)`                                                                                                                                                                    |
-| **Governance**            | `create_proposal`, `vote_verify_project`, `resolve_proposal`, `veto_proposal` (gated by `≥ Seedling` badge)                                                                                                                              |
-| **Trust model (Phase A)** | `transfer_admin` → `accept_admin` (two-step), `pause_contract` / `unpause_contract`, `propose_upgrade` → 48h timelock → `execute_upgrade`                                                                                                |
-| **Multi-currency**        | `set_usdc_token`, `set_oracle`, `get_usdc_token`, `get_oracle` — donate in XLM or USDC with oracle-backed conversion                                                                                                                    |
-| **Read**                  | `get_project`, `get_global_total`, `get_global_co2`, `get_global_stats`, `get_donation_count`, `get_project_count`, `get_donation_record`, `get_pending_admin`, `is_contract_paused`, `get_pending_upgrade`, `get_last_executed_upgrade` |
+#### IndigoPay Contract (`contracts/indigopay-contract/`)
 
-Also includes an **escrow contract** (`contracts/escrow-contract/`) for milestone-based project payouts with dispute resolution.
+| Capability                | Entry points |
+| ------------------------- | ------------ |
+| **Project registry**      | `register_project`, `batch_register_projects`, `update_project_co2_rate`, `pause_project`, `resume_project`, `deactivate_project`, `deactivate_all_projects` |
+| **Donations**             | `donate(XLM)`, `donate_usdc(…)` with on-chain price oracle; `create_recurring` / `cancel_recurring` for automated giving |
+| **Campaigns**             | `create_campaign`, `extend_campaign_deadline`, `close_campaign` — time-bound fundraising with goal tracking |
+| **Reputation & NFTs**     | `get_donor_stats`, `get_badge`, `mint_impact_nft` — tiered badges (🌱 Seedling → 🌍 Earth Guardian) |
+| **Governance**            | `create_proposal`, `vote_verify_project`, `resolve_proposal` — quadratic voting gated by `≥ Seedling` badge |
+| **Escrow integration**    | `setup_campaign_escrow`, `fund_escrow`, `release_escrow_milestone`, `claim_escrow_refund` — cross-contract calls to the escrow contract |
+| **Attestation settlement**| `settle_attestation` — cross-contract recording of cross-chain donations verified by the attestation contract |
+| **Emergency withdrawal**  | `initiate_emergency_withdrawal`, `execute_emergency_withdrawal` — timelocked multi-token batch withdrawal |
+| **Vesting**               | `create_vesting_schedule`, `release_vesting`, `cancel_vesting` — time-locked token distribution |
+| **Storage GC**            | `cleanup_vesting_cancelled`, `cleanup_proposals` — permissionless garbage collection for expired entries |
+| **Fees**                  | `set_platform_fee`, `set_treasury`, `set_fee_recipient` — configurable fee splits |
+| **Impact verification**   | `publish_impact_root`, `verify_impact_inclusion`, `get_impact_periods` — Merkle Mountain Range proofs for off-chain impact data |
+| **ZK donations**          | `set_zk_verification_key`, `donate_zk` — privacy-preserving donations via zk-SNARK proofs (feature-gated) |
+| **Admin & upgrades**      | `transfer_admin` → `accept_admin` (2-step), `pause_contract` / `unpause_contract`, `propose_upgrade` → 48h timelock → `execute_upgrade` |
+| **Read (20+ functions)**  | `get_project`, `get_global_total`, `get_global_stats`, `get_donation_count`, `get_donation_record`, `get_project_count`, `get_campaign`, `get_voter_list`, and more |
+
+#### Companion Contracts
+
+| Contract | Path | Purpose |
+|----------|------|---------|
+| **Escrow** | `contracts/escrow-contract/` | Milestone-based fund release with multi-sig admin, dispute resolution, multi-token (XLM + USDC) support |
+| **Attestation** | `contracts/attestation-contract/` | Cross-chain donation attestation bridge — records verifiable on-chain proofs that a donation originated on another chain |
+| **Oracle** | `contracts/oracle-contract/` | On-chain price oracle for XLM/USDC conversion used by the IndigoPay contract's multi-currency donation flow |
 
 Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-contract/README.md) · [`contracts/indigopay-contract/SECURITY.md`](contracts/indigopay-contract/SECURITY.md) · [`contracts/indigopay-contract/UPGRADE.md`](contracts/indigopay-contract/UPGRADE.md)
 
 ### 🛠 Backend API (`backend/`)
 
-- Express 5 + Node 20 + zod env validation
+- Express + Node 20 + zod env validation
 - **Postgres** for durable storage (donations, profiles, projects, jobs, ratings, updates, subscriptions, webhooks, AI summaries)
 - **pg-boss** for durable background jobs (webhook delivery, AI summaries, profile enrichment, digests)
 - **Webhook delivery**: `webhookQueue` worker with 6-attempt backoff (30s → 2m → 10m → 30m → 2h → 6h), DLQ, GitHub-style `t=…,v1=…` HMAC-SHA256 signing, 5-min replay window, idempotency by event id ([`docs/webhook-receiver.md`](docs/webhook-receiver.md))
 - **OpenAPI 3.0.3** spec served as Swagger UI at `/api/docs` ([`docs/api/openapi.yaml`](docs/api/openapi.yaml))
-- **Sentry** traces + **Prometheus** metrics (`/metrics`, bearer-token auth in prod)
-- **Socket.IO** for real-time donation ticker
+- **Sentry** error tracking + **Prometheus** metrics (`/metrics`, bearer-token auth in prod)
+- **Socket.IO** for real-time donation ticker; **SSE** for Soroban contract event streaming
 - **Admin console** with JWT + refresh tokens, audit log, project status changes
 - **zod**-validated request payloads, **express-rate-limit** + **csurf**
 - **Pino** structured logging, `X-Request-Id` correlation on every request
@@ -349,10 +368,10 @@ The script outputs the deployed `CONTRACT_ID`. Set it in your `.env` files:
 
 ```bash
 # frontend/.env.local
-NEXT_PUBLIC_CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
+NEXT_PUBLIC_CONTRACT_ID=CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT
 
 # backend/.env
-CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
+CONTRACT_ID=CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT
 ```
 
 > **Deployed Testnet contract IDs:**
@@ -373,7 +392,7 @@ CONTRACT_ID=CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2
 ```typescript
 import { Contract, scValToNative, Address } from "@stellar/stellar-sdk";
 
-const CONTRACT_ID = "CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2";
+const CONTRACT_ID = "CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT";
 const contract = new Contract(CONTRACT_ID);
 
 // Read global donation total (free, simulated call)
@@ -395,13 +414,13 @@ console.log("Projects registered:", scValToNative(count.retval));
 ```bash
 # Read a project
 stellar contract invoke \
-  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --id CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT \
   --source deployer --network testnet \
   -- get_project --project_id project-001
 
 # Register a new project (requires admin key)
 stellar contract invoke \
-  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --id CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT \
   --source deployer --network testnet \
   -- register_project \
   --admin GCRTWQ6NCS6XZPPYATVLZYLY5BBRGMA3J5VTQNTICQL4TZLXHZTEGAXC \
@@ -412,7 +431,7 @@ stellar contract invoke \
 
 # Get global stats
 stellar contract invoke \
-  --id CAPE7IB3DRAXGEQIZSRXFOGRLSAY4M6GF4FX35436FYU7Q7PXYTINPE2 \
+  --id CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT \
   --source deployer --network testnet \
   -- get_global_stats
 ```
@@ -479,7 +498,8 @@ If you find a vulnerability, **please do not open a public issue.** Use [GitHub 
 | **v1.5** | Impact dashboard: global map, real-time donation stream, project completion | ✅ Shipped |
 | **v2.0** | Multi-currency: USDC alongside XLM with on-chain price oracle | ✅ Shipped |
 | **v2.1** | DAO governance: badge-weighted voting on project verification, escrow contracts | ✅ Shipped |
-| **v2.2** | (Planned) Cross-chain attestations, deeper DEX integration, mobile-first UX overhaul | 🚧 Planned |
+| **v2.2** | Cross-chain attestation bridge, DEX integration, campaign-escrow integration, storage garbage collection | ✅ Shipped |
+| **v2.3** | (Planned) Mainnet launch, mobile push notifications, advanced analytics, grant applications | 🚧 Planned |
 
 Full backlog: [**`ROADMAP.md`**](ROADMAP.md).
 
