@@ -877,7 +877,7 @@ fn require_not_paused(env: &Env) {
 /// (stored as `(Symbol("EmergencyWithdrawal"), project_id)`) to `EmergencyWithdrawal(String, Address)`.
 #[cfg(feature = "emergency")]
 fn migrate_legacy_ew_key_if_present(env: &Env, project_id: &String) {
-    let legacy_key = (Symbol::new(env, "EmergencyWithdrawal"), project_id.clone());
+    let legacy_key = (symbol_short!("EmergWdr"), project_id.clone());
     if env.storage().instance().has(&legacy_key) {
         if let Some(w) = env
             .storage()
