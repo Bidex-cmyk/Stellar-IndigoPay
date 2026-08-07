@@ -112,7 +112,6 @@ describe("WalletConnect", () => {
     await waitFor(() => {
       expect(onConnect).toHaveBeenCalledWith(
         "GABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
-        "freighter",
       );
     });
   });

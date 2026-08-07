@@ -41,7 +41,8 @@ function weekKey(dateStr: string): string {
 }
 
 export default function ProjectAdmin() {
-  const { publicKey, connect: onConnect } = useWallet();
+  const { publicKey, connect } = useWallet();
+  const onConnect = () => { void connect(); };
   const router = useRouter();
   const { projectId } = router.query;
 

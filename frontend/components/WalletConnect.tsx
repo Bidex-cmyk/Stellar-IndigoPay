@@ -12,10 +12,10 @@ import { trackEvent } from "@/lib/analytics";
 import { useI18n } from "@/lib/i18n";
 import { getAvailableWallets } from "@/lib/wallets";
 import type { StellarWalletAdapter } from "@/lib/wallets/types";
-import type { WalletId } from "@/lib/wallets/types";
 
 interface WalletConnectProps {
-  onConnect: (pk: string, walletId?: WalletId) => void;
+  /** Called after successful connection with the wallet's public key. */
+  onConnect: (pk: string) => void;
 }
 
 /** Icon components mapped by wallet id for visual recognition. */
@@ -68,9 +68,8 @@ export default function WalletConnect({ onConnect }: WalletConnectProps) {
     try {
       const pk = await adapter.getPublicKey();
       setLoading(null);
-      if (pk) {
-        trackEvent("wallet_connected", { wallet: adapter.id });
-        onConnect(pk, adapter.id as WalletId);
+      if (pk) {          trackEvent("wallet_connected", { wallet: adapter.id });
+          onConnect(pk);
       }
     } catch (err: unknown) {
       setLoading(null);

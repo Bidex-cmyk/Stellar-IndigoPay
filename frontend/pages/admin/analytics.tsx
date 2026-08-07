@@ -35,7 +35,8 @@ const RANGES: Record<string, { label: string; days: number }> = {
 };
 
 export default function AdminAnalyticsPage() {
-  const { publicKey, connect: onConnect } = useWallet();
+  const { publicKey, connect } = useWallet();
+  const onConnect = () => { void connect(); };
   const [range, setRange] = useState("90d");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
