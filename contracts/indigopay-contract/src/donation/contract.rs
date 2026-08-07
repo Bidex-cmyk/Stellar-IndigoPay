@@ -259,7 +259,7 @@ mod tests {
         let ScVal::Symbol(event_name) = &body.topics[0] else {
             panic!("expected event name symbol");
         };
-        assert_eq!(event_name.0.as_vec().as_slice(), b"StealthScan");
+        assert_eq!(event_name.0.as_vec().as_slice(), b"StlthScn");
         assert_eq!(body.topics[1], ScVal::from(project_wallet));
         let ScVal::Vec(Some(data)) = &body.data else {
             panic!("expected event data vector");

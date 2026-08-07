@@ -62,10 +62,15 @@ jobs:
           fi
           echo "WASM_SIZE=$size" >> $GITHUB_ENV
 
-      - name: Install Stellar CLI
+      - name: Install Stellar CLI (pre-built binary)
         run: |
-          cargo install --locked stellar-cli --features opt 2>/dev/null || \
-            cargo install --locked stellar-cli
+          STELLAR_VERSION="v27.1.0"
+          curl -fsSL "https://github.com/stellar/stellar-cli/releases/download/${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION#v}-x86_64-unknown-linux-gnu.tar.gz" \
+            -o /tmp/stellar.tar.gz
+          tar xzf /tmp/stellar.tar.gz -C /tmp
+          sudo mv /tmp/stellar /usr/local/bin/stellar
+          chmod +x /usr/local/bin/stellar
+          stellar --version
 
       - name: Configure Stellar identity
         env:
