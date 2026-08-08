@@ -338,11 +338,7 @@ A 2-minute walkthrough demonstrating the complete donor flow:
 6. Check updated balance and dashboard
 7. Mobile responsive view
 
-> **📹 Watch the 2-minute demo:**
->
-> https://github.com/user-attachments/assets/demo.mp4
->
-> [![Demo Video](https://img.shields.io/badge/Download-Demo_MP4-EF4444?logo=video)](assets/demo.mp4)
+> **📹 Watch the 2-minute demo:** [Download MP4](https://raw.githubusercontent.com/Stellar-IndigoPay/Stellar-IndigoPay/main/assets/demo.mp4) (1.2 MB)
 >
 > **Recording script:** See [`scripts/demo-script.md`](scripts/demo-script.md) for a step-by-step guide.
 
