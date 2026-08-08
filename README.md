@@ -338,7 +338,11 @@ A 2-minute walkthrough demonstrating the complete donor flow:
 6. Check updated balance and dashboard
 7. Mobile responsive view
 
-> **📹 Watch the demo:** _[Demo video link will be added here — record using Loom, Screen Studio, or OBS and paste the link]_
+> **📹 Watch the 2-minute demo:**
+>
+> https://github.com/user-attachments/assets/demo.mp4
+>
+> [![Demo Video](https://img.shields.io/badge/Download-Demo_MP4-EF4444?logo=video)](assets/demo.mp4)
 >
 > **Recording script:** See [`scripts/demo-script.md`](scripts/demo-script.md) for a step-by-step guide.
 
