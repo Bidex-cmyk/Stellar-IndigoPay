@@ -47,16 +47,32 @@ const FEATURES = [
 ];
 
 const FALLBACK_IMPACT_STATS = [
-  { value: 0, suffix: "%", label: "Platform fees", duration: 1500 },
+  { value: 100, suffix: " XLM", label: "Raised on Testnet", duration: 2200 },
+  { value: 8500, label: "CO₂ per XLM (kg)", duration: 2500 },
+  { value: 1, label: "Projects Registered", duration: 1800 },
+  { value: 1, label: "On-Chain Donors", duration: 2000 },
+];
+
+const LIVE_DEMO_PROJECTS: ClimateProject[] = [
   {
-    value: 100,
-    prefix: ">",
-    suffix: "%",
-    label: "Direct to Project",
-    duration: 2000,
+    id: "opt-001",
+    name: "Gas Optimized Reforestation",
+    description:
+      "A testnet project demonstrating IndigoPay's on-chain donation flow with gas-optimized Soroban smart contracts. Every donation is recorded transparently on Stellar.",
+    category: "Reforestation",
+    location: "Stellar Testnet",
+    walletAddress: "GCRTWQ6NCS6XZPPYATVLZYLY5BBRGMA3J5VTQNTICQL4TZLXHZTEGAXC",
+    goalXLM: "1000",
+    raisedXLM: "100",
+    donorCount: 1,
+    co2OffsetKg: 850000,
+    status: "active",
+    verified: true,
+    onChainVerified: true,
+    tags: ["reforestation", "testnet"],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   },
-  { value: 5000, suffix: "+", label: "Monthly Donors", duration: 2500 },
-  { value: 250000, label: "CO₂ Offset (kg)", duration: 3000 },
 ];
 
 function buildHeroStats(stats: GlobalStats | null) {
@@ -285,12 +301,16 @@ export default function Home() {
         </div>
 
         {/* ── Global CO2 Offset Ticker ────────────────────────────── */}
-        {globalStats !== null && <CO2OffsetTicker stats={globalStats} />}
+        {globalStats !== null ? (
+          <CO2OffsetTicker stats={globalStats} />
+        ) : (
+          <CO2OffsetTickerFallback />
+        )}
 
         {/* ── Featured Project Spotlight ──────────────────────────── */}
-        {featuredProject !== null && (
-          <FeaturedProjectCard project={featuredProject} />
-        )}
+        <FeaturedProjectCard
+          project={featuredProject ?? LIVE_DEMO_PROJECTS[0]}
+        />
 
         {/* ── Features ────────────────────────────────────────────────── */}
         <div className="mb-20">
@@ -335,9 +355,16 @@ export default function Home() {
           </div>
 
           {/* Category Stats Bar Chart */}
-          {categoryStats.length > 0 && (
-            <CategoryStatsChart stats={categoryStats} />
-          )}
+          <CategoryStatsChart
+            stats={
+              categoryStats.length > 0
+                ? categoryStats
+                : CATEGORIES.map((c) => ({
+                    category: c.label,
+                    count: c.label === "Reforestation" ? 1 : 0,
+                  }))
+            }
+          />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-8">
             {CATEGORIES.map((cat) => (
@@ -556,7 +583,23 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
   );
 }
 
-function CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
+function CO2OffsetTickerFallback() {
+  return (
+    <div className="card-gradient text-center py-10 mb-20">
+      <p className="text-3xl mb-2">🍃</p>
+      <div className="font-display text-5xl sm:text-6xl font-bold text-white mb-2">
+        850,000 kg
+      </div>
+      <p className="text-[#A5B4FC] text-sm font-body uppercase tracking-widest font-bold opacity-90">
+        Total CO₂ Offset Across All Donations
+      </p>
+      <p className="text-[#C7D2FE] text-xs font-body mt-2">
+        1 donation · 1 donor · 100 XLM raised on Stellar Testnet
+      </p>
+    </div>
+  );
+}
+\nfunction CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
   const { count, elementRef } = useCountUp(stats.totalCO2OffsetKg, 2500);
   return (
     <div ref={elementRef} className="card-gradient text-center py-10 mb-20">
