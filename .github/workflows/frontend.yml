@@ -178,16 +178,10 @@ jobs:
         working-directory: frontend
         run: npm ci --legacy-peer-deps
 
-      - name: Build frontend
+      - name: Build frontend (with bundle analysis)
         working-directory: frontend
-        run: ANALYZE=false npm run build
-        env:
-          NEXT_PUBLIC_STELLAR_NETWORK: testnet
-          NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
-          NEXT_PUBLIC_API_URL: http://localhost:4000
-
-      - name: Bundle analysis (ANALYZE=true)
-        working-directory: frontend
+        # ANALYZE=true produces the same .next output plus bundle-size
+        # reports, so a second build is unnecessary.
         run: ANALYZE=true npm run build
         env:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
@@ -268,9 +262,24 @@ jobs:
         # package.json + overrides keeps CI deterministic.
         run: npm ci --legacy-peer-deps
 
-      - name: Install Playwright browsers
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache-e2e
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright browsers (with dependencies)
+        if: steps.playwright-cache-e2e.outputs.cache-hit != 'true'
         working-directory: frontend
         run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Install Playwright system dependencies (if cached)
+        if: steps.playwright-cache-e2e.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium firefox webkit
 
       - name: Build frontend for E2E
         working-directory: frontend
