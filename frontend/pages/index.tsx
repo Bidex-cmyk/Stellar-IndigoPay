@@ -599,7 +599,8 @@ function CO2OffsetTickerFallback() {
     </div>
   );
 }
-\nfunction CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
+
+function CO2OffsetTicker({ stats }: { stats: GlobalStats }) {
   const { count, elementRef } = useCountUp(stats.totalCO2OffsetKg, 2500);
   return (
     <div ref={elementRef} className="card-gradient text-center py-10 mb-20">
