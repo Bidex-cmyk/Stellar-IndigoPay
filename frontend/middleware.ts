@@ -20,14 +20,16 @@ const LEAFLET_TILE_SOURCES = [
 const UNPKG = "https://unpkg.com";
 
 function buildCsp(nonce: string, isWidget: boolean): string {
-  // API origin: 'self' covers same-origin deploys; localhost:4000 covers local dev.
+  // API origin: 'self' covers same-origin deploys; NEXT_PUBLIC_API_URL covers
+  // deployed backends and CI/E2E environments (e.g. http://localhost:4000).
+  // Falls back to localhost:4000 in local dev when the env var is not set.
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL
+    || (process.env.NODE_ENV === "development" ? "http://localhost:4000" : null);
   const connectSrc = [
     "'self'",
     STELLAR_CONNECT,
     "https://api.coingecko.com",
-    ...(process.env.NODE_ENV === "development"
-      ? ["http://localhost:4000"]
-      : []),
+    ...(apiUrl ? [apiUrl] : []),
   ].join(" ");
 
   // next dev's Fast Refresh runtime (react-refresh-utils) bootstraps modules
