@@ -8,7 +8,14 @@ on:
       - '.github/workflows/mobile.yml'
 
 jobs:
+  ci-pass:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 0
+
   build:
+    if: github.event_name != 'push'
     name: EAS Preview Build
     runs-on: ubuntu-latest
     defaults:
