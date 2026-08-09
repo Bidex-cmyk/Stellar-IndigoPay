@@ -10,12 +10,22 @@
 name: Monthly Restore Drill
 
 on:
+  push:
+    branches: [main, develop]
   schedule:
     - cron: "0 3 1 * *"
   workflow_dispatch:
 
 jobs:
+  skip-on-push:
+    if: github.event_name == 'push'
+    name: Skip (schedule/manual only)
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'echo "Skipped — this workflow runs on schedule or manual dispatch only"'
+
   restore-drill:
+    if: github.event_name != 'push'
     name: Restore latest backup and assert row counts
     runs-on: ubuntu-latest
     timeout-minutes: 60
