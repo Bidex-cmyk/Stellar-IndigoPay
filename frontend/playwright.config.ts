@@ -5,7 +5,9 @@ export default defineConfig({
   timeout: 30_000,
   retries: 1,
   use: {
-    baseURL: "http://localhost:3000",
+    // Use 127.0.0.1 explicitly — Node 22+ resolves "localhost" to ::1 (IPv6)
+    // while next start binds to 0.0.0.0 (IPv4), causing connection-refused timeouts.
+    baseURL: "http://127.0.0.1:3000",
     trace: "on-first-retry",
   },
   projects: [
@@ -28,10 +30,15 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run start",
-    url: "http://localhost:3000",
+    // 127.0.0.1 avoids IPv4/IPv6 localhost resolution mismatch on Node 22+.
+    url: "http://127.0.0.1:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
     env: {
+      // NODE_ENV=development tells middleware.ts to skip the
+      // upgrade-insecure-requests CSP directive, which would cause
+      // WebKit to redirect http→https and fail against a plain-HTTP server.
+      NODE_ENV: "development",
       NEXT_PUBLIC_STELLAR_NETWORK: "testnet",
       NEXT_PUBLIC_HORIZON_URL: "https://horizon-testnet.stellar.org",
       NEXT_PUBLIC_API_URL: "http://localhost:4000",
