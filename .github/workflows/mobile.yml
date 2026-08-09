@@ -15,6 +15,8 @@ jobs:
     if: github.event_name != 'push'
     name: EAS Preview Build
     runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN_SET: ${{ secrets.EXPO_TOKEN != '' }}
     defaults:
       run:
         working-directory: mobile
@@ -31,4 +33,4 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
       - run: eas build --platform all --profile preview --non-interactive
-        if: ${{ secrets.EXPO_TOKEN != '' }}
+        if: env.EXPO_TOKEN_SET == 'true'
