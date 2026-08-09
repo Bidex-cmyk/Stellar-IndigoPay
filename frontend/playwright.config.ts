@@ -32,7 +32,9 @@ export default defineConfig({
     command: "npm run start",
     // 127.0.0.1 avoids IPv4/IPv6 localhost resolution mismatch on Node 22+.
     url: "http://127.0.0.1:3000",
-    reuseExistingServer: !process.env.CI,
+    // In CI the server is started externally (see .github/workflows/frontend.yml)
+    // so Playwright should reuse it instead of starting its own.
+    reuseExistingServer: !!process.env.CI,
     timeout: 300_000,
     env: {
       // Tells middleware.ts to skip the upgrade-insecure-requests CSP

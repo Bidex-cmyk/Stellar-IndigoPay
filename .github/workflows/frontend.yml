@@ -144,6 +144,24 @@ jobs:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
           NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
           NEXT_PUBLIC_API_URL: http://localhost:4000
+      - name: Start Next.js server
+        working-directory: frontend
+        run: |
+          E2E_TESTING=true \
+          NEXT_PUBLIC_STELLAR_NETWORK=testnet \
+          NEXT_PUBLIC_HORIZON_URL=https://horizon-testnet.stellar.org \
+          NEXT_PUBLIC_API_URL=http://localhost:4000 \
+          npm run start &
+          # Wait for the server to respond (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:3000; then
+              echo "Server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to start" >&2
+          exit 1
       - name: Run E2E tests
         working-directory: frontend
         run: npx playwright test
@@ -288,6 +306,23 @@ jobs:
           NEXT_PUBLIC_STELLAR_NETWORK: testnet
           NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
           NEXT_PUBLIC_API_URL: http://localhost:4000
+      - name: Start Next.js server
+        working-directory: frontend
+        run: |
+          E2E_TESTING=true \
+          NEXT_PUBLIC_STELLAR_NETWORK=testnet \
+          NEXT_PUBLIC_HORIZON_URL=https://horizon-testnet.stellar.org \
+          NEXT_PUBLIC_API_URL=http://localhost:4000 \
+          npm run start &
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:3000; then
+              echo "Server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to start" >&2
+          exit 1
       - name: Run Playwright tests
         working-directory: frontend
         # Visual regression snapshots are OS/font-render dependent — skip in CI,
