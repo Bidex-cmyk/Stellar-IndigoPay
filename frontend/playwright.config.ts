@@ -35,10 +35,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
     env: {
-      // NODE_ENV=development tells middleware.ts to skip the
-      // upgrade-insecure-requests CSP directive, which would cause
-      // WebKit to redirect http→https and fail against a plain-HTTP server.
-      NODE_ENV: "development",
+      // Tells middleware.ts to skip the upgrade-insecure-requests CSP
+      // directive (which would redirect http→https and break the test).
+      E2E_TESTING: "true",
       NEXT_PUBLIC_STELLAR_NETWORK: "testnet",
       NEXT_PUBLIC_HORIZON_URL: "https://horizon-testnet.stellar.org",
       NEXT_PUBLIC_API_URL: "http://localhost:4000",

@@ -69,7 +69,7 @@ function buildCsp(nonce: string, isWidget: boolean): string {
     // script request gets rewritten to https://localhost:PORT, which has no
     // TLS listener, so the whole bundle fails a TLS handshake and the app
     // never hydrates.
-    ...(process.env.NODE_ENV === "development"
+    ...(process.env.NODE_ENV === "development" || process.env.E2E_TESTING === "true"
       ? []
       : ["upgrade-insecure-requests"]),
   ];
