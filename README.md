@@ -6,17 +6,20 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-6366F1.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-818CF8.svg)](CODE_OF_CONDUCT.md)
 [![CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
-[![Contracts CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml/badge.svg?branch=main)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml)
+[![Contracts CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml)
+[![Frontend CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/frontend.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/frontend.yml)
+[![Extension CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/extension.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/extension.yml)
+[![Mobile CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml)
 [![Release](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml)
 [![Contributors](https://img.shields.io/badge/Contributors-12%2B-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
-[![Tests](https://img.shields.io/badge/Tests-935%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/Tests-2%2C300%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 
 [![Stellar](https://img.shields.io/badge/Stellar-Powered-6366F1?logo=stellar)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Contracts-7C3AED)](https://soroban.stellar.org)
 [![Live Demo](https://img.shields.io/badge/Live-Demo-10B981?logo=vercel)](https://stellar-indigo-pay.vercel.app)
 [![Testnet Deployed](https://img.shields.io/badge/Contract-Testnet-8B5CF6?logo=stellar)](https://stellar.expert/explorer/testnet/contract/CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT)
 [![Demo Video](https://img.shields.io/badge/Demo-Video-EF4444?logo=youtube)](#-demo-video)
-[![Node 20](https://img.shields.io/badge/Node-20%20LTS-339933?logo=node.js)](https://nodejs.org)
+[![Node 22](https://img.shields.io/badge/Node-22%20LTS-339933?logo=node.js)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript)](https://www.typescriptlang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=next.js)](https://nextjs.org)
@@ -44,7 +47,7 @@ The same platform ships as:
 | 📱 **Mobile app**        | QR-scan-to-give, biometric auth, secure wallet storage, push receipts           | React Native · Expo · expo-router          |
 | 🧩 **Browser extension** | Detect Stellar addresses on any page, donate in one click                       | Manifest V3 · Webpack (Chrome + Firefox)   |
 | ⛓️ **4 Soroban contracts** | Donation ledger, escrow, attestation bridge, price oracle                      | Rust · WASM `wasm32v1-none`                |
-| 🛠 **Backend API**        | Metadata, leaderboard, webhooks, AI summaries, admin, event streaming           | Node.js 20 · Express · Postgres · pg-boss  |
+| 🛠 **Backend API**        | Metadata, leaderboard, webhooks, AI summaries, admin, event streaming           | Node.js 22 · Express · Postgres · pg-boss  |
 
 ---
 
@@ -90,7 +93,7 @@ You can be donating on testnet in **under five minutes**.
 
 | Tool                                         | Version    | Why                                                                             |
 | -------------------------------------------- | ---------- | ------------------------------------------------------------------------------- |
-| Node.js                                      | **20 LTS** | Backend + frontend + mobile scripts                                             |
+| Node.js                                      | **22 LTS** | Backend + frontend + mobile scripts                                             |
 | npm                                          | 10+        | Package manager                                                                 |
 | Docker + Docker Compose                      | Latest     | One-command dev environment                                                     |
 | Freighter Wallet                             | Latest     | Stellar browser wallet (or [Freighter Mobile](https://freighter.app) on phones) |
@@ -259,7 +262,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 ### 🛠 Backend API (`backend/`)
 
-- Express + Node 20 + zod env validation
+- Express + Node 22 + zod env validation
 - **Postgres** for durable storage (donations, profiles, projects, jobs, ratings, updates, subscriptions, webhooks, AI summaries)
 - **pg-boss** for durable background jobs (webhook delivery, AI summaries, profile enrichment, digests)
 - **Webhook delivery**: `webhookQueue` worker with 6-attempt backoff (30s → 2m → 10m → 30m → 2h → 6h), DLQ, GitHub-style `t=…,v1=…` HMAC-SHA256 signing, 5-min replay window, idempotency by event id ([`docs/webhook-receiver.md`](docs/webhook-receiver.md))
@@ -269,7 +272,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 - **Admin console** with JWT + refresh tokens, audit log, project status changes
 - **zod**-validated request payloads, **express-rate-limit** + **csurf**
 - **Pino** structured logging, `X-Request-Id` correlation on every request
-- 32+ Jest cases covering metrics, lifecycle, requestId, health, and readiness
+- 50+ Jest cases covering metrics, lifecycle, requestId, health, and readiness
 - Sentry + Prometheus + webhook + indexer **graceful shutdown** wired through a lifecycle service
 
 ### 🛰 Observability (`monitoring/`)
@@ -300,7 +303,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 ## 🧪 Testing
 
-**935+ tests across 47 suites** — 514 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations) and 421+ frontend/backend tests (Jest + supertest + Playwright E2E).
+**2,300+ tests across 176+ files** — 586 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations) and 1,700+ frontend/backend/extension/mobile tests (Jest + supertest + Playwright E2E).
 
 | Layer           | Command                                                 | Notes                                                       |
 | --------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
@@ -326,7 +329,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 | 5 | ![Transaction Result](screenshots/05-transaction-result.png) | Transaction result with hash and Stellar Expert link |
 | 6 | ![Mobile Responsive](screenshots/06-mobile-responsive.png) | Mobile responsive UI (iPhone X viewport, 375×812) |
 | 7 | ![CI/CD Pipeline](screenshots/07-ci-pipeline.png) | CI/CD pipeline running on GitHub Actions |
-| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 421 passing tests across 47 suites |
+| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 2,300+ passing tests across 176+ test files |
 
 ---
 
@@ -443,7 +446,7 @@ stellar contract invoke \
 
 See [`docs/contract-integration.md`](docs/contract-integration.md) for the full partner SDK guide with TypeScript, Go, and Python examples.
 
-Container images are multi-stage (`builder` + `runner`), pinned to `node:20.18.1-alpine` LTS, built with `npm ci --omit=dev`, and signed with cosign on release tags.
+Container images are multi-stage (`builder` + `runner`), pinned to `node:22-alpine`, built with `npm ci --omit=dev`, and signed with cosign on release tags.
 
 ---
 
