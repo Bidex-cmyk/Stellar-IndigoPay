@@ -172,7 +172,8 @@ export default function WalletConnect({ onConnect }: WalletConnectProps) {
               onClick={() => handleConnect(adapter)}
               disabled={loading !== null}
               className="flex items-center gap-3 w-full p-3 rounded-xl border border-[rgba(99,102,241,0.15)] dark:border-[rgba(129,140,248,0.20)] bg-white dark:bg-[#14142D] hover:border-[rgba(99,102,241,0.35)] hover:bg-[rgba(99,102,241,0.04)] dark:hover:bg-[rgba(129,140,248,0.06)] transition-all text-left group"
-              data-testid={`wallet-option-${adapter.id}`}
+              data-testid="wallet-connect-button"
+              data-wallet-id={adapter.id}
             >
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#4F46E5]/10 to-[#7C3AED]/10 dark:from-[#818CF8]/15 dark:to-[#A78BFA]/15 flex items-center justify-center text-[#4F46E5] dark:text-[#818CF8] group-hover:scale-105 transition-transform shrink-0">
                 <Icon />

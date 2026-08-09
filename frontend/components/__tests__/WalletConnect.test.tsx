@@ -106,7 +106,7 @@ describe("WalletConnect", () => {
       expect(screen.getByText("Freighter")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("wallet-option-freighter"));
+    await user.click(screen.getByTestId("wallet-connect-button"));
 
     expect(adapter.getPublicKey).toHaveBeenCalledTimes(1);
     await waitFor(() => {
@@ -129,7 +129,7 @@ describe("WalletConnect", () => {
       expect(screen.getByText("Freighter")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("wallet-option-freighter"));
+    await user.click(screen.getByTestId("wallet-connect-button"));
 
     await waitFor(() => {
       expect(screen.getByText("Connection rejected.")).toBeInTheDocument();
@@ -141,9 +141,9 @@ describe("WalletConnect", () => {
     render(<WalletConnect onConnect={jest.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("wallet-option-freighter")).toBeInTheDocument();
+      expect(screen.getByTestId("wallet-connect-button")).toBeInTheDocument();
     });
     // Only one wallet card shown
-    expect(screen.queryByTestId("wallet-option-albedo")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("wallet-connect-button")).toHaveLength(1);
   });
 });
