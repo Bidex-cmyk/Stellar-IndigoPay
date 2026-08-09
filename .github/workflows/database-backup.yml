@@ -1,8 +1,6 @@
 name: Database Backup
 
 on:
-  push:
-    branches: [main, develop]
   schedule:
     # Run nightly at 2 AM UTC
     - cron: "0 2 * * *"
@@ -14,15 +12,7 @@ on:
         default: "s3"
 
 jobs:
-  skip-on-push:
-    if: github.event_name == 'push'
-    name: Skip (schedule/manual only)
-    runs-on: ubuntu-latest
-    steps:
-      - run: 'echo "Skipped — this workflow runs on schedule or manual dispatch only"'
-
   backup-database:
-    if: github.event_name != 'push'
     name: Backup PostgreSQL Database
     runs-on: ubuntu-latest
 
