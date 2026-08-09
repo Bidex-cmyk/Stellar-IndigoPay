@@ -8,6 +8,8 @@
 [![CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 [![Contracts CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml/badge.svg?branch=main)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/contracts.yml)
 [![Release](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml)
+[![Contributors](https://img.shields.io/badge/Contributors-12%2B-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
+[![Tests](https://img.shields.io/badge/Tests-935%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 
 [![Stellar](https://img.shields.io/badge/Stellar-Powered-6366F1?logo=stellar)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Contracts-7C3AED)](https://soroban.stellar.org)
@@ -297,6 +299,8 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 ---
 
 ## 🧪 Testing
+
+**935+ tests across 47 suites** — 514 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations) and 421+ frontend/backend tests (Jest + supertest + Playwright E2E).
 
 | Layer           | Command                                                 | Notes                                                       |
 | --------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
