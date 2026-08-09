@@ -2,10 +2,7 @@ name: Mobile Preview Build
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'mobile/**'
-      - '.github/workflows/mobile.yml'
+    branches: [main, develop]
 
 jobs:
   ci-pass:
