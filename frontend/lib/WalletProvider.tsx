@@ -110,6 +110,15 @@ export function WalletProvider({ children }: WalletProviderProps) {
   // component unmounts mid-flight (React Strict Mode double-mount is
   // safe with this guard).
   useEffect(() => {
+    // In E2E tests, __test_publicKey__ is injected via addInitScript.
+    // Skip auto-detection so the wallet-connect-button renders and
+    // tests can manually trigger the connection flow.
+    if (
+      typeof window !== "undefined" &&
+      (window as unknown as Record<string, unknown>).__test_publicKey__
+    )
+      return undefined;
+
     let cancelled = false;
     (async () => {
       setState("detecting");

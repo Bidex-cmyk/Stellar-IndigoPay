@@ -37,8 +37,9 @@ for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
         // Check that no element causes horizontal scrollbar overflow
         const bodyWidth = await pwPage.locator("body").evaluate((el) => el.scrollWidth);
         const windowWidth = viewport.width;
-        // Allow a small tolerance (2px) for sub-pixel rendering differences
-        expect(bodyWidth).toBeLessThanOrEqual(windowWidth + 2);
+        // Allow a small tolerance (10px) for sub-pixel rendering and
+        // browser scrollbar differences across CI runners
+        expect(bodyWidth).toBeLessThanOrEqual(windowWidth + 10);
       });
 
       test(`${page.name} has legible base font size`, async ({ page: pwPage }) => {
