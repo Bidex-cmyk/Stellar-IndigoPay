@@ -25,4 +25,17 @@ module.exports = {
     "node_modules/(?!(uuid|@stellar/stellar-sdk|pino|pino-http|prom-client)/)",
   ],
   testPathIgnorePatterns: ["/node_modules/", "/scripts/load-modules.js"],
+  collectCoverageFrom: [
+    "src/**/*.js",
+    "!src/**/*.test.js",
+    "!src/**/__tests__/**",
+  ],
+  coverageThreshold: {
+    global: {
+      statements: 95,
+      branches: 95,
+      functions: 95,
+      lines: 95,
+    },
+  },
 };
