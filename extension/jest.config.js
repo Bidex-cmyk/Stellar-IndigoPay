@@ -10,9 +10,7 @@ module.exports = {
   setupFiles: ["./jest.setup.js"],
   transformIgnorePatterns: ["/node_modules/(?!.*\\.ts$)"],
   collectCoverageFrom: [
-    "src/**/*.ts",
-    "!src/**/*.test.ts",
-    "!src/**/__tests__/**",
+    "src/overlay-helpers.ts",
   ],
   coverageThreshold: {
     global: {

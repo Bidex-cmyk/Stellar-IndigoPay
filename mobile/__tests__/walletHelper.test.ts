@@ -33,9 +33,9 @@ describe("Wallet helpers", () => {
       // Valid format
       expect(
         isValidStellarAddress(
-          "G" + "A".repeat(55),
+          "G" + "0".repeat(55),
         ),
-      ).toBe(false); // 'A' is not in base32 alphabet, but 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567' is
+      ).toBe(false); // '0' is not in the Stellar base32 alphabet (A-Z,2-7)
       expect(isValidStellarAddress("")).toBe(false);
       expect(isValidStellarAddress("not-an-address")).toBe(false);
     });

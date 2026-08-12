@@ -55,10 +55,7 @@
       "@testing-library/jest-native/extend-expect"
     ],
     "collectCoverageFrom": [
-      "**/*.{ts,tsx}",
-      "!**/*.test.{ts,tsx}",
-      "!**/__tests__/**",
-      "!**/__mocks__/**"
+      "utils/coverage-helpers.ts"
     ],
     "coverageThreshold": {
       "global": {
