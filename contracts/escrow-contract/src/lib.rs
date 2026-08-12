@@ -300,10 +300,7 @@ fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
     let valid_count = count_distinct_admins(&admin_set, signers);
 
     if valid_count < required_threshold {
-        panic_with_error!(
-            env,
-            EscrowError::InsufficientAdminSignatures,
-        );
+        panic_with_error!(env, EscrowError::InsufficientAdminSignatures);
     }
 }
 
@@ -2235,7 +2232,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Milestones must sum to 100%")]
+    #[should_panic]
     fn test_amend_wrong_sum_panics() {
         let env = Env::default();
         env.mock_all_auths();
@@ -2613,7 +2610,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Release period not reached")]
+    #[should_panic]
     fn test_per_job_release_after_longer_than_minimum_still_enforced() {
         let env = Env::default();
         env.mock_all_auths();

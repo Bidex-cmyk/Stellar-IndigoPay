@@ -32,8 +32,8 @@
  *   cargo build --target wasm32v1-none --release
  */
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
-    Address, Env, Map, String, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
+    Env, Map, String, Vec,
 };
 
 #[cfg(all(test, feature = "testutils"))]
@@ -838,8 +838,12 @@ impl AttestationContract {
             .get(&DataKey::Attestation(id))
             .expect("Attestation not found");
         match record.status {
-            AttestationStatus::Verified => panic_with_error!(&env, AttestationError::AlreadyVerified),
-            AttestationStatus::Revoked => panic_with_error!(&env, AttestationError::AttestationWasRevoked),
+            AttestationStatus::Verified => {
+                panic_with_error!(&env, AttestationError::AlreadyVerified)
+            }
+            AttestationStatus::Revoked => {
+                panic_with_error!(&env, AttestationError::AttestationWasRevoked)
+            }
             AttestationStatus::Pending => {}
         }
 
