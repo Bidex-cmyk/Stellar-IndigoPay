@@ -517,7 +517,7 @@ function FeaturedProjectCard({ project }: { project: ClimateProject }) {
         <div className="flex flex-col md:flex-row gap-6">
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2 mb-3">
-              <span className="text-xs font-semibold bg-[rgba(245,158,11,0.10)] text-[#D97706] dark:text-[#FBBF24] px-3 py-1 rounded-full border border-[rgba(245,158,11,0.20)] font-body">
+              <span className="text-xs font-semibold bg-[rgba(245,158,11,0.10)] text-[#B45309] dark:text-[#FBBF24] px-3 py-1 rounded-full border border-[rgba(245,158,11,0.20)] font-body">
                 🏆 Most Donors
               </span>
               <span className="text-xs text-[#475569] dark:text-[#94A3B8] bg-[rgba(99,102,241,0.06)] dark:bg-[rgba(129,140,248,0.08)] px-2.5 py-1 rounded-full border border-[rgba(99,102,241,0.10)] font-body">
