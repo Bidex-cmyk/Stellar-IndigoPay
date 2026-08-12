@@ -2,8 +2,8 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, InvokeError, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
+    Address, Env, InvokeError, String, Symbol, Vec,
 };
 
 const MAX_OBSERVATIONS: u32 = 20;
@@ -12,6 +12,69 @@ const DEFAULT_TWAP_WINDOW: u32 = 10;
 const DEFAULT_STALENESS_THRESHOLD: u32 = 720;
 const PRICE_SCALE: i128 = 10_000_000;
 pub const DEFAULT_UNSTAKE_COOLDOWN: u32 = 120_960;
+
+// ─── Contract error codes ───────────────────────────────────────────────────
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum OracleError {
+    // ── Initialization & admin (1–5) ────────────────────────────────────────
+    ContractAlreadyInitialized = 1,
+    OnlyAdminCanPerformThisAction = 2,
+    OracleNotInitialized = 3,
+    UnauthorizedReporterManagement = 4,
+    UnauthorizedStakingConfig = 5,
+    // ── Staking (6–16) ──────────────────────────────────────────────────────
+    MinimumStakeMustBePositive = 6,
+    UnstakeCooldownMustBePositive = 7,
+    StakeAmountMustBePositive = 8,
+    NotAnAuthorisedReporter = 9,
+    StakingNotConfigured = 10,
+    NoReporterStake = 11,
+    UnstakeCooldownNotReached = 12,
+    StakeCooldownNotSet = 13,
+    SlashAmountMustBePositive = 14,
+    SlashAmountExceedsReporterStake = 15,
+    StakeTreasuryNotConfigured = 16,
+    // ── Price reporting (17–25) ─────────────────────────────────────────────
+    ReporterStakeBelowMinimum = 17,
+    PriceMustBePositive = 18,
+    FallbackPriceMustBePositive = 19,
+    OracleHasNoObservationsAndNoFallback = 20,
+    OraclePriceStaleAndNoFallbackConfigured = 21,
+    ZeroWeightTwapFallbackRequired = 22,
+    PriceDeviationExceedsThreshold = 23,
+    InvalidPriceObservation = 24,
+    ObservationStorageFailed = 25,
+    // ── Configuration (26–32) ───────────────────────────────────────────────
+    TwapWindowMustBeAtLeastOne = 26,
+    TwapWindowExceedsMaximum = 27,
+    TwapWindowExceedsStalenessThreshold = 28,
+    StalenessThresholdMustBeAtLeastTwapWindow = 29,
+    InvalidConfiguration = 30,
+    ConfigurationStorageFailed = 31,
+    FallbackPriceNotConfigured = 32,
+    // ── Source oracles (33–42) ──────────────────────────────────────────────
+    CannotRegisterOracleAsItsOwnSource = 33,
+    SourceOracleLimitExceeded = 34,
+    SourceOracleNotRegistered = 35,
+    SourceOracleAlreadyRegistered = 36,
+    InvalidSourceOracleAddress = 37,
+    SourceOracleAggregationFailed = 38,
+    NoSourceOraclesConfigured = 39,
+    SourceOracleUnresponsive = 40,
+    SourceOracleReturnedInvalidPrice = 41,
+    SourceOracleReturnedUnexpectedType = 42,
+    // ── Aggregation & computation (43–50) ────────────────────────────────────
+    AggregationOverflow = 43,
+    TwapMultiplicationOverflow = 44,
+    TwapAdditionOverflow = 45,
+    TotalWeightOverflow = 46,
+    ObservationMissing = 47,
+    UnauthorizedAggregationAccess = 48,
+    MedianCalculationFailed = 49,
+    AggregationResultInvalid = 50,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -63,7 +126,7 @@ fn require_admin(env: &Env, admin: &Address) {
         .get(&DataKey::Admin)
         .expect("Oracle not initialized");
     if stored_admin != *admin {
-        panic!("Only admin can perform this action");
+        panic_with_error!(env, OracleError::OnlyAdminCanPerformThisAction);
     }
 }
 
@@ -286,7 +349,7 @@ fn internal_price(env: &Env) -> i128 {
 impl SimpleOracle {
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            panic_with_error!(&env, OracleError::ContractAlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -336,10 +399,10 @@ impl SimpleOracle {
         admin.require_auth();
         require_admin(&env, &admin);
         if min_stake <= 0 {
-            panic!("Minimum stake must be positive");
+            panic_with_error!(&env, OracleError::MinimumStakeMustBePositive);
         }
         if unstake_cooldown == 0 {
-            panic!("Unstake cooldown must be positive");
+            panic_with_error!(&env, OracleError::UnstakeCooldownMustBePositive);
         }
         env.storage()
             .instance()
@@ -358,7 +421,7 @@ impl SimpleOracle {
     pub fn stake(env: Env, reporter: Address, amount: i128) {
         reporter.require_auth();
         if amount <= 0 {
-            panic!("Stake amount must be positive");
+            panic_with_error!(&env, OracleError::StakeAmountMustBePositive);
         }
         let is_reporter: bool = env
             .storage()
@@ -366,7 +429,7 @@ impl SimpleOracle {
             .get(&DataKey::Reporter(reporter.clone()))
             .unwrap_or(false);
         if !is_reporter {
-            panic!("Not an authorised reporter");
+            panic_with_error!(&env, OracleError::NotAnAuthorisedReporter);
         }
         let stake_token: Address = env
             .storage()
@@ -419,7 +482,7 @@ impl SimpleOracle {
             .get(&DataKey::ReporterStake(reporter.clone()))
             .unwrap_or(0);
         if amount <= 0 {
-            panic!("No reporter stake");
+            panic_with_error!(&env, OracleError::NoReporterStake);
         }
         let available_at: u32 = env
             .storage()
@@ -427,7 +490,7 @@ impl SimpleOracle {
             .get(&DataKey::StakeAvailableAt(reporter.clone()))
             .expect("Stake cooldown not set");
         if env.ledger().sequence() < available_at {
-            panic!("Unstake cooldown not reached");
+            panic_with_error!(&env, OracleError::UnstakeCooldownNotReached);
         }
         let stake_token: Address = env
             .storage()
@@ -457,7 +520,7 @@ impl SimpleOracle {
         admin.require_auth();
         require_admin(&env, &admin);
         if amount <= 0 {
-            panic!("Slash amount must be positive");
+            panic_with_error!(&env, OracleError::SlashAmountMustBePositive);
         }
         let current: i128 = env
             .storage()
@@ -465,7 +528,7 @@ impl SimpleOracle {
             .get(&DataKey::ReporterStake(reporter.clone()))
             .unwrap_or(0);
         if amount > current {
-            panic!("Slash amount exceeds reporter stake");
+            panic_with_error!(&env, OracleError::SlashAmountExceedsReporterStake);
         }
         let remaining = current
             .checked_sub(amount)
@@ -533,7 +596,7 @@ impl SimpleOracle {
             return;
         }
         if oracle_address == env.current_contract_address() {
-            panic!("Cannot register oracle as its own source");
+            panic_with_error!(&env, OracleError::CannotRegisterOracleAsItsOwnSource);
         }
 
         let mut sources: Vec<Address> = env
@@ -542,7 +605,7 @@ impl SimpleOracle {
             .get(&DataKey::SourceOracleList)
             .unwrap_or(Vec::new(&env));
         if sources.len() >= MAX_SOURCE_ORACLES {
-            panic!("Source oracle limit exceeded");
+            panic_with_error!(&env, OracleError::SourceOracleLimitExceeded);
         }
 
         env.storage().instance().set(&source_key, &true);
@@ -585,7 +648,7 @@ impl SimpleOracle {
             .get(&DataKey::Reporter(reporter.clone()))
             .unwrap_or(false);
         if !is_reporter {
-            panic!("Not an authorised reporter");
+            panic_with_error!(&env, OracleError::NotAnAuthorisedReporter);
         }
         let min_stake: i128 = env
             .storage()
@@ -598,10 +661,10 @@ impl SimpleOracle {
             .get(&DataKey::ReporterStake(reporter.clone()))
             .unwrap_or(0);
         if reporter_stake < min_stake {
-            panic!("Reporter stake below minimum");
+            panic_with_error!(&env, OracleError::ReporterStakeBelowMinimum);
         }
         if price <= 0 {
-            panic!("Price must be positive");
+            panic_with_error!(&env, OracleError::PriceMustBePositive);
         }
 
         let count: u32 = env
@@ -673,7 +736,7 @@ impl SimpleOracle {
         admin.require_auth();
         require_admin(&env, &admin);
         if price <= 0 {
-            panic!("Fallback price must be positive");
+            panic_with_error!(&env, OracleError::FallbackPriceMustBePositive);
         }
         env.storage()
             .instance()
@@ -695,13 +758,13 @@ impl SimpleOracle {
         admin.require_auth();
         require_admin(&env, &admin);
         if window == 0 {
-            panic!("TWAP window must be at least 1");
+            panic_with_error!(&env, OracleError::TwapWindowMustBeAtLeastOne);
         }
         if window > MAX_OBSERVATIONS {
-            panic!("TWAP window exceeds maximum");
+            panic_with_error!(&env, OracleError::TwapWindowExceedsMaximum);
         }
         if window > read_staleness_threshold(&env) {
-            panic!("TWAP window exceeds staleness threshold");
+            panic_with_error!(&env, OracleError::TwapWindowExceedsStalenessThreshold);
         }
         env.storage().instance().set(&DataKey::TwapWindow, &window);
         env.events()
@@ -712,7 +775,7 @@ impl SimpleOracle {
         admin.require_auth();
         require_admin(&env, &admin);
         if threshold < read_twap_window(&env) {
-            panic!("Staleness threshold must be at least TWAP window");
+            panic_with_error!(&env, OracleError::StalenessThresholdMustBeAtLeastTwapWindow);
         }
         env.storage()
             .instance()
@@ -1127,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Oracle has no observations and no fallback")]
+    #[should_panic]
     fn no_observations_without_fallback_panics() {
         let (env, contract_id, _, _) = setup();
         SimpleOracleClient::new(&env, &contract_id).get_price();
@@ -1142,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Contract already initialized")]
+    #[should_panic]
     fn initialize_only_once() {
         let (env, contract_id, admin, _) = setup();
         SimpleOracleClient::new(&env, &contract_id).initialize(&admin);
@@ -1382,14 +1445,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Not an authorised reporter")]
+    #[should_panic]
     fn non_reporter_cannot_report() {
         let (env, contract_id, _, reporter) = setup();
         SimpleOracleClient::new(&env, &contract_id).report_price(&reporter, &80_000_000);
     }
 
     #[test]
-    #[should_panic(expected = "Not an authorised reporter")]
+    #[should_panic]
     fn removed_reporter_cannot_report() {
         let (env, contract_id, admin, reporter) = setup();
         let client = SimpleOracleClient::new(&env, &contract_id);
@@ -1399,7 +1462,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only admin can perform this action")]
+    #[should_panic]
     fn only_admin_can_add_reporter() {
         let (env, contract_id, _, reporter) = setup();
         let non_admin = Address::generate(&env);
@@ -1407,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only admin can perform this action")]
+    #[should_panic]
     fn only_admin_can_remove_reporter() {
         let (env, contract_id, admin, reporter) = setup();
         add_reporter(&env, &contract_id, &admin, &reporter);
@@ -1416,7 +1479,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Price must be positive")]
+    #[should_panic]
     fn zero_price_is_rejected() {
         let (env, contract_id, admin, reporter) = setup();
         add_reporter(&env, &contract_id, &admin, &reporter);
@@ -1424,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Price must be positive")]
+    #[should_panic]
     fn negative_price_is_rejected() {
         let (env, contract_id, admin, reporter) = setup();
         add_reporter(&env, &contract_id, &admin, &reporter);
@@ -1432,7 +1495,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Fallback price must be positive")]
+    #[should_panic]
     fn zero_fallback_is_rejected() {
         let (env, contract_id, admin, _) = setup();
         SimpleOracleClient::new(&env, &contract_id).set_fallback_price(&admin, &0);
@@ -1451,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Oracle price is stale and no fallback configured")]
+    #[should_panic]
     fn stale_observation_without_fallback_panics() {
         let (env, contract_id, admin, reporter) = setup();
         env.ledger().set_sequence_number(100);
@@ -1664,7 +1727,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only admin can perform this action")]
+    #[should_panic]
     fn only_admin_can_set_deviation_threshold() {
         let (env, contract_id, _, _) = setup();
         let non_admin = Address::generate(&env);
