@@ -15,8 +15,7 @@ pub const DEFAULT_UNSTAKE_COOLDOWN: u32 = 120_960;
 
 // ─── Contract error codes ───────────────────────────────────────────────────
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum OracleError {
     // ── Initialization & admin (1–5) ────────────────────────────────────────
     ContractAlreadyInitialized = 1,

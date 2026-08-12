@@ -86,8 +86,7 @@ pub const DEFAULT_DEADLINE_LEDGERS: u32 = 1_555_200; // 90 days @ 5s/ledger
 // Every error returned by the escrow contract carries a unique numeric code.
 // Clients and indexers can match on the code without parsing panic strings.
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EscrowError {
     // ── Initialization (1–5) ─────────────────────────────────────────────
     AlreadyInitialized = 1,

@@ -179,8 +179,7 @@ const UPGRADE_TIMELOCK_LEDGERS: u32 = 34_560;
 
 // ─── Contract error codes ───────────────────────────────────────────────────
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum AttestationError {
     // ── Initialization & admin (1–5) ────────────────────────────────────────
     ContractAlreadyInitialized = 1,

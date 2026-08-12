@@ -755,8 +755,7 @@ const MAX_CO2_PER_XLM: u32 = 100_000;
 
 // ─── Main contract error codes ─────────────────────────────────────────────
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ContractError {
     // ── Initialization & admin (1–10) ───────────────────────────────────────
     ContractAlreadyInitialized = 1,
