@@ -11,7 +11,7 @@
 [![Extension CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/extension.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/extension.yml)
 [![Mobile CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml)
 [![Release](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml)
-[![Contributors](https://img.shields.io/badge/Contributors-12%2B-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
+[![Contributors](https://img.shields.io/badge/Contributors-89-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
 [![Tests](https://img.shields.io/badge/Tests-2%2C200%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 [![Errors](https://img.shields.io/badge/Contract%20Errors-308-7C3AED)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/tree/main/contracts)
 [![Coverage](https://img.shields.io/badge/Coverage-95%25%20target-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
