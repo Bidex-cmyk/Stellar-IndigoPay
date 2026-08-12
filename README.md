@@ -22,6 +22,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=next.js)](https://nextjs.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docker.com)
 [![Rust](https://img.shields.io/badge/Rust-WASM-DEA584?logo=rust)](https://rust-lang.org)
+[![Gas Optimized](https://img.shields.io/badge/Gas-Optimized-10B981?logo=soroban)](docs/gas-optimization.md)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Deployed-326CE5?logo=kubernetes)](https://kubernetes.io)
 [![Expo](https://img.shields.io/badge/Expo-Android%20%2B%20iOS-000020?logo=expo)](https://expo.dev)
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-26A5E4?logo=telegram)](https://t.me/StellarIndigoPay)
@@ -302,6 +303,21 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 - **Gitleaks** secret scan with a curated allowlist ([`.gitleaks.toml`](.gitleaks.toml))
 - Rate limit + CSRF + helmet + CSP + Sentry error capture
 - Audit log of every admin action with actor, target, IP, and metadata
+
+### ⚡ Gas-optimized contracts
+
+All four Soroban contracts are compiled with aggressive size optimization (`opt-level = "z"`, `lto = true`, `codegen-units = 1`, `strip = true`, `panic = "abort"`) and enforced by a **64 KB WASM size limit** in CI. Key savings:
+
+| Strategy | Impact |
+|----------|--------|
+| **Feature gating** (16 Cargo features) | Slim deployment at **51 KB** vs 103 KB full; choose only what you need |
+| **Shortened event symbols** (`symbol_short!`) | 33% smaller XDR encoding (8-9 bytes avg vs 12-15) |
+| **Bundled reads** (`get_global_stats`) | 75% fewer RPC calls (1 vs 4) for dashboard hero |
+| **Instance storage** for hot counters | Cheaper reads than persistent storage for admin threshold, global totals, pause flags |
+| **Storage garbage collection** (`cleanup_*`) | Permissionless cleanup prevents TTL bloat and long-term storage cost growth |
+| **CEI pattern** (Checks-Effects-Interactions) | Re-entrancy protection with zero gas overhead |
+
+**Per-operation benchmarks** are documented for all 4 contracts — from `donate` (~10,000 stroops) to `get_global_stats` (~100 stroops) — with cross-contract flow estimates and before/after comparisons. See the full report in [**`docs/gas-optimization.md`**](docs/gas-optimization.md).
 
 ### 💥 Disaster recovery
 
