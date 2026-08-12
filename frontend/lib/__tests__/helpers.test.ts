@@ -2,12 +2,12 @@
  * Unit tests for utility/helper functions.
  */
 
-import { describe, test, expect, jest } from "@jest/globals";
+import { describe, test, expect } from "@jest/globals";
 
 describe("Utility helpers", () => {
   describe("CO2 offset calculation", () => {
     test("calculates CO2 offset from XLM amount", () => {
-      const calculateCO2 = (amountStroops, co2PerXlm) => {
+      const calculateCO2 = (amountStroops: number, co2PerXlm: number): number => {
         const xlmAmount = amountStroops / 10_000_000;
         return Math.floor(xlmAmount * co2PerXlm);
       };
@@ -19,7 +19,7 @@ describe("Utility helpers", () => {
     });
 
     test("handles zero CO2 rate", () => {
-      const calculateCO2 = (amountStroops, co2PerXlm) => {
+      const calculateCO2 = (amountStroops: number, co2PerXlm: number): number => {
         const xlmAmount = amountStroops / 10_000_000;
         return Math.floor(xlmAmount * co2PerXlm);
       };
@@ -30,7 +30,7 @@ describe("Utility helpers", () => {
 
   describe("Amount formatting", () => {
     test("formats stroops to XLM string", () => {
-      const formatXLM = (stroops) => {
+      const formatXLM = (stroops: number): string => {
         return (stroops / 10_000_000).toFixed(4);
       };
 
@@ -40,7 +40,7 @@ describe("Utility helpers", () => {
     });
 
     test("formats large XLM amounts", () => {
-      const formatXLM = (stroops) => {
+      const formatXLM = (stroops: number): string => {
         return (stroops / 10_000_000).toFixed(2);
       };
 
@@ -50,7 +50,7 @@ describe("Utility helpers", () => {
   });
 
   describe("Badge tier calculation", () => {
-    const computeBadgeTier = (totalDonated) => {
+    const computeBadgeTier = (totalDonated: number): string => {
       if (totalDonated >= 2000 * 10_000_000) return "EarthGuardian";
       if (totalDonated >= 500 * 10_000_000) return "Forest";
       if (totalDonated >= 100 * 10_000_000) return "Tree";
@@ -88,7 +88,7 @@ describe("Utility helpers", () => {
 
   describe("Date/time helpers", () => {
     test("converts ledgers to days", () => {
-      const ledgersToDays = (ledgers) => {
+      const ledgersToDays = (ledgers: number): number => {
         const seconds = ledgers * 5; // 5 seconds per ledger
         return Math.round(seconds / 86400);
       };
@@ -99,7 +99,7 @@ describe("Utility helpers", () => {
     });
 
     test("converts days to ledgers", () => {
-      const daysToLedgers = (days) => {
+      const daysToLedgers = (days: number): number => {
         const seconds = days * 86400;
         return Math.round(seconds / 5);
       };
@@ -110,11 +110,13 @@ describe("Utility helpers", () => {
   });
 
   describe("Milestone percentage validation", () => {
+    type Milestone = { percentage: number };
+
     test("validates milestone percentages sum to 100", () => {
-      const validateMilestones = (milestones) => {
-        const sum = milestones.reduce((s, m) => s + m.percentage, 0);
+      const validateMilestones = (milestones: Milestone[]): boolean => {
+        const sum = milestones.reduce((s: number, m: Milestone) => s + m.percentage, 0);
         if (sum !== 100) return false;
-        if (milestones.some((m) => m.percentage < 0 || m.percentage > 100))
+        if (milestones.some((m: Milestone) => m.percentage < 0 || m.percentage > 100))
           return false;
         return true;
       };
@@ -134,9 +136,11 @@ describe("Utility helpers", () => {
   });
 
   describe("Address truncation", () => {
+    type TruncateFn = (addr: string | null) => string;
+
     test("truncates Stellar address for display", () => {
-      const truncateAddress = (addr) => {
-        if (!addr || addr.length < 12) return addr;
+      const truncateAddress: TruncateFn = (addr) => {
+        if (!addr || addr.length < 12) return addr || "";
         return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
       };
 
@@ -145,7 +149,7 @@ describe("Utility helpers", () => {
     });
 
     test("returns short addresses unchanged", () => {
-      const truncateAddress = (addr: string | null) => {
+      const truncateAddress: TruncateFn = (addr) => {
         if (!addr || addr.length < 12) return addr || "";
         return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
       };
