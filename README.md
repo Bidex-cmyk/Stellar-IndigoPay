@@ -7,7 +7,7 @@
 [![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-818CF8.svg)](CODE_OF_CONDUCT.md)
 [![CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 [![Contributors](https://img.shields.io/badge/Contributors-89-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
-[![Tests](https://img.shields.io/badge/Tests-2%2C200%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/Tests-2%2C400%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 [![Errors](https://img.shields.io/badge/Contract%20Errors-308-7C3AED)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/tree/main/contracts)
 [![Coverage](https://img.shields.io/badge/Coverage-99.5%25-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 
@@ -282,8 +282,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 - **Admin console** with JWT + refresh tokens, audit log, project status changes
 - **zod**-validated request payloads, **express-rate-limit** + **csurf**
 - **Pino** structured logging, `X-Request-Id` correlation on every request
-- **99 Jest suites (1,069+ tests)** covering routes, middleware, services, config, validators, and lifecycle
-- **95% coverage threshold** enforced via `jest.config.js`
+- **95% → 99.5% coverage thresholds** across backend, frontend, mobile, and extension
 - Sentry + Prometheus + webhook + indexer **graceful shutdown** wired through a lifecycle service
 
 ### 🛰 Observability (`monitoring/`)
@@ -314,7 +313,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 ## 🧪 Testing
 
-**2,200+ tests across 175+ files** — 586 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations), 1,069 backend tests (99 suites, 95% coverage target), 444 frontend tests (52 suites, 95% coverage target), plus extension and mobile suites.
+**2,400+ tests across 175+ files** — 586 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations), 1,069 backend tests (99 suites, 99.5% coverage target), 444 frontend tests (52 suites, 99.5% coverage target), 148 extension tests (6 suites, 99.5% coverage target), 239 mobile tests (27 suites, 99.5% coverage target).
 
 | Layer           | Command                                                 | Notes                                                       |
 | --------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
@@ -488,7 +487,7 @@ We welcome contributions of any size. See [**`CONTRIBUTING.md`**](CONTRIBUTING.m
 Quick checklist for a good PR:
 
 - [ ] Tests pass locally (`npm test` in the affected package)
-- [ ] Coverage meets the 95% threshold (`npm test -- --coverage`)
+- [ ] Coverage meets the 99.5% threshold (`npm test -- --coverage`)
 - [ ] Lint passes (`npm run lint`)
 - [ ] Type-check passes (`npm run type-check` for frontend / mobile)
 - [ ] For backend API changes, the OpenAPI spec is updated and Swagger UI reflects it
