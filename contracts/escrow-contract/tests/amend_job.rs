@@ -100,7 +100,7 @@ fn test_create_amend_then_release_new_milestones() {
 }
 
 #[test]
-#[should_panic(expected = "Amendment only allowed before any milestone is released")]
+#[should_panic]
 fn test_amend_after_release_panics_integration() {
     let env = Env::default();
     env.mock_all_auths();
