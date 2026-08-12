@@ -12,7 +12,8 @@
 [![Mobile CI](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/mobile.yml)
 [![Release](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml/badge.svg)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/release.yml)
 [![Contributors](https://img.shields.io/badge/Contributors-12%2B-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
-[![Tests](https://img.shields.io/badge/Tests-2%2C300%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/Tests-2%2C200%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
+[![Errors](https://img.shields.io/badge/Contract%20Errors-308-7C3AED)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/tree/main/contracts)
 
 [![Stellar](https://img.shields.io/badge/Stellar-Powered-6366F1?logo=stellar)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Contracts-7C3AED)](https://soroban.stellar.org)
@@ -46,7 +47,7 @@ The same platform ships as:
 | 🌐 **Web app**           | Donor dashboard, project browse, leaderboard, AI impact summaries, multi-wallet | Next.js 14 · React · TypeScript · Tailwind |
 | 📱 **Mobile app**        | QR-scan-to-give, biometric auth, secure wallet storage, push receipts           | React Native · Expo · expo-router          |
 | 🧩 **Browser extension** | Detect Stellar addresses on any page, donate in one click                       | Manifest V3 · Webpack (Chrome + Firefox)   |
-| ⛓️ **4 Soroban contracts** | Donation ledger, escrow, attestation bridge, price oracle                      | Rust · WASM `wasm32v1-none`                |
+| ⛓️ **4 Soroban contracts** | Donation ledger (136 codes), escrow (62), attestation (60), oracle (50) — **308 structured error codes** | Rust · WASM `wasm32v1-none`                |
 | 🛠 **Backend API**        | Metadata, leaderboard, webhooks, AI summaries, admin, event streaming           | Node.js 22 · Express · Postgres · pg-boss  |
 
 ---
@@ -192,6 +193,7 @@ That's it. No account creation, no email verification, no KYC.
 - **Direct-to-project payments** — funds flow donor → project wallet. The contract records the event; it never custodies funds.
 - **Backend is optional** — if the API is down, donations still succeed; you just can't see the leaderboard.
 - **Soroban is the source of truth** — the contract exposes 20+ read functions; the backend is a queryable cache.
+- **Structured errors** — all 4 contracts use `#[contracterror]` enums (308 numeric codes total); no string-parsing needed for error handling.
 - **Wallet-as-identity** — auth is `require_auth()` on the Stellar keypair. No password reset, no email enumeration.
 - **Defense in depth** — NetworkPolicies (default-deny), `PodDisruptionBudget`, `HorizontalPodAutoscaler`, External Secrets, SBOM + Trivy + cosign, monthly restore drills.
 
@@ -258,6 +260,18 @@ That's it. No account creation, no email verification, no KYC.
 | **Attestation** | `contracts/attestation-contract/` | Cross-chain donation attestation bridge — records verifiable on-chain proofs that a donation originated on another chain |
 | **Oracle** | `contracts/oracle-contract/` | On-chain price oracle for XLM/USDC conversion used by the IndigoPay contract's multi-currency donation flow |
 
+#### Structured Error Codes
+
+All four contracts use `#[contracterror]` enums with unique numeric codes — no string-based `panic!()` messages. Clients and indexers can match on error codes without parsing panic strings.
+
+| Contract | Error Enum | Codes | Categories |
+|----------|-----------|-------|------------|
+| **IndigoPay** | `ContractError` + `VerificationError` | 136 | Init/admin, project, donation, campaign, token, attestation, escrow, governance, ZK, NFT, upgrade, emergency, refund, impact |
+| **Escrow** | `EscrowError` | 62 | Init, job creation, amendment, release, oracle, disputes, refunds, claims, admin |
+| **Attestation** | `AttestationError` | 60 | Init/admin, relayer, pause, validation, attestation lifecycle, upgrade, aggregation |
+| **Oracle** | `OracleError` | 50 | Init/admin, staking, price reporting, config, source oracles, aggregation |
+| **Total** | | **308** | |
+
 Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-contract/README.md) · [`contracts/indigopay-contract/SECURITY.md`](contracts/indigopay-contract/SECURITY.md) · [`contracts/indigopay-contract/UPGRADE.md`](contracts/indigopay-contract/UPGRADE.md)
 
 ### 🛠 Backend API (`backend/`)
@@ -272,7 +286,8 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 - **Admin console** with JWT + refresh tokens, audit log, project status changes
 - **zod**-validated request payloads, **express-rate-limit** + **csurf**
 - **Pino** structured logging, `X-Request-Id` correlation on every request
-- 50+ Jest cases covering metrics, lifecycle, requestId, health, and readiness
+- **99 Jest suites (1,069+ tests)** covering routes, middleware, services, config, validators, and lifecycle
+- **95% coverage threshold** enforced via `jest.config.js`
 - Sentry + Prometheus + webhook + indexer **graceful shutdown** wired through a lifecycle service
 
 ### 🛰 Observability (`monitoring/`)
@@ -303,7 +318,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 
 ## 🧪 Testing
 
-**2,300+ tests across 176+ files** — 586 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations) and 1,700+ frontend/backend/extension/mobile tests (Jest + supertest + Playwright E2E).
+**2,200+ tests across 175+ files** — 586 Soroban contract tests (unit + property-based fuzz with 10,000+ iterations), 1,069 backend tests (99 suites, 95% coverage target), 444 frontend tests (52 suites, 95% coverage target), plus extension and mobile suites.
 
 | Layer           | Command                                                 | Notes                                                       |
 | --------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
@@ -329,7 +344,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 | 5 | ![Transaction Result](screenshots/05-transaction-result.png) | Transaction result with hash and Stellar Expert link |
 | 6 | ![Mobile Responsive](screenshots/06-mobile-responsive.png) | Mobile responsive UI (iPhone X viewport, 375×812) |
 | 7 | ![CI/CD Pipeline](screenshots/07-ci-pipeline.png) | CI/CD pipeline running on GitHub Actions |
-| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 2,300+ passing tests across 176+ test files |
+| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 2,200+ passing tests across 175+ test files |
 
 ---
 
@@ -477,10 +492,12 @@ We welcome contributions of any size. See [**`CONTRIBUTING.md`**](CONTRIBUTING.m
 Quick checklist for a good PR:
 
 - [ ] Tests pass locally (`npm test` in the affected package)
+- [ ] Coverage meets the 95% threshold (`npm test -- --coverage`)
 - [ ] Lint passes (`npm run lint`)
 - [ ] Type-check passes (`npm run type-check` for frontend / mobile)
 - [ ] For backend API changes, the OpenAPI spec is updated and Swagger UI reflects it
 - [ ] For contract changes, `cargo test --features testutils` passes and an entry is added to [`contracts/EVENTS.md`](contracts/EVENTS.md) for any new event
+- [ ] For new contract errors, add a unique variant to the `#[contracterror]` enum
 - [ ] CHANGELOG.md has a one-line entry under `[Unreleased]` in Keep-a-Changelog format
 - [ ] No secrets in the diff (CI runs gitleaks)
 
@@ -507,6 +524,7 @@ If you find a vulnerability, **please do not open a public issue.** Use [GitHub 
 | **v2.0** | Multi-currency: USDC alongside XLM with on-chain price oracle | ✅ Shipped |
 | **v2.1** | DAO governance: badge-weighted voting on project verification, escrow contracts | ✅ Shipped |
 | **v2.2** | Cross-chain attestation bridge, DEX integration, campaign-escrow integration, storage garbage collection | ✅ Shipped |
+| **v2.2.1** | Structured error codes (308 across all contracts), 95% coverage targets, backend test expansion (99 suites / 1,069 tests) | ✅ Shipped |
 | **v2.3** | (Planned) Mainnet launch, mobile push notifications, advanced analytics, grant applications | 🚧 Planned |
 
 Full backlog: [**`ROADMAP.md`**](ROADMAP.md).
