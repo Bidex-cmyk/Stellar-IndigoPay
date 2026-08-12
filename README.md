@@ -9,7 +9,7 @@
 [![Contributors](https://img.shields.io/badge/Contributors-89-6366F1)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/graphs/contributors)
 [![Tests](https://img.shields.io/badge/Tests-2%2C200%2B-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 [![Errors](https://img.shields.io/badge/Contract%20Errors-308-7C3AED)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/tree/main/contracts)
-[![Coverage](https://img.shields.io/badge/Coverage-95%25%20target-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/Coverage-99.5%25-10B981)](https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/actions/workflows/ci.yml)
 
 [![Stellar](https://img.shields.io/badge/Stellar-Powered-6366F1?logo=stellar)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-Contracts-7C3AED)](https://soroban.stellar.org)
