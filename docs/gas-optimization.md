@@ -1,4 +1,4 @@
-# Gas Optimization & Benchmarking — IndigoPay Contract
+# Gas Optimization & Benchmarking — All Soroban Contracts
 
 ## Overview
 
@@ -191,3 +191,184 @@ stellar contract invoke \
 ```
 
 The `--fee` flag sets a max fee; Soroban charges only actual gas used. Check the transaction on Stellar Expert for exact resource usage.
+
+---
+
+## Escrow Contract — Gas Benchmarks
+
+All values are estimates based on Soroban Testnet execution. The escrow contract manages milestone-based fund release with M-of-N admin governance.
+
+### Read-Only Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `get_job` | ~35,000 | 100 | Single job lookup with milestones |
+| `get_job_count` | ~7,000 | 100 | u32 counter read |
+| `get_job_ids` | ~18,000 | 100 | Vec<String> read |
+| `get_admin_set` | ~12,000 | 100 | Vec<Address> read |
+| `get_admin_threshold` | ~5,000 | 100 | u32 scalar read |
+| `get_job_amendment_count` | ~10,000 | 100 | Amendment counter lookup |
+| `get_freelancer_reputation` | ~25,000 | 100 | FreelancerReputation struct |
+
+### State-Mutating Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Storage Writes | Notes |
+|-----------|-----------------|---------------|----------------|-------|
+| `create_job` | ~420,000 | 8,000 | 6 writes | Job + count + ids + reputation + event + token transfer |
+| `release_milestone` | ~280,000 | 5,000 | 3 writes | Milestone update + status + reputation (if completed) |
+| `amend_job_milestones` | ~210,000 | 5,000 | 3 writes | Job milestones + amendment count + event |
+| `claim_milestone` | ~260,000 | 5,000 | 3 writes | Milestone released + status + token transfer |
+| `refund_expired_job` | ~190,000 | 5,000 | 2 writes | Job status + token transfer |
+| `dispute_milestone` | ~175,000 | 5,000 | 2 writes | Milestone disputed + reputation |
+| `resolve_milestone_dispute` | ~220,000 | 5,000 | 3 writes | Milestone resolved + status + token transfer |
+| `update_release_after` | ~95,000 | 5,000 | 1 write | Job release_after field |
+
+### Admin Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `initialize` | ~55,000 | 5,000 | One-time admin set + threshold |
+| `add_admin` | ~60,000 | 5,000 | Appends to admin set |
+| `remove_admin` | ~65,000 | 5,000 | Rebuilds admin set |
+| `update_threshold` | ~40,000 | 5,000 | Updates threshold scalar |
+
+### Escrow Gas Characteristics
+
+- **Token transfers are cross-contract calls** — `create_job`, `release_milestone`, `claim_milestone`, and `refund_expired_job` all invoke `token::Client::transfer()`, adding ~2,000 stroops per call. The benchmark fees above include this overhead.
+- **CEI ordering** prevents re-entrancy without extra gas: all storage writes happen before the token transfer.
+- **Reputation tracking** adds 2 extra writes per dispute/complete lifecycle event, costing ~100 additional stroops each.
+- **Deprecated functions** (`dispute_job`, `resolve_dispute`) remain callable but use the older job-level dispute model; they incur similar gas costs to `dispute_milestone` / `resolve_milestone_dispute`.
+- **Oracle-gated milestone verification** (`submit_milestone_proof`, `verify_milestone`) is behind the `oracle-escrow` feature and adds ~50,000 CPU instructions per proof submission/verification cycle.
+
+---
+
+## Attestation Contract — Gas Benchmarks
+
+The attestation contract records verifiable on-chain proofs that a donation originated on another chain (Ethereum, Polygon, etc.).
+
+### Read-Only Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `get_attestation` | ~30,000 | 100 | Single attestation record |
+| `get_by_donor` | ~45,000 | 100 | Scans attestations by donor (O(n)) |
+| `get_pending_count` | ~6,000 | 100 | u64 counter |
+| `get_total_count` | ~6,000 | 100 | u64 counter |
+| `get_donor_aggregate` | ~40,000 | 100 | Aggregated donor stats across chains |
+| `get_chain_aggregate` | ~35,000 | 100 | Per-chain aggregate |
+| `is_paused` | ~3,000 | 100 | Bool flag read |
+| `get_admin` | ~5,000 | 100 | Address read |
+| `get_relayer` | ~5,000 | 100 | Optional<Address> read |
+| `get_pending_upgrade` | ~8,000 | 100 | Upgrade state read |
+
+### State-Mutating Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Storage Writes | Notes |
+|-----------|-----------------|---------------|----------------|-------|
+| `record_attestation` | ~280,000 | 5,000 | 4 writes | Attestation record + donor index + aggregates + event |
+| `verify_attestation` | ~180,000 | 5,000 | 2 writes | Status change + event |
+| `revoke_attestation` | ~140,000 | 5,000 | 2 writes | Status change + event |
+| `add_allowed_chain` | ~45,000 | 5,000 | 1 write | Chain set update |
+| `remove_allowed_chain` | ~45,000 | 5,000 | 1 write | Chain set update |
+| `set_relayer` | ~30,000 | 5,000 | 1 write | Address update |
+
+### Admin Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `initialize` | ~45,000 | 5,000 | One-time admin set |
+| `pause` / `unpause` | ~20,000 | 5,000 | Bool flag toggle |
+| `propose_upgrade` | ~50,000 | 5,000 | 48h timelock upgrade |
+| `execute_upgrade` | ~30,000 | 5,000 | Swaps WASM after timelock |
+
+### Attestation Gas Characteristics
+
+- **Donor aggregate lookups** use persistent storage with a dedicated `DonorAggregate` struct — avoids iterating all attestations for common queries.
+- **Chain allowlist** is a small Vec (typically 5-10 entries) stored in instance storage for cheap reads.
+- **Cross-contract settlement** happens via the IndigoPay contract calling `get_attestation` → `settle_attestation`, so the attestation contract itself has no external cross-contract calls.
+
+---
+
+## Oracle Contract — Gas Benchmarks
+
+The oracle contract provides on-chain XLM/USDC price feeds using a TWAP (Time-Weighted Average Price) from reporter-submitted observations with stake/slash incentives.
+
+### Read-Only Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `get_price` | ~15,000 | 100 | TWAP from 10-observation window |
+| `get_aggregated_price` | ~22,000 | 100 | Median from multiple source oracles |
+| `get_reporter_stake` | ~10,000 | 100 | i128 stake read |
+| `get_slash_history` | ~30,000 | 100 | Vec<SlashEvent> iteration |
+| `get_twap_window` | ~5,000 | 100 | u32 config read |
+| `get_staleness_threshold` | ~5,000 | 100 | u32 config read |
+
+### State-Mutating Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Storage Writes | Notes |
+|-----------|-----------------|---------------|----------------|-------|
+| `report_price` | ~180,000 | 5,000 | 3 writes | Pushes to circular buffer + aggregation + event |
+| `stake` | ~160,000 | 5,000 | 2 writes | Reporter stake + token transfer in |
+| `unstake` | ~195,000 | 5,000 | 3 writes | Stake release + cooldown check + token transfer out |
+| `slash` | ~140,000 | 5,000 | 3 writes | Stake reduction + slash history + event |
+| `add_source_oracle` | ~50,000 | 5,000 | 1 write | Oracle set update |
+| `remove_source_oracle` | ~50,000 | 5,000 | 1 write | Oracle set update |
+| `set_fallback_price` | ~35,000 | 5,000 | 1 write | Config update |
+| `set_max_price_deviation` | ~35,000 | 5,000 | 1 write | Config update |
+| `set_staleness_threshold` | ~30,000 | 5,000 | 1 write | Config update |
+
+### Admin Operations
+
+| Operation | CPU Instructions | Fee (stroops) | Notes |
+|-----------|-----------------|---------------|-------|
+| `initialize` | ~45,000 | 5,000 | One-time admin set |
+| `add_reporter` | ~40,000 | 5,000 | Reporter registry update |
+| `remove_reporter` | ~40,000 | 5,000 | Reporter registry update |
+
+### Oracle Gas Characteristics
+
+- **Circular buffer** for price observations caps at 20 entries — O(1) push, O(10) average read. No unbounded iteration.
+- **Staleness fallback** avoids computation when the buffer is fresh; only triggers the fallback path after 720 ledgers (~1 hour).
+- **Source oracle aggregation** uses median-of-medians over the external oracle set, bounded to O(n) where n is the number of source oracles (typically 3-5).
+- **Cooldown enforcement** on unstake/slash is a single u32 comparison, adding negligible gas.
+
+---
+
+## Cross-Contract Gas Summary
+
+When the IndigoPay contract invokes its companion contracts, the total gas is additive:
+
+| Flow | Contracts Involved | Est. Total Fee (stroops) |
+|------|-------------------|--------------------------|
+| Donate XLM (no escrow) | IndigoPay only | ~10,000 |
+| Donate USDC (with oracle) | IndigoPay + Oracle | ~15,000 |
+| Campaign with escrow | IndigoPay + Escrow | ~18,000 |
+| Cross-chain attestation settlement | IndigoPay + Attestation | ~15,000 |
+| Escrow milestone release | Escrow only | ~5,000 |
+
+### Fee Estimation Formula (all contracts)
+
+```
+total_fee = base_fee + (cpu_instructions × cpu_rate) + (storage_bytes_written × write_rate)
+```
+
+Soroban Testnet rates (approximate):
+- Base fee: 100 stroops
+- CPU instruction rate: ~25 stroops per 1,000 instructions
+- Storage write: ~40 stroops per entry
+- Cross-contract call overhead: ~2,000 stroops per call
+
+---
+
+## WASM Size Budget (All Contracts)
+
+| Contract | Slim (no features) | Full (all features) | CI Limit |
+|----------|-------------------|---------------------|----------|
+| `indigopay-contract` | 51 KB (measured) | 103 KB (measured) | 64 KB |
+| `escrow-contract` | ~18 KB (est.) | ~32 KB (est.) | 64 KB |
+| `attestation-contract` | ~15 KB (est.) | ~28 KB (est.) | 64 KB |
+| `oracle-contract` | ~14 KB (est.) | ~26 KB (est.) | 64 KB |
+| **Total (4 contracts)** | **~98 KB** | **~189 KB** | — |
+
+> **Note:** IndigoPay sizes are from actual CI builds. Escrow, attestation, and oracle sizes are estimates — run `cargo build --target wasm32v1-none --release` and `stat -c%s target/wasm32v1-none/release/<contract>.wasm` to measure. All contracts share the same `[profile.release]` settings (`opt-level = "z"`, `lto = true`, `codegen-units = 1`, `strip = true`, `panic = "abort"`) defined in the workspace `Cargo.toml`.

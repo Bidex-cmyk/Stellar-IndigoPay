@@ -466,7 +466,7 @@ The full doc tree is indexed in [`docs/README.md`](docs/README.md). Highlights:
 
 - [**`docs/architecture.md`**](docs/architecture.md) — system overview, donation flow, design decisions
 - [**`docs/getting-started.md`**](docs/getting-started.md) — five-minute first run
-- [**`docs/gas-optimization.md`**](docs/gas-optimization.md) — gas benchmarks & optimization strategies
+- [**`docs/gas-optimization.md`**](docs/gas-optimization.md) — gas benchmarks & optimization strategies for all 4 contracts
 - [**`docs/contract-integration.md`**](docs/contract-integration.md) — partner SDK guide with TypeScript + Go + Python examples
 - [**`docs/webhook-receiver.md`**](docs/webhook-receiver.md) — receiver guide for milestone events
 - [**`docs/performance.md`**](docs/performance.md) — SLOs and k6 recipes
