@@ -339,7 +339,7 @@ Full details: [`contracts/indigopay-contract/README.md`](contracts/indigopay-con
 | 5 | ![Transaction Result](screenshots/05-transaction-result.png) | Transaction result with hash and Stellar Expert link |
 | 6 | ![Mobile Responsive](screenshots/06-mobile-responsive.png) | Mobile responsive UI (iPhone X viewport, 375×812) |
 | 7 | ![CI/CD Pipeline](screenshots/07-ci-pipeline.png) | CI/CD pipeline running on GitHub Actions |
-| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 2,200+ passing tests across 175+ test files |
+| 8 | ![Test Output](screenshots/08-test-output.png) | Test output — 2,400+ passing tests across 175+ test files |
 
 ---
 
@@ -475,7 +475,7 @@ The full doc tree is indexed in [`docs/README.md`](docs/README.md). Highlights:
 - [**`docs/external-secrets.md`**](docs/external-secrets.md)
 - [**`docs/extension-build-process.md`**](docs/extension-build-process.md)
 - [**`docs/zap-triage.md`**](docs/zap-triage.md) — DAST results workflow
-- **`docs/backend/`** — auto-generated TypeDoc site for the backend service layer (run `npx typedoc` in `backend/` to generate)
+- **`docs/backend/`** — auto-generated TypeDoc site for the backend service layer — run `npm run docs` in `backend/` to generate (not committed to the repo)
 - [**ADRs**](docs/adr/) — Stellar/Soroban vs EVM, direct-to-wallet vs custody, wallet-as-identity, CEI pattern
 
 ---
