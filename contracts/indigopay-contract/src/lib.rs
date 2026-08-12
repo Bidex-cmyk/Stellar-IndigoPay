@@ -39,10 +39,9 @@ use soroban_sdk::contractclient;
  *     --source alice --network testnet
  */
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
+    Address, BytesN, Env, String, Symbol, Vec,
 };
-#[cfg(feature = "project_verification")]
-use soroban_sdk::{contracterror, panic_with_error};
 #[cfg(any(
     feature = "usdc",
     feature = "donation",
@@ -753,6 +752,158 @@ const MAX_VOTING_WINDOW_LEDGERS: u32 = 518_400; // 30 days @ 5s/ledger
                                                 // Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
                                                 // panics and misleading impact figures from misconfigured projects.
 const MAX_CO2_PER_XLM: u32 = 100_000;
+
+// ─── Main contract error codes ─────────────────────────────────────────────
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
+    // ── Initialization & admin (1–10) ───────────────────────────────────────
+    ContractAlreadyInitialized = 1,
+    EmptyAdminSet = 2,
+    InvalidThreshold = 3,
+    NotInitialized = 4,
+    InsufficientAdminSignatures = 5,
+    OnlyAdminCanPerformThisAction = 6,
+    ContractIsPaused = 7,
+    AdminThresholdNotSet = 8,
+    UnauthorizedAdminAction = 9,
+    MigrationIncomplete = 10,
+    // ── Project management (11–22) ──────────────────────────────────────────
+    ProjectAlreadyRegistered = 11,
+    CO2PerXlmExceedsMaximum = 12,
+    ProjectNotActive = 13,
+    ProjectIsTemporarilyPaused = 14,
+    ProjectNotAcceptingDonations = 15,
+    CannotPauseDeactivatedProject = 16,
+    ProjectAlreadyPaused = 17,
+    CannotResumeDeactivatedProject = 18,
+    ProjectNotPaused = 19,
+    CO2RateMustBeGreaterThanZero = 20,
+    WalletDoesNotMatchParentProjectWallet = 21,
+    ProjectNotFound = 22,
+    // ── Donation (23–33) ────────────────────────────────────────────────────
+    DonationAmountMustBePositive = 23,
+    DonationRateLimitExceeded = 24,
+    TokenIsInactive = 25,
+    TokenNotRegistered = 26,
+    OracleReturnedInvalidPrice = 27,
+    PlatformTreasuryNotConfigured = 28,
+    FeeRecipientsCannotBeEmpty = 29,
+    FeeRecipientSharesMustSumTo10000 = 30,
+    PlatformFeeExceedsMaximum500Bps = 31,
+    ProjectContractBalanceUnderflow = 32,
+    GlobalStatsUpdateFailed = 33,
+    // ── Campaign (34–45) ────────────────────────────────────────────────────
+    CampaignGoalMustBePositive = 34,
+    CampaignDeadlineMustBeInFuture = 35,
+    CampaignDeadlineHasPassed = 36,
+    CampaignGoalAlreadyReached = 37,
+    CampaignHasExpired = 38,
+    CampaignIsClosed = 39,
+    CampaignIsNotActive = 40,
+    CampaignCannotBeClosed = 41,
+    CampaignGoalMustExceedAmountAlreadyRaised = 42,
+    NewDeadlineMustBeAfterCurrentDeadline = 43,
+    ProjectAlreadyHasOpenCampaign = 44,
+    CampaignMustBeActiveOrGoalReachedToFundEscrow = 45,
+    // ── Token / rate limit config (46–52) ────────────────────────────────────
+    TokenAlreadyRegistered = 46,
+    TokenAlreadyInactive = 47,
+    MaxDonationsMustBePositive = 48,
+    WindowLedgersMustBePositive = 49,
+    InvalidTokenConfig = 50,
+    RateLimitConfigStorageFailed = 51,
+    TokenConfigStorageFailed = 52,
+    // ── Attestation settlement (53–58) ──────────────────────────────────────
+    AttestationAlreadySettled = 53,
+    AttestationIdMismatch = 54,
+    AttestationNotVerified = 55,
+    AttestationWasRevoked = 56,
+    AttestationAmountMustBePositive = 57,
+    AttestationProjectNotRegistered = 58,
+    // ── Escrow integration (59–65) ──────────────────────────────────────────
+    EscrowContractNotConfigured = 59,
+    EscrowJobAlreadyFunded = 60,
+    NoFundsRaisedToEscrow = 61,
+    InvalidEscrowMilestones = 62,
+    EscrowFundingFailed = 63,
+    EscrowReleaseFailed = 64,
+    EscrowClaimFailed = 65,
+    // ── Governance & voting (66–75) ─────────────────────────────────────────
+    CannotDelegateToSelf = 66,
+    AlreadyDelegatedToThisAddress = 67,
+    NoActiveDelegationToRevoke = 68,
+    MustRevokeDelegationBeforeVotingDirectly = 69,
+    AlreadyVotedOnThisProposal = 70,
+    VotingCreditsExhausted = 71,
+    ProposalAlreadyResolved = 72,
+    VotingWindowHasClosed = 73,
+    VotingWindowNotYetClosed = 74,
+    ProposalNotResolved = 75,
+    GracePeriodNotElapsed = 76,
+    VotingDurationTooShort = 77,
+    VotingDurationTooLong = 78,
+    OnlyBadgeHoldersOrDelegatesCanVote = 79,
+    ProposalAlreadyExistsForProject = 80,
+    // ── ZK anonymous donation (81–87) ────────────────────────────────────────
+    ZKVerificationKeyMustBe32Bytes = 81,
+    InvalidZKProof = 82,
+    InvalidZKPublicInputs = 83,
+    ZKNullifierAlreadyUsed = 84,
+    AnonymousDonationAmountMustBePositive = 85,
+    AnonymousDonationProofVerificationFailed = 86,
+    NullifierAlreadySpent = 87,
+    // ── NFT / badges (88–93) ────────────────────────────────────────────────
+    CannotMintNftForNoneTier = 88,
+    NoBadgeTierReachedYet = 89,
+    TierDoesNotMatchDonorCurrentBadge = 90,
+    NftAlreadyMintedForThisTier = 91,
+    CumulativeDonationNotReached100Xlm = 92,
+    MilestoneNftAlreadyMintedForProject = 93,
+    // ── Admin management (94–100) ───────────────────────────────────────────
+    AdminTransferAlreadyPending = 94,
+    OldAdminNotInAdminSet = 95,
+    NewAdminAlreadyAnAdmin = 96,
+    OldAdminNoLongerInAdminSetTransferStale = 97,
+    NoPendingAdminTransfer = 98,
+    AddressAlreadyAdmin = 99,
+    AddressNotAdmin = 100,
+    CannotRemoveLastAdmin = 101,
+    ThresholdMustBeBetweenOneAndAdminCount = 102,
+    // ── Upgrade (103–108) ───────────────────────────────────────────────────
+    UpgradeAlreadyPendingCancelFirst = 103,
+    UpgradeTimelockNotYetElapsed = 104,
+    NoPendingUpgrade = 105,
+    UpgradeEffectiveAtOverflow = 106,
+    UpgradeExecutionFailed = 107,
+    UpgradeCancellationFailed = 108,
+    // ── Emergency withdrawal (109–115) ──────────────────────────────────────
+    EmergencyWithdrawalAmountMustBePositive = 109,
+    EmergencyWithdrawalAlreadyPending = 110,
+    NoPendingEmergencyWithdrawal = 111,
+    EmergencyWithdrawalTimelockNotElapsed = 112,
+    InsufficientContractBalanceForProject = 113,
+    EmergencyWithdrawalExecutionFailed = 114,
+    EmergencyWithdrawalCancellationFailed = 115,
+    // ── Refunds (116–123) ───────────────────────────────────────────────────
+    OnlyDonorCanRequestRefund = 116,
+    RefundCooldownExpired = 117,
+    RefundAlreadyRequested = 118,
+    RefundRequestNotPending = 119,
+    ForceRefundAlreadyPending = 120,
+    ForceRefundEscalationPendingCancelFirst = 121,
+    ForceRefundTimelockAlreadyElapsed = 122,
+    RefundApprovalFailed = 123,
+    // ── Impact verification & receipt (124–130) ─────────────────────────────
+    NotAuthorisedImpactVerifier = 124,
+    VerifiedCO2RateMustBeGreaterThanZero = 125,
+    VerifiedCO2RateExceedsMaximum = 126,
+    OnlyDonorCanGenerateReceipt = 127,
+    InvalidPeriodRangeStartMustBeBeforeEnd = 128,
+    RootCannotBeZero = 129,
+    ImpactVerificationFailed = 130,
+}
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
 // `execute_upgrade` can fire. Gives the community, indexers, and any
@@ -839,7 +990,7 @@ fn verify_m_of_n(env: &Env, signers: &Vec<Address>, required_threshold: u32) {
         }
     }
     if valid_count < required_threshold {
-        panic!("Insufficient admin signatures");
+        panic_with_error!(env, ContractError::InsufficientAdminSignatures);
     }
 }
 /// Require M-of-N admin signatures for critical operations.
@@ -854,7 +1005,7 @@ fn require_admin_for_routine(env: &Env, signer: &Address) {
     signer.require_auth();
     let admin_set: Vec<Address> = read_admin_set(env);
     if !admin_set.contains(signer) {
-        panic!("Only admin can perform this action");
+        panic_with_error!(env, ContractError::OnlyAdminCanPerformThisAction);
     }
 }
 /// Fail fast when the contract is in the paused state. State-mutating
@@ -869,7 +1020,7 @@ fn require_not_paused(env: &Env) {
         .get(&DataKey::ContractPaused)
         .unwrap_or(false);
     if paused {
-        panic!("Contract is paused");
+        panic_with_error!(env, ContractError::ContractIsPaused);
     }
 }
 
