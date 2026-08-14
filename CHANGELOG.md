@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* **ci:** make the contracts WASM size limit configurable via `vars.WASM_SIZE_LIMIT` with a 65536-byte default, positive-integer validation, and matching deploy enforcement (closes #541)
 * **backend:** `webhook.js` defers delivery to `webhookQueue`; public route surface preserved
 * **backend:** `server.js` wires `webhookQueue.start` into boot and registers lifecycle shutdown hook
 * **backend:** `indexerService` exposes `stop()` for clean Horizon stream shutdown on SIGTERM
