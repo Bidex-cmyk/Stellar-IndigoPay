@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **k8s:** ExternalSecret + SecretStore templates for AWS Secrets Manager
 * **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
 * **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
+* **ci:** OpenAPI drift detection — `scripts/validate-openapi.js` now compares the spec's documented endpoints against the live Express route surface and fails CI when a documented endpoint is not implemented (closes #703)
 
 ### Changed
 
