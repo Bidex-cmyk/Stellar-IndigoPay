@@ -104,6 +104,20 @@ autoscaling:
   minReplicas: 2
   maxReplicas: 10
   metrics:
+    - type: External
+      external:
+        metric:
+          name: queue_depth
+        target:
+          type: AverageValue
+          averageValue: "20"
+    - type: External
+      external:
+        metric:
+          name: indexer_lag_seconds
+        target:
+          type: AverageValue
+          averageValue: "10"
     - type: Resource
       resource:
         name: cpu

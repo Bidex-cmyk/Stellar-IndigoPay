@@ -95,3 +95,34 @@ stellar contract deploy \
 ```
 
 Once deployed, update your application configuration (via Secrets or ConfigMaps) with the new mainnet Contract ID.
+
+## Horizontal Pod Autoscaling (HPA) & Custom Metrics
+
+The backend deployment scales dynamically using Kubernetes HorizontalPodAutoscaler (`k8s/hpa-backend.yaml` or Helm `autoscaling`).
+
+### Metric Triggers
+
+The backend is queue-driven and relies on custom workload metrics as primary scaling signals, backed up by resource metrics as fallbacks:
+
+1. **`queue_depth`** (`External`, target average: `20`): Total pg-boss jobs active or waiting (`webhook-deliveries`, `ai-summary`, `profile-update`, `monthly-impact-digest`).
+2. **`indexer_lag_seconds`** (`External`, target average: `10s`): Seconds between the latest ledger seen by the Soroban/Horizon indexer and current time.
+3. **`cpu`** (`Resource`, target average utilization: `70%`): Fallback CPU utilization.
+4. **`memory`** (`Resource`, target average utilization: `80%`): Fallback memory utilization.
+
+### Setting up `k8s-prometheus-adapter`
+
+Custom metrics are exported by the backend at `/metrics` and scraped by Prometheus. To expose them to Kubernetes HPA, install `k8s-prometheus-adapter` and apply the rule configuration:
+
+```bash
+# 1. Apply the Prometheus adapter ConfigMap
+kubectl apply -f k8s/prometheus-adapter-configmap.yaml
+
+# 2. Install k8s-prometheus-adapter via Helm
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install prometheus-adapter prometheus-community/prometheus-adapter \
+  --namespace stellar-indigopay \
+  -f k8s/prometheus-adapter-configmap.yaml
+```
+
+If `k8s-prometheus-adapter` is not present, Kubernetes HPA will fall back to scaling on CPU and memory resource utilization.
+
