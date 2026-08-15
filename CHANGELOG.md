@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 * **extension:** audit `chrome.storage` usage, confirm no plaintext wallet secrets are persisted (signing is delegated entirely to Freighter), and add CI secret-scan to enforce this going forward (closes #656)
+* **contracts:** bound escrow job ID enumeration with paged reads and a 256-job cap (GrantFox #617)
 
 - **backend:** deduplicate push device tokens per user+device with a sliding expiry window (default 180 days) refreshed on register, soft-invalidate on unregister/expiry, and purge expired tokens from push sends (closes #717)
 - **frontend:** announce `DonateForm` validation errors to screen readers via `aria-live="assertive"` region (GrantFox GF-a11y-donate-form)
