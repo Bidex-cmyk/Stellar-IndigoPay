@@ -710,6 +710,8 @@ pub enum DataKey {
     CampaignEscrowMilestones(String),
     /// Escrow job ID for a project's campaign: (project_id) -> String.
     CampaignEscrowJobId(String),
+    // Registered cross-chain attestation contract used by settlement.
+    AttestationContract,
 }
 
 /// Storage keys for cross-chain attestation settlement (#439).
@@ -921,6 +923,9 @@ pub enum ContractError {
     InvalidPeriodRangeStartMustBeBeforeEnd = 128,
     RootCannotBeZero = 129,
     ImpactVerificationFailed = 130,
+    // ── Attestation contract configuration (131–132) ─────────────────────
+    AttestationContractNotConfigured = 131,
+    AttestationContractMismatch = 132,
 }
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
@@ -3455,6 +3460,30 @@ impl IndigoPayContract {
     }
 
     // ─── Cross-chain attestation settlement (#439) ────────────────────────────
+    /// Admin-only: configure the attestation contract used by settlement.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn set_attestation_contract(env: Env, admin: Address, contract_address: Address) {
+        require_admin_for_routine(&env, &admin);
+        require_not_paused(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::AttestationContract, &contract_address);
+        env.events()
+            .publish((symbol_short!("att_set"), admin), contract_address);
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Query the configured attestation contract address.
+    #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
+    pub fn get_attestation_contract(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::AttestationContract)
+            .unwrap_or_else(|| {
+                panic_with_error!(&env, ContractError::AttestationContractNotConfigured)
+            })
+    }
+
     /// Settle a verified cross-chain donation attestation into this contract's
     /// donation stats.
     ///
@@ -3471,10 +3500,9 @@ impl IndigoPayContract {
     /// attestation contract's own state is never mutated — the cross-contract
     /// call is a pure read.
     ///
-    /// Permissionless by design. There is nothing to gate: the attestation
-    /// contract's relayer already authorised the underlying record, and this
-    /// function can only ever credit a `Verified` attestation once. Anyone may
-    /// pay the fee to push a settlement through.
+    /// Permissionless by design after the attestation contract is configured.
+    /// The caller-provided address must match the registered address, and the
+    /// cross-contract read always uses the registered address.
     ///
     /// Panics when:
     ///  - the contract is paused,
@@ -3488,6 +3516,17 @@ impl IndigoPayContract {
     pub fn settle_attestation(env: Env, attestation_contract: Address, attestation_id: u64) {
         require_not_paused(&env);
 
+        let registered_attestation_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::AttestationContract)
+            .unwrap_or_else(|| {
+                panic_with_error!(&env, ContractError::AttestationContractNotConfigured)
+            });
+        if attestation_contract != registered_attestation_contract {
+            panic_with_error!(&env, ContractError::AttestationContractMismatch);
+        }
+
         // ── Checks (pre-call): fail fast and cheap on an obvious replay.
         let settled_key = SettlementKey::SettledAttestation(attestation_id);
         if env.storage().instance().has(&settled_key) {
@@ -3499,8 +3538,8 @@ impl IndigoPayContract {
         //    here finds storage untouched. The post-call re-check below closes
         //    that window: the reentrant call sets the settled marker, and the
         //    outer frame then panics, reverting the whole transaction.
-        let attestation =
-            AttestationClient::new(&env, &attestation_contract).get_attestation(&attestation_id);
+        let attestation = AttestationClient::new(&env, &registered_attestation_contract)
+            .get_attestation(&attestation_id);
 
         // ── Checks (post-call): everything below reads only the returned value
         //    and this contract's storage.
@@ -9441,9 +9480,10 @@ mod tests {
         let relayer = Address::generate(&env);
         att_client.initialize(&att_admin);
         att_client.set_relayer(&att_admin, &relayer);
+        client.set_attestation_contract(&admin, &att_addr);
+        assert_eq!(client.get_attestation_contract(), att_addr);
 
         let donor = Address::generate(&env);
-        let _ = admin;
         (env, client, att_client, att_addr, relayer, donor, pid)
     }
 
@@ -9512,6 +9552,14 @@ mod tests {
         assert_eq!(record.currency, symbol_short!("XCHAIN"));
         assert_eq!(record.message_hash, 7u32);
         assert!(!record.anonymous);
+    }
+
+    #[test]
+    fn test_settle_rejects_unregistered_attestation_contract() {
+        let (env, client, _att_client, _att_addr, _relayer, _donor, _pid) = settlement_setup();
+        let forged_addr = env.register_contract(None, AttestationContract);
+
+        assert!(client.try_settle_attestation(&forged_addr, &1u64).is_err());
     }
 
     /// A settled attestation must be indistinguishable from a native donation
