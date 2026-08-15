@@ -7804,7 +7804,10 @@ impl IndigoPayContract {
     /// The total amount is split into equal installments. The first installment
     /// is transferred to the project wallet immediately; subsequent installments
     /// are claimable by anyone via `claim_vested_installment` after each
-    /// `interval_ledgers` elapses.
+    /// `interval_ledgers` elapses. If `total_amount` is not evenly divisible
+    /// by `installment_count`, the residual is held in custody and paid with
+    /// the final installment, so the sum of all installments equals
+    /// `total_amount` exactly.
     ///
     /// # Panics
     /// - If `amount <= 0`
@@ -7937,8 +7940,20 @@ impl IndigoPayContract {
         schedule.next_installment_ledger = current_ledger
             .checked_add(schedule.interval_ledgers)
             .expect("overflow");
+        // The final installment absorbs the division remainder (when
+        // `total_amount` is not evenly divisible by `installment_count`) so
+        // the sum of all installments equals `total_amount` exactly.
+        let is_final_installment = schedule.installments_released >= schedule.installment_count;
+        let payout = if is_final_installment {
+            schedule
+                .amount_per_installment
+                .checked_add(vesting_remainder(&schedule))
+                .expect("overflow")
+        } else {
+            schedule.amount_per_installment
+        };
         // Mark completed when all installments are released.
-        if schedule.installments_released >= schedule.installment_count {
+        if is_final_installment {
             schedule.completed_at = current_ledger;
         }
         env.storage().instance().set(&schedule_key, &schedule);
@@ -7951,17 +7966,13 @@ impl IndigoPayContract {
         // ── Interaction: transfer installment from contract custody to project.
         let contract_addr = env.current_contract_address();
         let token_client = token::Client::new(&env, &schedule.token);
-        token_client.transfer(
-            &contract_addr,
-            &project.wallet,
-            &schedule.amount_per_installment,
-        );
+        token_client.transfer(&contract_addr, &project.wallet, &payout);
         let remaining = schedule
             .installment_count
             .saturating_sub(schedule.installments_released);
         env.events().publish(
             (symbol_short!("vest_clm"), schedule.project_id),
-            (schedule_id, schedule.amount_per_installment, remaining),
+            (schedule_id, payout, remaining),
         );
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
@@ -7969,8 +7980,8 @@ impl IndigoPayContract {
     ///
     /// Only the original donor may cancel (enforced by the storage key which
     /// includes the donor's address). All released installments stay with
-    /// the project; the unvested remainder is returned from contract custody
-    /// to the donor.
+    /// the project; the unvested remainder (including the final-installment
+    /// residual, if any) is returned from contract custody to the donor.
     ///
     /// # Panics
     /// - If the schedule is not found.
@@ -7990,8 +8001,13 @@ impl IndigoPayContract {
         let remaining_count = schedule
             .installment_count
             .saturating_sub(schedule.installments_released);
+        // Refund the exact unvested amount: the residual (total_amount not
+        // evenly divisible by installment_count) is still held in custody
+        // until the final installment is claimed, so it is included here.
         let unvested_amount = (remaining_count as i128)
             .checked_mul(schedule.amount_per_installment)
+            .expect("overflow")
+            .checked_add(vesting_remainder(&schedule))
             .expect("overflow");
 
         // Mark the schedule as cancelled with completed_at so it can be
@@ -8061,6 +8077,23 @@ impl IndigoPayContract {
     pub fn get_native_token(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::NativeTokenAddress)
     }
+}
+/// The residual amount left over when `total_amount` is split into equal
+/// installments, i.e. `total_amount % installment_count` in stroops (always
+/// `>= 0` and `< installment_count`). The final installment absorbs this
+/// residual so the sum of all installments equals `total_amount` exactly and
+/// no dust is stranded in contract custody.
+#[cfg(feature = "vesting")]
+fn vesting_remainder(schedule: &VestingSchedule) -> i128 {
+    schedule
+        .total_amount
+        .checked_sub(
+            schedule
+                .amount_per_installment
+                .checked_mul(schedule.installment_count as i128)
+                .expect("overflow"),
+        )
+        .expect("underflow")
 }
 // ─── Mock oracle (test / integration use only) ────────────────────────────────
 /// A minimal oracle that returns a fixed rate of 8 XLM per 1 USDC.
@@ -11972,6 +12005,87 @@ mod tests {
         assert_eq!(s_mid.installments_released, 5);
         // Cancel vesting — remaining 50 XLM returned.
         client.cancel_vesting(&donor, &schedule_id);
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    fn test_vesting_remainder_paid_on_final_installment() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "remainder-final");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Remainder Final"),
+            &project_wallet,
+            &100u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        // 10 XLM split into 3 installments:
+        // 33_333_333 + 33_333_333 + 33_333_334 (final absorbs the 1-stroop remainder).
+        let total: i128 = 100_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &3u32, &50u32, &0u32);
+        let s0 = client.get_vesting_schedule(&donor, &schedule_id);
+        assert_eq!(s0.amount_per_installment, 33_333_333);
+        let asset = StellarAssetClient::new(&env, &token);
+        assert_eq!(asset.balance(&project_wallet), 33_333_333);
+        // Custody holds the remainder until the final claim.
+        assert_eq!(asset.balance(&id), 66_666_667);
+        // Claim the 2nd installment — still the per-installment amount.
+        env.ledger().set_sequence_number(100);
+        client.claim_vested_installment(&donor, &schedule_id);
+        assert_eq!(asset.balance(&project_wallet), 66_666_666);
+        // Claim the final installment — absorbs the remainder.
+        env.ledger().set_sequence_number(200);
+        client.claim_vested_installment(&donor, &schedule_id);
+        assert_eq!(asset.balance(&project_wallet), total); // sum == total exactly
+        assert_eq!(asset.balance(&id), 0); // no dust stranded in custody
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    fn test_vesting_cancel_refunds_remainder() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "remainder-cancel");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Remainder Cancel"),
+            &project_wallet,
+            &100u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        // 10 XLM split into 3 installments of 33_333_333 with a 1-stroop remainder.
+        let total: i128 = 100_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &3u32, &50u32, &0u32);
+        let asset = StellarAssetClient::new(&env, &token);
+        // Claim the 2nd installment, then cancel with 1 installment left.
+        env.ledger().set_sequence_number(100);
+        client.claim_vested_installment(&donor, &schedule_id);
+        assert_eq!(asset.balance(&project_wallet), 66_666_666);
+        client.cancel_vesting(&donor, &schedule_id);
+        // Refund = 1 remaining installment + the 1-stroop remainder.
+        assert_eq!(asset.balance(&donor), 33_333_334);
+        assert_eq!(asset.balance(&id), 0); // exact refund — no dust left in custody
     }
     #[cfg(feature = "vesting")]
     #[test]

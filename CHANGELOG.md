@@ -68,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **contracts:** `donate_vested` pays the integer-division remainder with the final installment and `cancel_vesting` refunds it exactly, so no dust is stranded in contract custody and the project is fully paid (closes #665)
 * **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
 * **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
 * **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
