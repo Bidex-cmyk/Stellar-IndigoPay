@@ -68,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **backend:** make Horizon donation indexing idempotent by operation ID, advance the cursor on replay, and allow multiple payment operations per transaction (closes #635)
 * **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
 * **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
 * **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
