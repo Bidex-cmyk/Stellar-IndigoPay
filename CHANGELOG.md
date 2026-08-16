@@ -64,15 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-* **backend:** `webhook.js` defers delivery to `webhookQueue`; public route surface preserved
-* **backend:** `server.js` wires `webhookQueue.start` into boot and registers lifecycle shutdown hook
-* **backend:** `indexerService` exposes `stop()` for clean Horizon stream shutdown on SIGTERM
-* **backend:** pool `statement_timeout` + `connectionTimeoutMillis` tuning
-* **contracts:** extracted shared `require_admin` helper; unified admin panic messages
-* **frontend:** `LiveDonationTicker` extracted to `React.memo`-wrapped component, eliminating page-wide re-renders
-* **backend/frontend Dockerfiles:** pinned to `node:22-alpine`; `npm ci --omit=dev` for reproducible installs
-* **backend,frontend:** rebrand design system with indigo/purple color palette
-* **ci:** `docker-compose.test.yml` runs integration/smoke tests against the compose Postgres/Redis services instead of blanket-skipping them (closes #702)
+- **backend:** `webhook.js` defers delivery to `webhookQueue`; public route surface preserved
+- **backend:** `server.js` wires `webhookQueue.start` into boot and registers lifecycle shutdown hook
+- **backend:** `indexerService` exposes `stop()` for clean Horizon stream shutdown on SIGTERM
+- **backend:** pool `statement_timeout` + `connectionTimeoutMillis` tuning
+- **contracts:** extracted shared `require_admin` helper; unified admin panic messages
+- **frontend:** `LiveDonationTicker` extracted to `React.memo`-wrapped component, eliminating page-wide re-renders
+- **backend/frontend Dockerfiles:** pinned to `node:22-alpine`; `npm ci --omit=dev` for reproducible installs
+- **backend,frontend:** rebrand design system with indigo/purple color palette
+- **ci:** `docker-compose.test.yml` runs integration/smoke tests against the compose Postgres/Redis services instead of blanket-skipping them (closes #702)
 
 ### Fixed
 
@@ -105,56 +105,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
-* **frontend:** optimize Core Web Vitals with `next/image`, `next/font`, and `next/dynamic` bundle splitting (closes #261)
+- **backend:** batch Horizon donation stream events to reduce Socket.IO fan-out complexity from O(clients × donations) to O(clients × batches) — configurable 500ms time window and 50-donation max batch size via `INDEXER_BATCH_WINDOW_MS` and `INDEXER_BATCH_MAX_SIZE` environment variables (closes #157)
+- **frontend:** optimize Core Web Vitals with `next/image`, `next/font`, and `next/dynamic` bundle splitting (closes #261)
 
 ### Removed
 
-* **docs:** `docs/openapi.yml` — stale duplicate of `docs/api/openapi.yaml`
+- **docs:** `docs/openapi.yml` — stale duplicate of `docs/api/openapi.yaml`
 
 ## [1.0.0] - 2026-07-12
 
 ### Added
 
-* Freighter wallet connection
-* Browse verified climate projects with impact metrics
-* Direct on-chain XLM donations to project wallets via Soroban smart contract
-* Donor leaderboard ranked by total XLM given
-* Project updates — organisations post progress updates to donors
-* Node.js backend API (Express + PostgreSQL)
-* Mobile app (React Native / Expo) with biometric auth, secure storage, QR donations
-* Browser extension (Manifest V3, Chrome + Firefox)
-* Docker Compose development environment with hot reload
-* Helm chart for Kubernetes deployment
-* CI/CD pipelines across all layers (lint, type-check, test, build, e2e, DAST)
-* Gitleaks secret scanning in CI
-* `/metrics` scrape endpoint with bearer auth
-* Lifecycle service for graceful shutdown
-* Per-request HTTP metrics middleware
-* `prom-client` metrics service
-* `X-Request-Id` response header middleware
-* AI summary tokens, cost, latency, and outcomes Prometheus metrics
-* Webhook delivery + attempt + duration Prometheus counters
-* Health split into liveness (`/api/health`) and readiness (`/api/readyz`)
-* SBOM generation, Trivy image scanning, cosign image signing
-* ArgoCD and Argo Rollouts GitOps manifests
-* HPA and PDB for backend and frontend
-* Default-deny NetworkPolicy with explicit allow rules
-* ExternalSecret + SecretStore for AWS Secrets Manager
-* Prometheus + Grafana + Alertmanager monitoring stack
-* ErrorBoundary with Sentry capture across frontend, mobile, and backend
-* WalletProvider context with lifecycle state machine
-* Mobile: AuthGate, AuthProvider with biometric unlock (60s auto-lock), SecureStore, errorReporter
+- Freighter wallet connection
+- Browse verified climate projects with impact metrics
+- Direct on-chain XLM donations to project wallets via Soroban smart contract
+- Donor leaderboard ranked by total XLM given
+- Project updates — organisations post progress updates to donors
+- Node.js backend API (Express + PostgreSQL)
+- Mobile app (React Native / Expo) with biometric auth, secure storage, QR donations
+- Browser extension (Manifest V3, Chrome + Firefox)
+- Docker Compose development environment with hot reload
+- Helm chart for Kubernetes deployment
+- CI/CD pipelines across all layers (lint, type-check, test, build, e2e, DAST)
+- Gitleaks secret scanning in CI
+- `/metrics` scrape endpoint with bearer auth
+- Lifecycle service for graceful shutdown
+- Per-request HTTP metrics middleware
+- `prom-client` metrics service
+- `X-Request-Id` response header middleware
+- AI summary tokens, cost, latency, and outcomes Prometheus metrics
+- Webhook delivery + attempt + duration Prometheus counters
+- Health split into liveness (`/api/health`) and readiness (`/api/readyz`)
+- SBOM generation, Trivy image scanning, cosign image signing
+- ArgoCD and Argo Rollouts GitOps manifests
+- HPA and PDB for backend and frontend
+- Default-deny NetworkPolicy with explicit allow rules
+- ExternalSecret + SecretStore for AWS Secrets Manager
+- Prometheus + Grafana + Alertmanager monitoring stack
+- ErrorBoundary with Sentry capture across frontend, mobile, and backend
+- WalletProvider context with lifecycle state machine
+- Mobile: AuthGate, AuthProvider with biometric unlock (60s auto-lock), SecureStore, errorReporter
 
 ### Fixed
 
-* Various CI pipeline failures across helm, backend, and extension
-* Frontend TypeScript build errors and missing API functions
-* Contract CI: removed untracked path-patch, suppressed deprecated `Events::publish`, fixed test bugs
-* Gitleaks and Trivy false positives
-* Helm `_helpers.tpl` for backendName, frontendName, commonLabels
-* K8s: frontend egress to backend on port 4000
-* K8s: secret.yaml converted to lint-safe `REPLACE_ME` template
-* Contract: escrow-contract CEI ordering and contract attribute placement
-* Backend: env.js zod v4 API + DATABASE_URL default + observability vars
-* Backend: pool `statement_timeout` + `connectionTimeoutMillis` tuning
-* Backend: webhook retry scheduler `boss.send` with `startAfter`
+- Various CI pipeline failures across helm, backend, and extension
+- Frontend TypeScript build errors and missing API functions
+- Contract CI: removed untracked path-patch, suppressed deprecated `Events::publish`, fixed test bugs
+- Gitleaks and Trivy false positives
+- Helm `_helpers.tpl` for backendName, frontendName, commonLabels
+- K8s: frontend egress to backend on port 4000
+- K8s: secret.yaml converted to lint-safe `REPLACE_ME` template
+- Contract: escrow-contract CEI ordering and contract attribute placement
+- Backend: env.js zod v4 API + DATABASE_URL default + observability vars
+- Backend: pool `statement_timeout` + `connectionTimeoutMillis` tuning
+- Backend: webhook retry scheduler `boss.send` with `startAfter`
