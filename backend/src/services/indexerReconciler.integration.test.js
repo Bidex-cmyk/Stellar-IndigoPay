@@ -43,7 +43,9 @@ jest.mock("./stellar", () => {
         cursor: jest.fn(() => ({
           limit: jest.fn(() => ({
             order: jest.fn(() => ({
-              call: jest.fn().mockResolvedValue({ records: [missingDonationOperation] }),
+              call: jest
+                .fn()
+                .mockResolvedValue({ records: [missingDonationOperation] }),
             })),
           })),
         })),
@@ -98,7 +100,9 @@ async function seedProjectAndMissingDonation() {
     ],
   );
 
-  await testPool.query("DELETE FROM donations WHERE transaction_hash = $1", [txHash]);
+  await testPool.query("DELETE FROM donations WHERE transaction_hash = $1", [
+    txHash,
+  ]);
 
   return { projectId, projectWallet, txHash };
 }
@@ -191,13 +195,21 @@ describe("indexer reconciler integration", () => {
       ready = false;
       try {
         if (appPool) await appPool.end();
-      } catch {}
+      } catch {
+        // Ignore cleanup errors
+      }
+
       try {
         if (testPool) await testPool.end();
-      } catch {}
+      } catch {
+        // Ignore cleanup errors
+      }
+
       try {
         if (container) await container.stop();
-      } catch {}
+      } catch {
+        // Ignore cleanup errors
+      }
       appPool = null;
       testPool = null;
       container = null;
@@ -246,6 +258,8 @@ describe("indexer reconciler integration", () => {
     const cursor = await appPool.query(
       "SELECT last_processed_ledger FROM indexer_state WHERE key = 'primary'",
     );
-    expect(Number(cursor.rows[0].last_processed_ledger)).toBeGreaterThanOrEqual(11);
+    expect(Number(cursor.rows[0].last_processed_ledger)).toBeGreaterThanOrEqual(
+      11,
+    );
   });
 });
