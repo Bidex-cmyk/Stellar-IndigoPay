@@ -986,7 +986,7 @@ impl EscrowContract {
     /// M-of-N admin: extend a job's release period. `new_release_after` is the
     /// new absolute ledger sequence at which the freelancer may auto-claim
     /// unclaimed milestones; it must be later than the job's current
-    /// `release_after` (extension only — the period can never be shortened).
+    /// `release_after` and cannot exceed the job deadline.
     pub fn update_release_after(
         env: Env,
         signers: Vec<Address>,
@@ -1003,6 +1003,9 @@ impl EscrowContract {
 
         if new_release_after <= job.release_after {
             panic_with_error!(&env, EscrowError::NewReleaseAfterMustExtendCurrent);
+        }
+        if new_release_after > job.deadline {
+            panic_with_error!(&env, EscrowError::ReleaseAfterExceedsDeadline);
         }
 
         job.release_after = new_release_after;
@@ -2770,6 +2773,38 @@ mod tests {
 
         let current = client.get_job(&job_id).unwrap().release_after;
         client.update_release_after(&signers1(&env, &admin), &job_id, &(current - 1));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_update_release_after_cannot_exceed_deadline_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, client) = setup(&env);
+
+        let client_addr = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&client_addr, &1000i128);
+        let job_id = String::from_str(&env, "job-release-after-past-deadline");
+        let mut milestones = Vec::new(&env);
+        milestones.push_back(make_milestone(&env, "M1", 100));
+
+        client.create_job(
+            &client_addr,
+            &freelancer,
+            &job_id,
+            &token,
+            &1000i128,
+            &milestones,
+            &RELEASE_AFTER_LEDGERS,
+        );
+
+        let deadline = client.get_job(&job_id).unwrap().deadline;
+        client.update_release_after(&signers1(&env, &admin), &job_id, &(deadline + 1));
     }
 
     #[test]
