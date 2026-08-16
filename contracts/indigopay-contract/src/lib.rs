@@ -9681,6 +9681,7 @@ mod tests {
         let relayer = Address::generate(&env);
         att_client.initialize(&att_admin);
         att_client.set_relayer(&att_admin, &relayer);
+        client.set_attestation_contract(&admin, &att_addr);
         let _ = pid;
 
         let donor = Address::generate(&env);
@@ -9776,13 +9777,14 @@ mod tests {
     fn test_settle_emits_event() {
         use soroban_sdk::testutils::Events as _;
 
-        let (env, cid, client, _admin, pid) = setup();
+        let (env, cid, client, admin, pid) = setup();
         let att_addr = env.register_contract(None, AttestationContract);
         let att_client = AttestationContractClient::new(&env, &att_addr);
         let att_admin = Address::generate(&env);
         let relayer = Address::generate(&env);
         att_client.initialize(&att_admin);
         att_client.set_relayer(&att_admin, &relayer);
+        client.set_attestation_contract(&admin, &att_addr);
 
         let donor = Address::generate(&env);
         let amount = 40 * STROOP;
