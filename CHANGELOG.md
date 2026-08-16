@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
 * **k8s:** NetworkPolicy lint gate — `scripts/validate-networkpolicies.js` fails CI on un-scoped egress rules and `0.0.0.0/0` CIDRs (closes #701)
 * **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
+* **ci:** queue-worker integration smoke test — `queueWorkers.integration.test.js` enqueues and consumes pg-boss jobs (profile + match queues) end-to-end against the compose Postgres (closes #702)
 
 ### Changed
 
@@ -67,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **frontend:** `LiveDonationTicker` extracted to `React.memo`-wrapped component, eliminating page-wide re-renders
 * **backend/frontend Dockerfiles:** pinned to `node:22-alpine`; `npm ci --omit=dev` for reproducible installs
 * **backend,frontend:** rebrand design system with indigo/purple color palette
+* **ci:** `docker-compose.test.yml` runs integration/smoke tests against the compose Postgres/Redis services instead of blanket-skipping them (closes #702)
 
 ### Fixed
 
@@ -83,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **backend:** bound `tags` in project submission schema — max 10 tags, each ≤ 50 chars (closes #520)
 * **backend:** webhook retry scheduler uses `boss.send(..., { startAfter })`; deduped enqueue returns existing `deliveryId`
 * **backend:** increase WebSocket event deadline from 500ms to 2000ms to eliminate flaky CI
+* **backend:** fix pg-boss v10 incompatibility across all queue workers — add explicit `createQueue()` calls and handle `work()` jobs as an array (closes #702)
 * **frontend:** resolve `react-hooks/exhaustive-deps` lint warnings in `RecurringDonationsTab` and `WorldMap`
 * **ci:** add `timeout-minutes` to all CI jobs to prevent hanging builds
 * **ci:** pin trivy-action, actions/checkout, and other actions to specific versions/SHAs
