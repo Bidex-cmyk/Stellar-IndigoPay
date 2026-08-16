@@ -9,54 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **backend:** deduplicate push device tokens per user+device with a sliding expiry window (default 180 days) refreshed on register, soft-invalidate on unregister/expiry, and purge expired tokens from push sends (closes #717)
-- **frontend:** announce `DonateForm` validation errors to screen readers via `aria-live="assertive"` region (GrantFox GF-a11y-donate-form)
-- **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` — focusable buttons with Enter/Space to open popups (closes #533, grantfox GF-031)
-- **frontend:** complete 100% i18n coverage across all locale dictionaries with pluralization and locale-aware formatting (closes #264, #262)
-- **frontend:** refactor admin verification queue table with `@tanstack/react-table`, sortable columns, status filter pills, responsive mobile expansion, and server-driven pagination
-- **frontend:** implement advanced keyboard navigation, global keyboard shortcuts (`Cmd+K`/`Ctrl+K`), route focus management, and skip links
-- **frontend:** implement Playwright end-to-end test suite covering donation, dashboard, and admin analytics journeys (GF-052, closes #110)
-- **frontend:** build admin audit log viewer with filtering, pagination, and CSV export (GF-028, closes #83)
-- **frontend:** build donor impact certificate with shareable OG social preview via `@vercel/og` (GF-022, closes #79)
-- **frontend:** admin login now shows the specific failure reason instead of the canonical per-code message (**BREAKING**: token refresh moved to httpOnly cookie)
-- **frontend,backend:** add Idempotency-Key support for donation recording — UUID v4 header, 24h replay window (closes #148)
-- **frontend,backend:** real-time transparency dashboard with SLO, business metrics, and donation geo-map (closes #253)
-- **backend:** standardize structured startup, shutdown, and shutdown-error logging for background workers with graceful queue draining
-- **backend:** Redis-backed response caching middleware with request coalescing (single-flight) to prevent cache stampede (GF-044, closes #149)
-- **backend:** implement Soroban RPC retry with exponential backoff and circuit breaker (GF-043, closes #100)
-- **backend,frontend:** JWT refresh token rotation and session management for admin auth (GF-032, closes #87)
-- **backend,monitoring:** Postgres connection pool observability dashboard with adaptive pool sizing (closes #244)
-- **backend:** webhook delivery queue with pg-boss — 6-attempt exponential backoff (30s → 6h), DLQ, GitHub-style HMAC-SHA256 signing, 5-min replay window
-- **backend:** webhook + AI summary Prometheus metrics
-- **backend:** new database tables: `webhook_deliveries`, `webhook_dlq`, `prompt_versions`, `ai_summary_calls`, `refresh_tokens`, `token_blacklist`, `idempotency_keys`
-- **monitoring:** multi-window SLO burn-rate alerting with error budget dashboard (closes #240)
-- **monitoring:** Alertmanager routing with PagerDuty + Slack + business hours + inhibition rules
-- **monitoring:** Prometheus + Grafana + Alertmanager stack with persistent volumes
-- **contracts:** enforce Rust formatting via pre-commit hook (closes #60)
-- **contracts:** emit `StealthScan` events with project wallet, donation count, and ledger timestamp (closes #514)
-- **contracts:** add multi-source TWAP price oracle with freshness protection (closes #281)
-- **contracts:** 48h upgrade timelock (`propose_upgrade` / `execute_upgrade` / `cancel`)
-- **contracts:** contract-level pause (`pause_contract` / `unpause_contract`)
-- **contracts:** two-step admin transfer (`transfer_admin` / `accept_admin` / `cancel`)
-- **contracts:** comprehensive Soroban fuzz testing harness with 7 property-based tests and action-sequence fuzzing (#239)
-- **contracts:** escrow fuzz target for milestone percentage edge cases (closes #508)
-- **contracts,backend:** add opt-in anonymous donations and signed, cached tax receipt PDFs with locked XLM/USD values
-- **contracts/backend:** SEP-0007 deep-link support for mobile donations via `web+stellar:pay` URIs
-- **docs:** add CONTRIBUTORS.md to credit community work (GF-015, closes #64)
-- **docs:** document key service exports with JSDoc for TypeDoc (closes #548)
-- **docs:** `docs/README.md` indexes every document by audience (users, developers, operators, contributors)
-- **ci:** monthly restore-drill workflow that pulls latest backup and asserts row counts
-- **ci:** SBOM generation with anchore/sbom-action, uploads to GitHub dependency graph
-- **ci:** Trivy image scan on CRITICAL/HIGH, cosign keyless signing on release tags
-- **gitops:** ArgoCD Application manifest for chart-driven reconciliation
-- **gitops:** Argo Rollouts canary strategy with Prometheus success-rate analysis
-- **k8s:** default-deny NetworkPolicy for the `indigopay` namespace with explicit allow rules
-- **k8s:** HPA (min 2, max 10) + PDB (`minAvailable: 1`) for backend and frontend
-- **k8s:** ExternalSecret + SecretStore templates for AWS Secrets Manager
-- **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
-- **k8s:** NetworkPolicy lint gate — `scripts/validate-networkpolicies.js` fails CI on un-scoped egress rules and `0.0.0.0/0` CIDRs (closes #701)
-- **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
-- **ci:** queue-worker integration smoke test — `queueWorkers.integration.test.js` enqueues and consumes pg-boss jobs (profile + match queues) end-to-end against the compose Postgres (closes #702)
+* **backend:** deduplicate push device tokens per user+device with a sliding expiry window (default 180 days) refreshed on register, soft-invalidate on unregister/expiry, and purge expired tokens from push sends (closes #717)
+* **frontend:** announce `DonateForm` validation errors to screen readers via `aria-live="assertive"` region (GrantFox GF-a11y-donate-form)
+* **frontend:** add keyboard accessibility for Leaflet map markers on `ProjectMap` — focusable buttons with Enter/Space to open popups (closes #533, grantfox GF-031)
+* **frontend:** complete 100% i18n coverage across all locale dictionaries with pluralization and locale-aware formatting (closes #264, #262)
+* **frontend:** refactor admin verification queue table with `@tanstack/react-table`, sortable columns, status filter pills, responsive mobile expansion, and server-driven pagination
+* **frontend:** implement advanced keyboard navigation, global keyboard shortcuts (`Cmd+K`/`Ctrl+K`), route focus management, and skip links
+* **frontend:** implement Playwright end-to-end test suite covering donation, dashboard, and admin analytics journeys (GF-052, closes #110)
+* **frontend:** build admin audit log viewer with filtering, pagination, and CSV export (GF-028, closes #83)
+* **frontend:** build donor impact certificate with shareable OG social preview via `@vercel/og` (GF-022, closes #79)
+* **frontend:** admin login now shows the specific failure reason instead of the canonical per-code message (**BREAKING**: token refresh moved to httpOnly cookie)
+* **frontend,backend:** add Idempotency-Key support for donation recording — UUID v4 header, 24h replay window (closes #148)
+* **frontend,backend:** real-time transparency dashboard with SLO, business metrics, and donation geo-map (closes #253)
+* **backend:** standardize structured startup, shutdown, and shutdown-error logging for background workers with graceful queue draining
+* **backend:** Redis-backed response caching middleware with request coalescing (single-flight) to prevent cache stampede (GF-044, closes #149)
+* **backend:** implement Soroban RPC retry with exponential backoff and circuit breaker (GF-043, closes #100)
+* **backend,frontend:** JWT refresh token rotation and session management for admin auth (GF-032, closes #87)
+* **backend,monitoring:** Postgres connection pool observability dashboard with adaptive pool sizing (closes #244)
+* **backend:** webhook delivery queue with pg-boss — 6-attempt exponential backoff (30s → 6h), DLQ, GitHub-style HMAC-SHA256 signing, 5-min replay window
+* **backend:** webhook + AI summary Prometheus metrics
+* **backend:** new database tables: `webhook_deliveries`, `webhook_dlq`, `prompt_versions`, `ai_summary_calls`, `refresh_tokens`, `token_blacklist`, `idempotency_keys`
+* **monitoring:** multi-window SLO burn-rate alerting with error budget dashboard (closes #240)
+* **monitoring:** Alertmanager routing with PagerDuty + Slack + business hours + inhibition rules
+* **monitoring:** Prometheus + Grafana + Alertmanager stack with persistent volumes
+* **contracts:** enforce Rust formatting via pre-commit hook (closes #60)
+* **contracts:** emit `StealthScan` events with project wallet, donation count, and ledger timestamp (closes #514)
+* **contracts:** add multi-source TWAP price oracle with freshness protection (closes #281)
+* **contracts:** 48h upgrade timelock (`propose_upgrade` / `execute_upgrade` / `cancel`)
+* **contracts:** contract-level pause (`pause_contract` / `unpause_contract`)
+* **contracts:** two-step admin transfer (`transfer_admin` / `accept_admin` / `cancel`)
+* **contracts:** comprehensive Soroban fuzz testing harness with 7 property-based tests and action-sequence fuzzing (#239)
+* **contracts:** escrow fuzz target for milestone percentage edge cases (closes #508)
+* **contracts,backend:** add opt-in anonymous donations and signed, cached tax receipt PDFs with locked XLM/USD values
+* **contracts/backend:** SEP-0007 deep-link support for mobile donations via `web+stellar:pay` URIs
+* **docs:** add CONTRIBUTORS.md to credit community work (GF-015, closes #64)
+* **docs:** document key service exports with JSDoc for TypeDoc (closes #548)
+* **docs:** `docs/README.md` indexes every document by audience (users, developers, operators, contributors)
+* **ci:** monthly restore-drill workflow that pulls latest backup and asserts row counts
+* **ci:** SBOM generation with anchore/sbom-action, uploads to GitHub dependency graph
+* **ci:** Trivy image scan on CRITICAL/HIGH, cosign keyless signing on release tags
+* **gitops:** ArgoCD Application manifest for chart-driven reconciliation
+
+### Fixed
+
+* **backend:** durable deduplication for Soroban event processing with atomic cursor commit to prevent double-application on restart (closes #679, GrantFox OSS)
+* **gitops:** Argo Rollouts canary strategy with Prometheus success-rate analysis
+* **k8s:** default-deny NetworkPolicy for the `indigopay` namespace with explicit allow rules
+* **k8s:** HPA (min 2, max 10) + PDB (`minAvailable: 1`) for backend and frontend
+* **k8s:** ExternalSecret + SecretStore templates for AWS Secrets Manager
+* **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
+* **k8s:** NetworkPolicy lint gate — `scripts/validate-networkpolicies.js` fails CI on un-scoped egress rules and `0.0.0.0/0` CIDRs (closes #701)
+* **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
+* **ci:** queue-worker integration smoke test — `queueWorkers.integration.test.js` enqueues and consumes pg-boss jobs (profile + match queues) end-to-end against the compose Postgres (closes #702)
 
 ### Changed
 
@@ -72,29 +76,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
-- **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
-- **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
-- **contracts:** add missing `VoteDelegation(Address)` and `DelegatedWeight(Address)` variants to `DataKey` enum
-- **contracts:** add missing `disputed: false` field to all `Milestone` initializers in escrow integration tests
-- **contracts:** repair `fuzz_tests.rs` compilation — add `extern crate alloc` + `Ledger` import, fix strategy cloning
-- **contracts:** fix `test_execute_recurring_badge_progression` token allowance (1503 XLM for keeper incentives)
-- **backend:** invalidate impact endpoint caches on project status change (closes #016, grantfox GF-016)
-- **backend:** require admin authentication for pending project review endpoint (closes #516)
-- **backend:** surface geocoding failures as project creation warnings (closes #519)
-- **backend:** bound `tags` in project submission schema — max 10 tags, each ≤ 50 chars (closes #520)
-- **backend:** webhook retry scheduler uses `boss.send(..., { startAfter })`; deduped enqueue returns existing `deliveryId`
-- **backend:** increase WebSocket event deadline from 500ms to 2000ms to eliminate flaky CI
-- **backend:** fix pg-boss v10 incompatibility across all queue workers — add explicit `createQueue()` calls and handle `work()` jobs as an array (closes #702)
-- **frontend:** resolve `react-hooks/exhaustive-deps` lint warnings in `RecurringDonationsTab` and `WorldMap`
-- **ci:** add `timeout-minutes` to all CI jobs to prevent hanging builds
-- **ci:** pin trivy-action, actions/checkout, and other actions to specific versions/SHAs
-- **ci:** make ZAP target configurable + continue-on-error; gate mobile EAS on `EXPO_TOKEN` secret
-- **ci:** suppress gitleaks false positives and fix helm validation in CI
-- **k8s:** allow frontend egress to backend on port 4000 (closes default-deny gap)
-- **k8s:** tighten backend egress NetworkPolicy — enumerate specific endpoints (Horizon, Soroban RPC, Anthropic, CoinGecko, Resend, Sentry, FCM/Expo/APNs, Nominatim, web3.storage/w3s.link) and remove the over-broad HTTPS rule; webhook egress moved to an opt-in policy (closes #701)
-- **helm:** fix `helm template` rendering with missing helpers
-- **scripts:** ensure `scripts/setup-dev.sh` installs `mobile` and `extension` dependencies (fix README mismatch)
+* **backend:** make Horizon donation indexing idempotent by operation ID, advance the cursor on replay, and allow multiple payment operations per transaction (closes #635)
+* **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
+* **contracts:** require admin-gated attestation for `donate_asset` path-payment donations — the recorded `xlm_amount` must be co-signed by an admin-appointed attester, so a caller can no longer claim an arbitrary amount (closes #712)
+* **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
+* **contracts:** add regression tests covering on-time vs late milestone completion reputation tracking
+* **contracts:** add missing `VoteDelegation(Address)` and `DelegatedWeight(Address)` variants to `DataKey` enum
+* **contracts:** add missing `disputed: false` field to all `Milestone` initializers in escrow integration tests
+* **contracts:** repair `fuzz_tests.rs` compilation — add `extern crate alloc` + `Ledger` import, fix strategy cloning
+* **contracts:** fix `test_execute_recurring_badge_progression` token allowance (1503 XLM for keeper incentives)
+* **backend:** invalidate impact endpoint caches on project status change (closes #016, grantfox GF-016)
+* **backend:** require admin authentication for pending project review endpoint (closes #516)
+* **backend:** surface geocoding failures as project creation warnings (closes #519)
+* **backend:** bound `tags` in project submission schema — max 10 tags, each ≤ 50 chars (closes #520)
+* **backend:** webhook retry scheduler uses `boss.send(..., { startAfter })`; deduped enqueue returns existing `deliveryId`
+* **backend:** increase WebSocket event deadline from 500ms to 2000ms to eliminate flaky CI
+* **backend:** fix pg-boss v10 incompatibility across all queue workers — add explicit `createQueue()` calls and handle `work()` jobs as an array (closes #702)
+* **frontend:** resolve `react-hooks/exhaustive-deps` lint warnings in `RecurringDonationsTab` and `WorldMap`
+* **ci:** add `timeout-minutes` to all CI jobs to prevent hanging builds
+* **ci:** pin trivy-action, actions/checkout, and other actions to specific versions/SHAs
+* **ci:** make ZAP target configurable + continue-on-error; gate mobile EAS on `EXPO_TOKEN` secret
+* **ci:** suppress gitleaks false positives and fix helm validation in CI
+* **k8s:** allow frontend egress to backend on port 4000 (closes default-deny gap)
+* **k8s:** tighten backend egress NetworkPolicy — enumerate specific endpoints (Horizon, Soroban RPC, Anthropic, CoinGecko, Resend, Sentry, FCM/Expo/APNs, Nominatim, web3.storage/w3s.link) and remove the over-broad HTTPS rule; webhook egress moved to an opt-in policy (closes #701)
+* **helm:** fix `helm template` rendering with missing helpers
+* **scripts:** ensure `scripts/setup-dev.sh` installs `mobile` and `extension` dependencies (fix README mismatch)
 
 ### Performance
 
