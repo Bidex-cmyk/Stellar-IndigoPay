@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **k8s:** ExternalSecret + SecretStore templates for AWS Secrets Manager
 * **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
 * **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
+* **backend,contracts:** add badge tier conformance test asserting off-chain `computeBadges` matches on-chain `calculate_badge` across every threshold boundary (closes #686)
 
 ### Changed
 
