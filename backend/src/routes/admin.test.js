@@ -315,6 +315,96 @@ describe("POST /api/admin/refresh", () => {
 
     expect(res.status).toBe(401);
   });
+
+  it("does not hand out a new access token or cookie when reuse is detected", async () => {
+    const loginRes = await login(app);
+    const stolenToken = refreshCookieValue(loginRes);
+
+    await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${stolenToken}`);
+
+    const res = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${stolenToken}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.data?.token).toBeUndefined();
+    // The attacker's cookie must not be quietly replaced with a live one.
+    expect(refreshCookieHeader(res)).toContain("refresh_token=;");
+  });
+
+  it("still detects reuse of a token that was revoked by logout", async () => {
+    const loginRes = await login(app);
+    const refreshToken = refreshCookieValue(loginRes);
+
+    await request(app)
+      .post("/api/admin/logout")
+      .set("Authorization", `Bearer ${loginRes.body.data.token}`)
+      .set("Cookie", `refresh_token=${refreshToken}`);
+
+    const res = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${refreshToken}`);
+
+    expect(res.status).toBe(401);
+    expect(mockDb.refreshTokens.every((r) => r.revoked)).toBe(true);
+  });
+
+  it("does not revoke an unrelated family when one family sees reuse", async () => {
+    const firstLogin = await login(app);
+    const secondLogin = await login(app);
+    const firstFamily = mockDb.refreshTokens[0].family;
+
+    const stolenToken = refreshCookieValue(firstLogin);
+    await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${stolenToken}`);
+    const res = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${stolenToken}`);
+
+    expect(res.status).toBe(401);
+    const affected = mockDb.refreshTokens.filter(
+      (r) => r.family === firstFamily,
+    );
+    const untouched = mockDb.refreshTokens.filter(
+      (r) => r.family !== firstFamily,
+    );
+    expect(affected.every((r) => r.revoked)).toBe(true);
+    expect(untouched).toHaveLength(1);
+    expect(untouched[0].revoked).toBe(false);
+    // The second admin keeps working with the token it just got.
+    const stillValid = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${refreshCookieValue(secondLogin)}`);
+    expect(stillValid.status).toBe(200);
+  });
+
+  it("kills the replacement token an attacker raced to mint", async () => {
+    const loginRes = await login(app);
+    const sharedToken = refreshCookieValue(loginRes);
+
+    // Attacker and victim both hold the same cookie. The victim rotates
+    // first, so the attacker's replay trips the reuse alarm — and the
+    // token the victim just minted must die with the family too.
+    const victimRes = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${sharedToken}`);
+    expect(victimRes.status).toBe(200);
+    const victimToken = refreshCookieValue(victimRes);
+
+    const attackerRes = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${sharedToken}`);
+    expect(attackerRes.status).toBe(401);
+
+    const afterRace = await request(app)
+      .post("/api/admin/refresh")
+      .set("Cookie", `refresh_token=${victimToken}`);
+    expect(afterRace.status).toBe(401);
+    expect(mockDb.refreshTokens.every((r) => r.revoked)).toBe(true);
+  });
 });
 
 describe("POST /api/admin/logout", () => {
