@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **ci:** SBOM generation with anchore/sbom-action, uploads to GitHub dependency graph
 * **ci:** Trivy image scan on CRITICAL/HIGH, cosign keyless signing on release tags
 * **gitops:** ArgoCD Application manifest for chart-driven reconciliation
+
+### Fixed
+
+* **backend:** durable deduplication for Soroban event processing with atomic cursor commit to prevent double-application on restart (closes #679, GrantFox OSS)
 * **gitops:** Argo Rollouts canary strategy with Prometheus success-rate analysis
 * **k8s:** default-deny NetworkPolicy for the `indigopay` namespace with explicit allow rules
 * **k8s:** HPA (min 2, max 10) + PDB (`minAvailable: 1`) for backend and frontend
