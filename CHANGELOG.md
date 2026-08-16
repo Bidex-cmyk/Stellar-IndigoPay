@@ -76,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **frontend:** route donation XLM/USD value display through the backend on-chain oracle endpoint instead of a hardcoded CoinGecko feed, and drop CoinGecko from the CSP `connect-src` (closes #687)
 * **backend:** reload the keeper account before each recurring submission so transaction sequence numbers are never stale — prevents `tx_bad_seq` when the account sequence advances externally or after a failed submission (closes #705)
 * **backend:** make Horizon donation indexing idempotent by operation ID, advance the cursor on replay, and allow multiple payment operations per transaction (closes #635)
 * **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
