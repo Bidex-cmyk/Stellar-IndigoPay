@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **k8s:** HPA (min 2, max 10) + PDB (`minAvailable: 1`) for backend and frontend
 * **k8s:** ExternalSecret + SecretStore templates for AWS Secrets Manager
 * **k8s:** `k8s/secret.example.yaml` template; real secrets gitignored; `secrets-lint.yml` CI check
+* **k8s:** NetworkPolicy lint gate — `scripts/validate-networkpolicies.js` fails CI on un-scoped egress rules and `0.0.0.0/0` CIDRs (closes #701)
 * **helm:** `_helpers.tpl` with `backendName`, `frontendName`, `commonLabels`; HPA and PDB wired to values
 
 ### Changed
@@ -87,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **ci:** make ZAP target configurable + continue-on-error; gate mobile EAS on `EXPO_TOKEN` secret
 * **ci:** suppress gitleaks false positives and fix helm validation in CI
 * **k8s:** allow frontend egress to backend on port 4000 (closes default-deny gap)
+* **k8s:** tighten backend egress NetworkPolicy — enumerate specific endpoints (Horizon, Soroban RPC, Anthropic, CoinGecko, Resend, Sentry, FCM/Expo/APNs, Nominatim, web3.storage/w3s.link) and remove the over-broad HTTPS rule; webhook egress moved to an opt-in policy (closes #701)
 * **helm:** fix `helm template` rendering with missing helpers
 * **scripts:** ensure `scripts/setup-dev.sh` installs `mobile` and `extension` dependencies (fix README mismatch)
 
