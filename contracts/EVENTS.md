@@ -54,6 +54,11 @@ metrics remain public; public donor-profile and leaderboard projections exclude 
 The contract exposes `get_anonymous_donation_count(env, project_id)` for
 project-scoped anonymous donation totals.
 
+> **Privacy guarantee (#707):** For anonymous donations, `DonationRecord.donor`
+> is also stored as the zero-address placeholder — not the real donor — so the
+> on-chain record is unlinkable. The real donor retains provable ownership via a
+> per-donation SHA-256 commitment stored under `DataKey::AnonymousCommitment(index)`.
+
 ---
 
 ## 2. `nft_mint`
@@ -536,6 +541,27 @@ model.
 
 ---
 
+## 51. `rcpt_gen` (Donation Receipt Generated)
+
+**Description**: Emitted when a donor generates a cryptographic receipt for one
+of their donations. For **anonymous** donations the `donor` topic is the
+zero-address placeholder (`GAAAAAAAA…WHF`) — not the real caller — so the
+event log does not reveal who generated the receipt.
+
+| Event Name | Topics                              | Data                                                          | When Emitted                               |
+| ---------- | ----------------------------------- | ------------------------------------------------------------- | ------------------------------------------ |
+| `rcpt_gen` | `["rcpt_gen", donor_or_zero_addr]`  | `(donation_index: u32, amount: i128, project_id: String, co2_offset: i128)` | When donor calls `generate_receipt` |
+
+- `donor_or_zero_addr` is the real donor address for public donations and
+  `GAAAAAAAA…WHF` for anonymous donations (fixes #707).
+- The receipt carries a `contract_signature` field: `SHA-256` over the XDR
+  encoding of all other receipt fields. Anyone can recompute it to verify
+  authenticity without trusting the caller.
+- For anonymous donations, ownership is proved via `DataKey::AnonymousCommitment(index)`
+  at generation time; the emitted event and returned receipt expose no linkable identity.
+
+---
+
 ## Usage Notes
 
 - All events follow Soroban’s standard event format: `topics: Vec<Val>`, `data: Val`.
@@ -543,7 +569,7 @@ model.
 - Events can be queried via Horizon or Soroban RPC tools.
 - Frontend / backend should listen to these for real-time updates, notifications, and leaderboard.
 
-**Last Updated**: July 29, 2026
+**Last Updated**: August 16, 2026
 
 ---
 
@@ -714,4 +740,4 @@ event — no tokens moved on Stellar.
 - Events can be queried via Horizon or Soroban RPC tools.
 - Frontend / backend should listen to these for real-time updates, notifications, and leaderboard.
 
-**Last Updated**: July 29, 2026
+**Last Updated**: August 16, 2026

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **contracts:** anonymous donations no longer store the real donor address in `DonationRecord.donor` — the on-chain record now holds the zero-address placeholder (`anon_address`) for anonymous donations, making them unlinkable on-chain (fixes #707). The real donor retains provable ownership via a per-donation SHA-256 commitment (`AnonymousCommitment(index)` DataKey). `generate_receipt` authenticates anonymous donors via commitment verification rather than a direct address match; `verify_receipt` remains fully compatible. Eight new unit tests assert the anonymity invariants end-to-end.
+
 ### Added
 * **extension:** audit `chrome.storage` usage, confirm no plaintext wallet secrets are persisted (signing is delegated entirely to Freighter), and add CI secret-scan to enforce this going forward (closes #656)
 
