@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **backend/frontend Dockerfiles:** pinned to `node:22-alpine`; `npm ci --omit=dev` for reproducible installs
 - **backend,frontend:** rebrand design system with indigo/purple color palette
 - **ci:** `docker-compose.test.yml` runs integration/smoke tests against the compose Postgres/Redis services instead of blanket-skipping them (closes #702)
+- **contracts:** `batch_donate` and `batch_register_projects` now enforce a maximum batch size of 50; oversized batches are rejected with a structured contract error
 
 ### Fixed
 
