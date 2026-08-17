@@ -54,6 +54,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Audit manifest permissions (least privilege)
+        run: npm run check:permissions
+
       - run: npm run build
 
       - name: Verify build output
