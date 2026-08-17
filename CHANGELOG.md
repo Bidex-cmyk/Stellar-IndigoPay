@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* **contracts:** add a project-authorized `withdraw_stealth_donations` path to `DonationContract` (plus a `withdraw_stealth_integrated` forward wrapper on `IndigoPayContract`) with per-(project, token) withdrawable-balance accounting, CEI ordering, structured errors, and `StealthWithdrawal`/`stlth_wdr` events so stealth-donated funds are no longer permanently locked in the `DonationContract` (closes #621)
 * **frontend:** harden the production CSP — drop `'unsafe-inline'` from `script-src` (rely on nonce + `strict-dynamic`) and report violations via `report-to` alongside the deprecated `report-uri` (closes #688)
 * **backend:** reload the keeper account before each recurring submission so transaction sequence numbers are never stale — prevents `tx_bad_seq` when the account sequence advances externally or after a failed submission (closes #705)
 * **backend:** make Horizon donation indexing idempotent by operation ID, advance the cursor on replay, and allow multiple payment operations per transaction (closes #635)
