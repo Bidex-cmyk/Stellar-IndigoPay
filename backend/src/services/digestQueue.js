@@ -108,6 +108,7 @@ async function start() {
     const cronSchedule = cronOverride || DEFAULT_CRONS[type];
     const queueName = getQueueName(type);
 
+    await boss.createQueue(queueName);
     await boss.schedule(queueName, cronSchedule, {}, { tz: "UTC" });
     await boss.work(
       queueName,
@@ -152,6 +153,7 @@ async function enqueueDigest(type) {
 async function stop() {
   if (!boss) return;
   await boss.stop({ graceful: true, timeout: 15_000 });
+  boss = null;
 }
 
-module.exports = { start, runDigest, enqueueDigest };
+module.exports = { start, stop, runDigest, enqueueDigest };

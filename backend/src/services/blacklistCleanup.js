@@ -57,7 +57,7 @@ async function start() {
       { event: "blacklist_cleanup_disabled" },
       "[blacklistCleanup] Cleanup disabled via env",
     );
-    return;
+    return false;
   }
 
   const cronSchedule = cronOverride || DEFAULT_CRON;
@@ -71,6 +71,7 @@ async function start() {
   );
 
   await boss.start();
+  await boss.createQueue(QUEUE);
 
   // Register the cron schedule (idempotent — pg-boss deduplicates by name)
   await boss.schedule(QUEUE, cronSchedule, {}, { tz: "UTC" });
