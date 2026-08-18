@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **backend:** Enforce match pool caps atomically at match-time using row-level locks, preventing pools from overspending under concurrent load.
+
 ### Added
 - **backend/security:** Load guardian and recurring keeper signing seeds from managed secret files, add signer provider tests, and document signer rotation workflow.
 
