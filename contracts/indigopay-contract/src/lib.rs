@@ -934,6 +934,9 @@ pub enum ContractError {
     ImpactVerificationFailed = 130,
     // ── Batch limits ────────────────────────────────────────────────────────
     BatchSizeExceedsMaximum = 131,
+    // ── Donation reversal finalization (132–133) ────────────────────────────
+    DonationAlreadyReversed = 132,
+    DonationAccountingUnderflow = 133,
 }
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
@@ -1100,88 +1103,143 @@ fn migrate_legacy_ew_key_if_present(env: &Env, project_id: &String) {
     }
 }
 
-/// Reverse the donation-derived accounting shared by normal and force refunds.
-/// The caller performs authorization and funding checks first, then transfers
-/// the tokens after this helper returns (checks-effects-interactions ordering).
-#[cfg(feature = "refund")]
-fn apply_refund_accounting(
+/// Reverse donation-derived accounting after a refund or rejected challenge.
+///
+/// All subtraction results are calculated before state is written so a broken
+/// accounting invariant returns a contract error instead of panicking or
+/// leaving partially updated state.
+#[cfg(any(feature = "donation", feature = "refund"))]
+fn reverse_donation_accounting(
     env: &Env,
-    refund_id: u32,
-    request: &mut RefundRequest,
-    project: &mut Project,
+    donor: &Address,
+    project_id: &String,
+    amount: i128,
+    co2_offset_grams: i128,
 ) {
-    project.total_raised = project
-        .total_raised
-        .checked_sub(request.amount)
-        .expect("underflow");
-    env.storage()
+    let mut project: Project = env
+        .storage()
         .instance()
-        .set(&DataKey::Project(request.project_id.clone()), project);
+        .get(&DataKey::Project(project_id.clone()))
+        .expect("Project not found");
+    let project_total_raised = project
+        .total_raised
+        .checked_sub(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
 
     let mut donor_stats: DonorStats = env
         .storage()
         .instance()
-        .get(&DataKey::DonorStats(request.donor.clone()))
+        .get(&DataKey::DonorStats(donor.clone()))
         .unwrap_or(DonorStats {
             total_donated: 0,
             donation_count: 0,
             badge: BadgeTier::None,
             co2_offset_grams: 0,
         });
-    donor_stats.total_donated = donor_stats
+    let donor_total_donated = donor_stats
         .total_donated
-        .checked_sub(request.amount)
-        .expect("underflow");
-    donor_stats.co2_offset_grams = donor_stats
+        .checked_sub(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
+    let donor_co2_offset_grams = donor_stats
         .co2_offset_grams
-        .checked_sub(request.co2_offset_grams)
-        .expect("underflow");
-    env.storage()
-        .instance()
-        .set(&DataKey::DonorStats(request.donor.clone()), &donor_stats);
+        .checked_sub(co2_offset_grams)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
 
-    let project_total_key =
-        DataKey::DonorProjectTotal(request.project_id.clone(), request.donor.clone());
-    let previous_project_total: i128 = env
+    let project_total_key = DataKey::DonorProjectTotal(project_id.clone(), donor.clone());
+    let donor_project_total: i128 = env
         .storage()
         .instance()
         .get(&project_total_key)
         .unwrap_or(0);
-    env.storage().instance().set(
-        &project_total_key,
-        &previous_project_total
-            .checked_sub(request.amount)
-            .expect("underflow"),
-    );
+    let new_donor_project_total = donor_project_total
+        .checked_sub(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
 
     let global_raised: i128 = env
         .storage()
         .instance()
         .get(&DataKey::GlobalTotalRaised)
         .unwrap_or(0);
-    env.storage().instance().set(
-        &DataKey::GlobalTotalRaised,
-        &global_raised
-            .checked_sub(request.amount)
-            .expect("underflow"),
-    );
+    let new_global_raised = global_raised
+        .checked_sub(amount)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
 
     let global_co2: i128 = env
         .storage()
         .instance()
         .get(&DataKey::GlobalCO2OffsetGrams)
         .unwrap_or(0);
-    env.storage().instance().set(
-        &DataKey::GlobalCO2OffsetGrams,
-        &global_co2
-            .checked_sub(request.co2_offset_grams)
-            .expect("underflow"),
+    let new_global_co2 = global_co2
+        .checked_sub(co2_offset_grams)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::DonationAccountingUnderflow));
+
+    project.total_raised = project_total_raised;
+    env.storage()
+        .instance()
+        .set(&DataKey::Project(project_id.clone()), &project);
+
+    donor_stats.total_donated = donor_total_donated;
+    donor_stats.co2_offset_grams = donor_co2_offset_grams;
+    env.storage()
+        .instance()
+        .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
+    env.storage()
+        .instance()
+        .set(&project_total_key, &new_donor_project_total);
+    env.storage()
+        .instance()
+        .set(&DataKey::GlobalTotalRaised, &new_global_raised);
+    env.storage()
+        .instance()
+        .set(&DataKey::GlobalCO2OffsetGrams, &new_global_co2);
+}
+
+/// Reverse the donation-derived accounting shared by normal and force refunds.
+/// The caller performs authorization and funding checks first, then transfers
+/// the tokens after this helper returns (checks-effects-interactions ordering).
+#[cfg(feature = "refund")]
+fn apply_refund_accounting(env: &Env, refund_id: u32, request: &mut RefundRequest) {
+    if challenge_reversed(env, request.donation_record_index) {
+        panic_with_error!(env, ContractError::DonationAlreadyReversed);
+    }
+
+    reverse_donation_accounting(
+        env,
+        &request.donor,
+        &request.project_id,
+        request.amount,
+        request.co2_offset_grams,
     );
 
     request.status = RefundRequestStatus::Approved;
     env.storage()
         .instance()
         .set(&DataKey::RefundRequest(refund_id), request);
+}
+
+#[cfg(any(feature = "donation", feature = "refund"))]
+fn challenge_reversed(env: &Env, donation_index: u32) -> bool {
+    env.storage()
+        .instance()
+        .get::<_, DonationChallenge>(&DataKey::DonationChallenge(donation_index))
+        .map(|challenge| challenge.resolved && !challenge.approved)
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "refund")]
+fn refund_approved(env: &Env, donation_index: u32) -> bool {
+    let refund_id: Option<u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::RefundForDonation(donation_index));
+    refund_id
+        .and_then(|id| {
+            env.storage()
+                .instance()
+                .get::<_, RefundRequest>(&DataKey::RefundRequest(id))
+        })
+        .map(|request| request.status == RefundRequestStatus::Approved)
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "impact")]
@@ -7145,6 +7203,9 @@ impl IndigoPayContract {
         if env.storage().instance().has(&refund_for_donation_key) {
             panic!("Refund already requested for this donation");
         }
+        if challenge_reversed(&env, donation_record_index) {
+            panic_with_error!(&env, ContractError::DonationAlreadyReversed);
+        }
         // Snapshot CO₂ offset from the separate key written at donation time.
         // Pre-upgrade donations lack this key; CO₂ reversal defaults to 0
         // (documented known limitation — see SECURITY.md).
@@ -7210,7 +7271,7 @@ impl IndigoPayContract {
         if request.status != RefundRequestStatus::Pending {
             panic!("Refund request is not pending");
         }
-        let mut project: Project = env
+        let project: Project = env
             .storage()
             .instance()
             .get(&DataKey::Project(request.project_id.clone()))
@@ -7221,7 +7282,7 @@ impl IndigoPayContract {
         // The fraud case is unresolvable on-chain without escrow.
         project.wallet.require_auth();
 
-        apply_refund_accounting(&env, refund_id, &mut request, &mut project);
+        apply_refund_accounting(&env, refund_id, &mut request);
 
         // ── Interaction: token transfer from project wallet back to donor.
         let token_client = token::Client::new(&env, &request.token);
@@ -7364,12 +7425,6 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&DataKey::RefundRequest(refund_id), &request);
-        let mut project: Project = env
-            .storage()
-            .instance()
-            .get(&DataKey::Project(request.project_id.clone()))
-            .expect("Project not found");
-
         let balance_key =
             DataKey::ProjectContractBalance(request.project_id.clone(), request.token.clone());
         let pool_balance: i128 = env.storage().instance().get(&balance_key).unwrap_or(0);
@@ -7383,7 +7438,7 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .set(&balance_key, &(pool_balance - request.amount));
-        apply_refund_accounting(&env, refund_id, &mut request, &mut project);
+        apply_refund_accounting(&env, refund_id, &mut request);
 
         let token_client = token::Client::new(&env, &request.token);
         token_client.transfer(
@@ -7472,6 +7527,11 @@ impl IndigoPayContract {
             .get(&DataKey::DonationRecord(donation_index))
             .expect("Donation record not found");
 
+        #[cfg(feature = "refund")]
+        if refund_approved(&env, donation_index) {
+            panic_with_error!(&env, ContractError::DonationAlreadyReversed);
+        }
+
         let threshold = Self::get_challenge_threshold(env.clone());
         if threshold == 0 || donation.amount < threshold {
             panic!("Donation is below challenge threshold");
@@ -7524,6 +7584,11 @@ impl IndigoPayContract {
             panic!("Challenge is not active or already resolved");
         }
 
+        #[cfg(feature = "refund")]
+        if !approve && refund_approved(&env, donation_index) {
+            panic_with_error!(&env, ContractError::DonationAlreadyReversed);
+        }
+
         challenge.resolved = true;
         challenge.approved = approve;
         env.storage()
@@ -7546,70 +7611,18 @@ impl IndigoPayContract {
                 .get(&DataKey::DonationCO2Offset(donation_index))
                 .unwrap_or(0);
 
-            let mut project: Project = env
+            let project: Project = env
                 .storage()
                 .instance()
                 .get(&DataKey::Project(record.project.clone()))
                 .expect("Project not found");
 
-            project.total_raised = project
-                .total_raised
-                .checked_sub(record.amount)
-                .expect("underflow");
-            env.storage()
-                .instance()
-                .set(&DataKey::Project(record.project.clone()), &project);
-
-            let mut donor_stats: DonorStats = env
-                .storage()
-                .instance()
-                .get(&DataKey::DonorStats(record.donor.clone()))
-                .unwrap_or(DonorStats {
-                    total_donated: 0,
-                    donation_count: 0,
-                    badge: BadgeTier::None,
-                    co2_offset_grams: 0,
-                });
-            donor_stats.total_donated = donor_stats
-                .total_donated
-                .checked_sub(record.amount)
-                .expect("underflow");
-            donor_stats.co2_offset_grams = donor_stats
-                .co2_offset_grams
-                .checked_sub(co2_offset)
-                .expect("underflow");
-            env.storage()
-                .instance()
-                .set(&DataKey::DonorStats(record.donor.clone()), &donor_stats);
-
-            let proj_total_key =
-                DataKey::DonorProjectTotal(record.project.clone(), record.donor.clone());
-            let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
-            env.storage().instance().set(
-                &proj_total_key,
-                &prev_proj_total
-                    .checked_sub(record.amount)
-                    .expect("underflow"),
-            );
-
-            let gr: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::GlobalTotalRaised)
-                .unwrap_or(0);
-            env.storage().instance().set(
-                &DataKey::GlobalTotalRaised,
-                &gr.checked_sub(record.amount).expect("underflow"),
-            );
-
-            let gc: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::GlobalCO2OffsetGrams)
-                .unwrap_or(0);
-            env.storage().instance().set(
-                &DataKey::GlobalCO2OffsetGrams,
-                &gc.checked_sub(co2_offset).expect("underflow"),
+            reverse_donation_accounting(
+                &env,
+                &record.donor,
+                &record.project,
+                record.amount,
+                co2_offset,
             );
 
             #[cfg(feature = "usdc")]
@@ -8290,7 +8303,7 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::token::StellarAssetClient;
-    use soroban_sdk::{Address, BytesN, Env, String, Vec};
+    use soroban_sdk::{Address, BytesN, ConversionError, Env, Error, InvokeError, String, Vec};
     /// Helper: create a single-element signer Vec for admin calls.
     fn signers1(env: &Env, a: &Address) -> Vec<Address> {
         let mut v = Vec::new(env);
@@ -11153,6 +11166,16 @@ mod tests {
         });
     }
 
+    fn assert_contract_error(
+        result: Result<Result<(), ConversionError>, Result<Error, InvokeError>>,
+        expected: ContractError,
+    ) {
+        match result {
+            Err(Ok(error)) => assert_eq!(ContractError::try_from(&error), Ok(expected)),
+            other => panic!("expected contract error {expected:?}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_request_refund_success() {
         let (env, _cid, client, _admin, pid) = setup();
@@ -13872,6 +13895,87 @@ mod tests {
         let resolved_challenge = client.get_donation_challenge(&donation_index).unwrap();
         assert!(resolved_challenge.resolved);
         assert!(!resolved_challenge.approved);
+    }
+
+    #[test]
+    fn test_challenge_reversal_blocks_refund_without_double_accounting() {
+        let (env, _cid, client, admin, pid) = setup();
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        let admins = soroban_sdk::vec![&env, admin.clone()];
+        client.set_challenge_threshold(&admins, &(10 * STROOP));
+        client.challenge_donation(
+            &donor,
+            &donation_index,
+            &String::from_str(&env, "Reverse donation"),
+        );
+        client.resolve_challenge(&admin, &donation_index, &false);
+
+        let project_after_reversal = client.get_project(&pid);
+        let stats_after_reversal = client.get_donor_stats(&donor);
+        let global_after_reversal = client.get_global_stats();
+        assert_contract_error(
+            client.try_request_refund(&donor, &donation_index, &token),
+            ContractError::DonationAlreadyReversed,
+        );
+
+        assert_eq!(
+            client.get_project(&pid).total_raised,
+            project_after_reversal.total_raised
+        );
+        assert_eq!(
+            client.get_donor_stats(&donor).total_donated,
+            stats_after_reversal.total_donated
+        );
+        assert_eq!(
+            client.get_global_stats().total_raised,
+            global_after_reversal.total_raised
+        );
+        assert!(
+            client.try_get_refund_request(&0).is_err(),
+            "rejected refund request must not create a refund record"
+        );
+    }
+
+    #[test]
+    fn test_refund_reversal_blocks_challenge_resolution_without_double_accounting() {
+        let (env, _cid, client, admin, pid) = setup();
+        let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
+        let admins = soroban_sdk::vec![&env, admin.clone()];
+        client.set_challenge_threshold(&admins, &(10 * STROOP));
+        client.challenge_donation(
+            &donor,
+            &donation_index,
+            &String::from_str(&env, "Review before refund"),
+        );
+        client.request_refund(&donor, &donation_index, &token);
+        client.approve_refund(&admin, &0);
+
+        let project_after_refund = client.get_project(&pid);
+        let stats_after_refund = client.get_donor_stats(&donor);
+        let global_after_refund = client.get_global_stats();
+        assert_contract_error(
+            client.try_resolve_challenge(&admin, &donation_index, &false),
+            ContractError::DonationAlreadyReversed,
+        );
+
+        assert_eq!(
+            client.get_project(&pid).total_raised,
+            project_after_refund.total_raised
+        );
+        assert_eq!(
+            client.get_donor_stats(&donor).total_donated,
+            stats_after_refund.total_donated
+        );
+        assert_eq!(
+            client.get_global_stats().total_raised,
+            global_after_refund.total_raised
+        );
+        assert!(
+            !client
+                .get_donation_challenge(&donation_index)
+                .unwrap()
+                .resolved
+        );
     }
 
     #[test]
