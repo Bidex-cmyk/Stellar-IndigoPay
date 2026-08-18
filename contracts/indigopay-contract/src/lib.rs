@@ -671,6 +671,16 @@ pub enum DataKey {
     NativeTokenAddress,
     // zk-SNARK anonymous donation (#390)
     ZkVerificationKey,
+    // Stored in *persistent* storage, not instance storage (#706). One entry
+    // is written per anonymous donation and the set only ever grows, so
+    // keeping it in the always-loaded instance entry would make every
+    // contract invocation's footprint grow with total ZK donation volume and
+    // risk exceeding the ledger-entry size limit. Persistent storage gives
+    // each nullifier/record its own footprint and TTL instead. See
+    // `ZK_STORAGE_TTL_LEDGERS` for the retention policy. A ring/eviction
+    // scheme was deliberately rejected for `Nullifier`: evicting an old
+    // nullifier would make it reusable again, defeating double-spend
+    // protection.
     Nullifier(BytesN<32>),
     ZkDonationRecord(u32),
     // Time-locked donation vesting (#386)
@@ -957,6 +967,22 @@ const FORCE_REFUND_TIMELOCK_LEDGERS: u32 = 51_840;
 // is preserved for indexers. After this window, anyone may call the
 // corresponding `cleanup_*` function to remove the storage entries.
 pub const GRACE_PERIOD_LEDGERS: u32 = 518_400;
+
+// ~365 days × 86400 s ÷ 5 s per ledger ≈ 6_307_200 ledgers — chosen close to
+// the network's maximum single-extension TTL (soroban-sdk's
+// `Storage::max_ttl` defaults to 6_312_000 in the test environment and
+// mainnet uses the same ceiling). Documented retention policy for
+// `DataKey::{Nullifier, ZkDonationRecord}` (#706): each entry lives in
+// *persistent* storage (see rationale at their declaration) and has its TTL
+// extended to this window on write. A nullifier must never become reusable,
+// so unlike `GRACE_PERIOD_LEDGERS`-style data these entries are never
+// cleaned up — if indefinite on-chain retention is required beyond this
+// window, an operator must re-invoke a donation/query path (or a future
+// maintenance call) to bump the TTL again before it lapses. Letting the TTL
+// lapse only risks the network archiving the entry (recoverable via
+// restoration), not silent data loss or nullifier reuse.
+#[cfg(feature = "zk")]
+const ZK_STORAGE_TTL_LEDGERS: u32 = 6_307_200;
 
 /// Current storage schema version. Bump this and add a migration step in
 /// `migrate()` whenever a struct layout, DataKey variant, or stored value
@@ -3944,7 +3970,7 @@ impl IndigoPayContract {
         }
 
         let nullifier_key = DataKey::Nullifier(nullifier.clone());
-        if env.storage().instance().has(&nullifier_key) {
+        if env.storage().persistent().has(&nullifier_key) {
             panic!("ZK nullifier already used");
         }
 
@@ -4006,8 +4032,9 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::DonationCount)
             .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::ZkDonationRecord(index),
+        let zk_record_key = DataKey::ZkDonationRecord(index);
+        env.storage().persistent().set(
+            &zk_record_key,
             &ZkDonationRecord {
                 project: project_id.clone(),
                 amount,
@@ -4015,6 +4042,11 @@ impl IndigoPayContract {
                 nullifier: nullifier.clone(),
                 ledger: env.ledger().sequence(),
             },
+        );
+        env.storage().persistent().extend_ttl(
+            &zk_record_key,
+            ZK_STORAGE_TTL_LEDGERS,
+            ZK_STORAGE_TTL_LEDGERS,
         );
         env.storage().instance().set(
             &DataKey::DonationCount,
@@ -4042,7 +4074,12 @@ impl IndigoPayContract {
             &DataKey::GlobalCO2OffsetGrams,
             &global_co2.checked_add(co2).expect("overflow"),
         );
-        env.storage().instance().set(&nullifier_key, &true);
+        env.storage().persistent().set(&nullifier_key, &true);
+        env.storage().persistent().extend_ttl(
+            &nullifier_key,
+            ZK_STORAGE_TTL_LEDGERS,
+            ZK_STORAGE_TTL_LEDGERS,
+        );
         env.events().publish(
             (symbol_short!("zk_donate"), project_id, nullifier),
             (amount_commitment, co2),
@@ -4052,13 +4089,15 @@ impl IndigoPayContract {
 
     #[cfg(feature = "zk")]
     pub fn is_zk_nullifier_used(env: Env, nullifier: BytesN<32>) -> bool {
-        env.storage().instance().has(&DataKey::Nullifier(nullifier))
+        env.storage()
+            .persistent()
+            .has(&DataKey::Nullifier(nullifier))
     }
 
     #[cfg(feature = "zk")]
     pub fn get_zk_donation_record(env: Env, index: u32) -> ZkDonationRecord {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ZkDonationRecord(index))
             .expect("ZK donation record not found")
     }
@@ -4121,8 +4160,13 @@ impl IndigoPayContract {
         if amount <= 0 {
             panic!("Donation amount must be positive");
         }
+        // `Nullifier` lives in persistent storage (#706) and is shared with
+        // `donate_anonymous_zk`/`is_nullifier_spent` — it must be read/written
+        // through the same storage type everywhere or a nullifier spent via
+        // one anonymous-donation path would not be recognized as spent by
+        // the other.
         let nullifier_key = DataKey::Nullifier(nullifier.clone());
-        if env.storage().instance().has(&nullifier_key) {
+        if env.storage().persistent().has(&nullifier_key) {
             panic!("Nullifier already spent");
         }
         // Load and verify the Groth16 proof against the admin-set vk.
@@ -4186,7 +4230,12 @@ impl IndigoPayContract {
         // Mark nullifier as spent AFTER all checks pass, as part of the
         // Effects step. Prevents griefing where a valid proof for a
         // deactivated project permanently consumes the nullifier.
-        env.storage().instance().set(&nullifier_key, &true);
+        env.storage().persistent().set(&nullifier_key, &true);
+        env.storage().persistent().extend_ttl(
+            &nullifier_key,
+            ZK_STORAGE_TTL_LEDGERS,
+            ZK_STORAGE_TTL_LEDGERS,
+        );
 
         project.total_raised = project.total_raised.checked_add(amount).expect("overflow");
         let goal_reached = apply_campaign_goal_progress(&mut project);
@@ -4331,7 +4380,9 @@ impl IndigoPayContract {
     /// Check if a nullifier has already been spent.
     #[cfg(feature = "zk")]
     pub fn is_nullifier_spent(env: Env, nullifier: BytesN<32>) -> bool {
-        env.storage().instance().has(&DataKey::Nullifier(nullifier))
+        env.storage()
+            .persistent()
+            .has(&DataKey::Nullifier(nullifier))
     }
 
     // ─── Integrated Stealth Address Donation (#458) ───────────────────────────
@@ -12022,6 +12073,116 @@ mod tests {
         client.initialize(&signers1(&env, &admin), &1u32);
         let nullifier = BytesN::from_array(&env, &[9u8; 32]);
         assert!(!client.is_nullifier_spent(&nullifier));
+    }
+    // ─── Bounded ZK donation storage (#706) ────────────────────────────────
+    // `donate_anonymous_zk`'s proof verification is out of scope for these
+    // tests (see #706's "Out of Scope"), so we exercise the storage layer
+    // directly via `env.as_contract`, writing `DataKey::{Nullifier,
+    // ZkDonationRecord}` exactly the way `donate_anonymous_zk`/
+    // `donate_anonymous` do.
+    #[cfg(feature = "zk")]
+    #[test]
+    fn test_zk_storage_bound_instance_entry_does_not_grow_with_donation_volume() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        // Simulate a batch of anonymous donations. Whatever the volume, the
+        // instance entry (read on *every* contract invocation) must gain
+        // zero bytes from ZK donations — that's the actual "ledger-entry
+        // size" risk #706 describes. Each nullifier/record instead gets its
+        // own persistent-storage footprint.
+        for i in 0..25u32 {
+            let nullifier = BytesN::from_array(&env, &[i as u8; 32]);
+            env.as_contract(&id, || {
+                let nullifier_key = DataKey::Nullifier(nullifier.clone());
+                let record_key = DataKey::ZkDonationRecord(i);
+
+                env.storage().persistent().set(&nullifier_key, &true);
+                env.storage().persistent().extend_ttl(
+                    &nullifier_key,
+                    ZK_STORAGE_TTL_LEDGERS,
+                    ZK_STORAGE_TTL_LEDGERS,
+                );
+                env.storage().persistent().set(
+                    &record_key,
+                    &ZkDonationRecord {
+                        project: String::from_str(&env, "test-proj"),
+                        amount: 1_000_000,
+                        amount_commitment: BytesN::from_array(&env, &[0u8; 32]),
+                        nullifier: nullifier.clone(),
+                        ledger: env.ledger().sequence(),
+                    },
+                );
+                env.storage().persistent().extend_ttl(
+                    &record_key,
+                    ZK_STORAGE_TTL_LEDGERS,
+                    ZK_STORAGE_TTL_LEDGERS,
+                );
+
+                assert!(!env.storage().instance().has(&nullifier_key));
+                assert!(!env.storage().instance().has(&record_key));
+            });
+        }
+
+        // Every entry remains independently readable through the public
+        // getters regardless of how it was stored.
+        assert!(client.is_zk_nullifier_used(&BytesN::from_array(&env, &[0u8; 32])));
+        assert!(client.is_nullifier_spent(&BytesN::from_array(&env, &[24u8; 32])));
+        assert_eq!(client.get_zk_donation_record(&24u32).amount, 1_000_000);
+    }
+    #[cfg(feature = "zk")]
+    #[test]
+    fn test_zk_nullifier_and_record_ttl_matches_retention_policy() {
+        use soroban_sdk::testutils::storage::Persistent as TestPersistent;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let nullifier = BytesN::from_array(&env, &[77u8; 32]);
+        env.as_contract(&id, || {
+            let nullifier_key = DataKey::Nullifier(nullifier.clone());
+            let record_key = DataKey::ZkDonationRecord(0u32);
+
+            env.storage().persistent().set(&nullifier_key, &true);
+            env.storage().persistent().extend_ttl(
+                &nullifier_key,
+                ZK_STORAGE_TTL_LEDGERS,
+                ZK_STORAGE_TTL_LEDGERS,
+            );
+            env.storage().persistent().set(
+                &record_key,
+                &ZkDonationRecord {
+                    project: String::from_str(&env, "test-proj"),
+                    amount: 1,
+                    amount_commitment: BytesN::from_array(&env, &[0u8; 32]),
+                    nullifier: nullifier.clone(),
+                    ledger: env.ledger().sequence(),
+                },
+            );
+            env.storage().persistent().extend_ttl(
+                &record_key,
+                ZK_STORAGE_TTL_LEDGERS,
+                ZK_STORAGE_TTL_LEDGERS,
+            );
+
+            assert_eq!(
+                env.storage().persistent().get_ttl(&nullifier_key),
+                ZK_STORAGE_TTL_LEDGERS
+            );
+            assert_eq!(
+                env.storage().persistent().get_ttl(&record_key),
+                ZK_STORAGE_TTL_LEDGERS
+            );
+        });
+        assert!(client.is_nullifier_spent(&nullifier));
     }
     #[cfg(feature = "zk")]
     #[test]
