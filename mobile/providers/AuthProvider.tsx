@@ -41,6 +41,11 @@ import { AppState, type AppStateStatus } from "react-native";
 import * as secureStore from "../lib/secureStore";
 import { authenticate } from "../hooks/useBiometricAuth";
 import { deleteSecretKey } from "../lib/wallet/sdk";
+import {
+  checkDeviceIntegrity,
+  getIntegrityPolicy,
+  type IntegrityPolicy,
+} from "../lib/deviceIntegrity";
 
 const SESSION_KEY = "wallet_session";
 const AUTO_LOCK_BACKGROUND_MS = 60_000;
@@ -64,6 +69,13 @@ export interface AuthContextValue {
   isAuthenticated: boolean;
   /** True only while the unlock prompt is open. */
   isUnlocking: boolean;
+  /**
+   * True when the device failed the jailbreak/root integrity check.
+   * Exposed so gated UI can show a warning/block message.
+   */
+  isDeviceCompromised: boolean;
+  /** Active device-integrity policy (`off` | `warn` | `block`). */
+  integrityPolicy: IntegrityPolicy;
   /** Current in-memory session. Read-only; do NOT mutate from callers. */
   session: WalletSession | null;
   /**
@@ -83,6 +95,8 @@ const noopContext: AuthContextValue = {
   state: "locked",
   isAuthenticated: false,
   isUnlocking: false,
+  isDeviceCompromised: false,
+  integrityPolicy: "block",
   session: null,
   unlock: async () => false,
   lock: () => undefined,
@@ -100,8 +114,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [state, setState] = useState<AuthState>("hydrating");
   const [session, setSession] = useState<WalletSession | null>(null);
   const [isUnlocking, setIsUnlocking] = useState(false);
+  const [isDeviceCompromised, setIsDeviceCompromised] = useState(false);
+  const [integrityPolicy] = useState<IntegrityPolicy>(() => getIntegrityPolicy());
   const backgroundedAtRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+
+  // ---- Device-integrity probe: surface jailbreak/root compromise so
+  //                            gated UI can warn/block without waiting for
+  //                            an unlock attempt.
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await checkDeviceIntegrity();
+        if (!mountedRef.current) return;
+        setIsDeviceCompromised(result.isCompromised);
+      } catch {
+        // Detector is best-effort; fail open (state stays clean).
+      }
+    })();
+  }, []);
 
   // ---- Hydration on mount: surface "locked" if a stored session exists;
   //                            "cleared" if no session at all. We do
@@ -204,13 +235,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
       state,
       isAuthenticated: state === "unlocked",
       isUnlocking,
+      isDeviceCompromised,
+      integrityPolicy,
       session,
       unlock,
       lock,
       clear,
       storeSession,
     }),
-    [state, isUnlocking, session, unlock, lock, clear, storeSession],
+    [
+      state,
+      isUnlocking,
+      isDeviceCompromised,
+      integrityPolicy,
+      session,
+      unlock,
+      lock,
+      clear,
+      storeSession,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -23,8 +23,13 @@ import {
 
 jest.mock("../../lib/secureStore");
 jest.mock("../../hooks/useBiometricAuth");
+jest.mock("../../lib/deviceIntegrity", () => ({
+  checkDeviceIntegrity: jest.fn(),
+  getIntegrityPolicy: jest.fn(() => "block"),
+}));
 import * as secureStore from "../../lib/secureStore";
 import * as biometricAuth from "../../hooks/useBiometricAuth";
+import * as deviceIntegrity from "../../lib/deviceIntegrity";
 jest.mock("react-native", () => {
   const RN = jest.requireActual("react-native");
   const mockAppState = {
@@ -61,6 +66,10 @@ const authMock = biometricAuth as unknown as {
 const appStateMock = AppState as unknown as {
   addEventListener: jest.Mock;
 };
+const integrityMock = deviceIntegrity as unknown as {
+  checkDeviceIntegrity: jest.Mock;
+  getIntegrityPolicy: jest.Mock;
+};
 
 const sampleSession: WalletSession = {
   publicKey: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -76,6 +85,12 @@ beforeEach(() => {
   authMock.authenticate.mockReset();
   appStateMock.addEventListener.mockReset();
   appStateMock.addEventListener.mockReturnValue({ remove: jest.fn() });
+  integrityMock.checkDeviceIntegrity.mockResolvedValue({
+    isCompromised: false,
+    reasons: [],
+    supported: true,
+  });
+  integrityMock.getIntegrityPolicy.mockReturnValue("block");
 });
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -92,6 +107,19 @@ describe("AuthProvider", () => {
     );
     expect(result.current.isAuthenticated).toBe(false);
     expect(result.current.session).toBeNull();
+  });
+
+  test("surfaces a compromised device via context", async () => {
+    ssMock.get.mockResolvedValue(null);
+    integrityMock.checkDeviceIntegrity.mockResolvedValue({
+      isCompromised: true,
+      reasons: ["mock rooted"],
+      supported: true,
+    });
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => expect(result.current.state).toBe<AuthState>("cleared"));
+    await waitFor(() => expect(result.current.isDeviceCompromised).toBe(true));
   });
 
   test('hydrates to "locked" when a stored session is present', async () => {
