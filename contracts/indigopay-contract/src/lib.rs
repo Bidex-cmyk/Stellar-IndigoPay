@@ -781,6 +781,7 @@ const MAX_VOTING_WINDOW_LEDGERS: u32 = 518_400; // 30 days @ 5s/ledger
                                                 // Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
                                                 // panics and misleading impact figures from misconfigured projects.
 const MAX_CO2_PER_XLM: u32 = 100_000;
+const MAX_BATCH_SIZE: u32 = 50;
 
 // ─── Main contract error codes ─────────────────────────────────────────────
 #[contracterror]
@@ -931,6 +932,8 @@ pub enum ContractError {
     InvalidPeriodRangeStartMustBeBeforeEnd = 128,
     RootCannotBeZero = 129,
     ImpactVerificationFailed = 130,
+    // ── Batch limits ────────────────────────────────────────────────────────
+    BatchSizeExceedsMaximum = 131,
 }
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
@@ -2742,6 +2745,9 @@ impl IndigoPayContract {
     pub fn batch_register_projects(env: Env, admin: Address, projects: Vec<ProjectInit>) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
+        if projects.len() > MAX_BATCH_SIZE {
+            panic_with_error!(&env, ContractError::BatchSizeExceedsMaximum);
+        }
         let mut ids: Vec<String> = env
             .storage()
             .instance()
@@ -3594,6 +3600,9 @@ impl IndigoPayContract {
     #[cfg(any(feature = "batch", feature = "donation", feature = "testutils"))]
     pub fn batch_donate(env: Env, token: Address, donations: Vec<BatchDonation>) {
         require_not_paused(&env);
+        if donations.len() > MAX_BATCH_SIZE {
+            panic_with_error!(&env, ContractError::BatchSizeExceedsMaximum);
+        }
         let mut authorized: Vec<Address> = Vec::new(&env);
         for donation in donations.iter() {
             if donation.amount <= 0 {
@@ -8437,7 +8446,98 @@ mod tests {
         });
         client.batch_register_projects(&admin, &projects);
     }
-    // ─── Governance helpers ───────────────────────────────────────────────────
+    fn make_proj_id(env: &Env, prefix: &[u8], n: u32) -> String {
+        let mut buf = soroban_sdk::Bytes::new(env);
+        for &b in prefix {
+            buf.push_back(b);
+        }
+        let mut digits: [u8; 10] = [0; 10];
+        let mut len = 0usize;
+        if n == 0 {
+            digits[0] = b'0';
+            len = 1;
+        } else {
+            let mut val = n;
+            let mut temp = [0u8; 10];
+            let mut count = 0usize;
+            while val > 0 {
+                temp[count] = b'0' + (val % 10) as u8;
+                val /= 10;
+                count += 1;
+            }
+            while count > 0 {
+                count -= 1;
+                digits[len] = temp[count];
+                len += 1;
+            }
+        }
+        String::from_bytes(env, &digits[..len])
+    }
+    #[test]
+    fn test_batch_register_projects_under_limit_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let mut projects = Vec::new(&env);
+        for i in 0..49 {
+            let pid = make_proj_id(&env, b"proj-", i);
+            projects.push_back(ProjectInit {
+                id: pid,
+                name: String::from_str(&env, "Project"),
+                wallet: Address::generate(&env),
+                co2_per_xlm: 100,
+            });
+        }
+        client.batch_register_projects(&admin, &projects);
+        assert_eq!(client.get_project_count(), 49);
+    }
+    #[test]
+    fn test_batch_register_projects_at_limit_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let mut projects = Vec::new(&env);
+        for i in 0..50 {
+            let pid = make_proj_id(&env, b"proj-", i);
+            projects.push_back(ProjectInit {
+                id: pid,
+                name: String::from_str(&env, "Project"),
+                wallet: Address::generate(&env),
+                co2_per_xlm: 100,
+            });
+        }
+        client.batch_register_projects(&admin, &projects);
+        assert_eq!(client.get_project_count(), 50);
+    }
+    #[test]
+    fn test_batch_register_projects_over_limit_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let mut projects = Vec::new(&env);
+        for _i in 0..51 {
+            projects.push_back(ProjectInit {
+                id: String::from_str(&env, "proj"),
+                name: String::from_str(&env, "Project"),
+                wallet: Address::generate(&env),
+                co2_per_xlm: 100,
+            });
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.batch_register_projects(&admin, &projects);
+        }));
+        assert!(result.is_err());
+        assert_eq!(client.get_project_count(), 0);
+    }
     /// Set up a fresh contract with one registered project.
     fn setup() -> (
         Env,
@@ -14076,6 +14176,85 @@ mod tests {
         assert_eq!(record.project, pid);
         assert_eq!(record.amount, 10 * STROOP);
         assert_eq!(record.message_hash, 99u32);
+    }
+    #[test]
+    fn test_batch_donate_under_limit_succeeds() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.set_donation_rate_limit(&admin, &100u32, &720u32);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 49 * STROOP);
+        let mut donations = Vec::new(&env);
+        for i in 0..49 {
+            donations.push_back(BatchDonation {
+                donor: donor.clone(),
+                project_id: pid.clone(),
+                amount: 1 * STROOP,
+                msg_hash: i as u32,
+            });
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.batch_donate(&token, &donations);
+        }));
+        assert!(
+            result.is_ok() || {
+                let err = result.unwrap_err();
+                let msg = err
+                    .downcast_ref::<std::string::String>()
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                !msg.contains("BatchSizeExceedsMaximum")
+            }
+        );
+    }
+    #[test]
+    fn test_batch_donate_at_limit_succeeds() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.set_donation_rate_limit(&admin, &100u32, &720u32);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 50 * STROOP);
+        let mut donations = Vec::new(&env);
+        for i in 0..50 {
+            donations.push_back(BatchDonation {
+                donor: donor.clone(),
+                project_id: pid.clone(),
+                amount: 1 * STROOP,
+                msg_hash: i as u32,
+            });
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.batch_donate(&token, &donations);
+        }));
+        assert!(
+            result.is_ok() || {
+                let err = result.unwrap_err();
+                let msg = err
+                    .downcast_ref::<std::string::String>()
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                !msg.contains("BatchSizeExceedsMaximum")
+            }
+        );
+    }
+    #[test]
+    fn test_batch_donate_over_limit_fails() {
+        let (env, _cid, client, admin, pid) = setup();
+        client.set_donation_rate_limit(&admin, &100u32, &720u32);
+        let donor = Address::generate(&env);
+        let token = mint_xlm(&env, &donor, 51 * STROOP);
+        let mut donations = Vec::new(&env);
+        for i in 0..51 {
+            donations.push_back(BatchDonation {
+                donor: donor.clone(),
+                project_id: pid.clone(),
+                amount: 1 * STROOP,
+                msg_hash: i as u32,
+            });
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.batch_donate(&token, &donations);
+        }));
+        assert!(result.is_err());
+        assert_eq!(client.get_donation_count(), 0);
     }
     // ─── Off-Chain Oracle Attestation for Project Impact Verification (#459) ─
     #[cfg(feature = "impact_verification")]
