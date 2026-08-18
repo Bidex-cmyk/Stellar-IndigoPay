@@ -11,7 +11,6 @@
 const pool = require("../db/pool");
 const logger = require("../logger");
 const {
-  CONTRACT_ID,
   server: stellarServer,
   NETWORK_PASSPHRASE,
   submitTransaction,
@@ -26,7 +25,7 @@ const {
   rpc,
 } = require("@stellar/stellar-sdk");
 const { metrics } = require("./metrics");
-const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
+const { getSigningSecret } = require("./signingSecretProvider");
 
 let intervalId = null;
 let isExecuting = false;
@@ -81,9 +80,11 @@ async function runKeeperCycleWithLock() {
  * Main keeper cycle logic.
  */
 async function runKeeperCycle() {
-  const keeperSecret = process.env.KEEPER_SECRET;
-  if (!keeperSecret) {
-    logger.warn({ event: "recurring_keeper_no_secret" }, "KEEPER_SECRET not configured, skipping recurring donation keeper cycle");
+  let keeperSecret;
+  try {
+    keeperSecret = await getSigningSecret("recurringKeeper");
+  } catch (err) {
+    logger.warn({ event: "recurring_keeper_no_secret", err: err.message }, "Recurring keeper managed signing secret not configured, skipping recurring donation keeper cycle");
     return;
   }
   const contractId = process.env.CONTRACT_ID;
