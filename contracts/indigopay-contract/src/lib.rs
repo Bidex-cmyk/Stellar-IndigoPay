@@ -4547,6 +4547,59 @@ impl IndigoPayContract {
         donation_id
     }
 
+    /// Integrated stealth withdrawal (#621).
+    ///
+    /// Project-wallet-gated forward of `DonationContract.withdraw_stealth_donations`
+    /// for the project registered under `project_id`. Resolves the project's
+    /// wallet, cross-calls the configured `DonationContract` (which enforces
+    /// `project_wallet` auth and CEI-ordered per-(project, token) balance
+    /// accounting), and emits a main-contract `stlth_wdr` event so indexers
+    /// can reconcile on-chain `total_raised` with funds actually received by
+    /// the project.
+    ///
+    /// The caller must be (and must sign as) the project's wallet; the auth
+    /// check runs inside the `DonationContract`. The call is intentionally
+    /// not gated on the contract/project pause or active flags so funds are
+    /// never stranded (#621).
+    ///
+    /// Returns the remaining stealth withdrawable balance for
+    /// (project wallet, token) after the withdrawal.
+    #[cfg(feature = "donation")]
+    pub fn withdraw_stealth_integrated(
+        env: Env,
+        project_id: String,
+        token: Address,
+        amount: i128,
+    ) -> i128 {
+        let project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(project_id.clone()))
+            .expect("Project not found");
+        // Root-level auth so the sub-invocation's `require_auth` inside the
+        // DonationContract is tied to this root invocation (same pattern as
+        // `donate_stealth_integrated`). Only the project wallet may withdraw.
+        project.wallet.require_auth();
+
+        let stealth_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::StealthDonationContract)
+            .expect("Stealth donation contract not configured");
+
+        let stealth_client =
+            crate::donation::contract::DonationContractClient::new(&env, &stealth_contract);
+        let remaining = stealth_client.withdraw_stealth_donations(&project.wallet, &token, &amount);
+
+        env.events().publish(
+            (symbol_short!("stlth_wdr"), project_id),
+            (token, amount, remaining),
+        );
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+
+        remaining
+    }
+
     // ─── On-chain Impact Certificates (#382) ────────────────────────────────
     #[cfg(feature = "impact")]
     /// Admin-only: post a Merkle root for a project's impact report.
@@ -15473,6 +15526,164 @@ mod tests {
         client.donate_stealth_integrated(&donor, &token, &ephem_pubkey, &pid, &amount, &msg_hash);
         let p = client.get_project(&pid);
         assert_eq!(p.total_raised, amount);
+    }
+
+    /// Covers the integrated stealth withdrawal path (#621): the project
+    /// wallet receives exactly the donated amount, the DonationContract
+    /// drains to zero, and the main contract emits `stlth_wdr` so indexers
+    /// can reconcile on-chain `total_raised` with funds actually received.
+    #[test]
+    fn test_stealth_integrated_withdrawal_flow() {
+        let (env, cid, client, admin, pid) = setup();
+
+        let stealth_cid = env.register_contract(None, crate::donation::contract::DonationContract);
+        client.set_stealth_donation_contract(&admin, &stealth_cid);
+
+        let donor = Address::generate(&env);
+        let amount: i128 = 50 * STROOP;
+        let token = create_token_helper(&env, &donor, amount);
+        let ephem = BytesN::from_array(&env, &[7u8; 33]);
+        let msg_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+        client.donate_stealth_integrated(&donor, &token, &ephem, &pid, &amount, &msg_hash);
+
+        let project_wallet = client.get_project(&pid).wallet;
+        let wallet_before = StellarAssetClient::new(&env, &token).balance(&project_wallet);
+        // Tokens are held by the DonationContract until withdrawn
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&stealth_cid),
+            amount
+        );
+
+        // The project wallet withdraws through the main-contract forward wrapper
+        let remaining = client.withdraw_stealth_integrated(&pid, &token, &amount);
+        assert_eq!(remaining, 0);
+
+        // Main contract emits stlth_wdr (project_id, token, amount, remaining).
+        // Capture right after the withdrawal: `Events::all()` only exposes the
+        // last contract invocation's events.
+        use soroban_sdk::testutils::Events as _;
+        let events = env.events().all().filter_by_contract(&cid);
+        let event = events.events().last().unwrap();
+        let soroban_sdk::xdr::ContractEventBody::V0(body) = &event.body;
+        assert_eq!(body.topics.len(), 2);
+        let soroban_sdk::xdr::ScVal::Symbol(event_name) = &body.topics[0] else {
+            panic!("expected event name symbol");
+        };
+        assert_eq!(event_name.0.as_vec().as_slice(), b"stlth_wdr");
+        assert_eq!(body.topics[1], soroban_sdk::xdr::ScVal::from(&pid));
+        let soroban_sdk::xdr::ScVal::Vec(Some(data)) = &body.data else {
+            panic!("expected event data vector");
+        };
+        assert_eq!(
+            data.0.as_vec().as_slice(),
+            &[
+                soroban_sdk::xdr::ScVal::from(&token),
+                soroban_sdk::xdr::ScVal::from(amount),
+                soroban_sdk::xdr::ScVal::from(0i128),
+            ]
+        );
+
+        let wallet_after = StellarAssetClient::new(&env, &token).balance(&project_wallet);
+        assert_eq!(wallet_after - wallet_before, amount);
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&stealth_cid),
+            0
+        );
+    }
+
+    /// Partial integrated withdrawal: the remainder stays withdrawable until
+    /// the project wallet drains it, so nothing is ever stranded (#621).
+    #[test]
+    fn test_stealth_integrated_withdrawal_partial() {
+        let (env, _cid, client, admin, pid) = setup();
+
+        let stealth_cid = env.register_contract(None, crate::donation::contract::DonationContract);
+        client.set_stealth_donation_contract(&admin, &stealth_cid);
+
+        let donor = Address::generate(&env);
+        let amount: i128 = 50 * STROOP;
+        let token = create_token_helper(&env, &donor, amount);
+        let ephem = BytesN::from_array(&env, &[7u8; 33]);
+        let msg_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+        client.donate_stealth_integrated(&donor, &token, &ephem, &pid, &amount, &msg_hash);
+        let project_wallet = client.get_project(&pid).wallet;
+
+        let remaining = client.withdraw_stealth_integrated(&pid, &token, &(20 * STROOP));
+        assert_eq!(remaining, 30 * STROOP);
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&project_wallet),
+            20 * STROOP
+        );
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&stealth_cid),
+            30 * STROOP
+        );
+
+        // Drain the remainder
+        let remaining = client.withdraw_stealth_integrated(&pid, &token, &(30 * STROOP));
+        assert_eq!(remaining, 0);
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&project_wallet),
+            50 * STROOP
+        );
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&stealth_cid),
+            0
+        );
+    }
+
+    /// Withdrawing more than the stealth balance is rejected and leaves both
+    /// the balance and the project wallet untouched (#621).
+    #[test]
+    fn test_stealth_integrated_withdrawal_rejects_over_balance() {
+        let (env, _cid, client, admin, pid) = setup();
+
+        let stealth_cid = env.register_contract(None, crate::donation::contract::DonationContract);
+        client.set_stealth_donation_contract(&admin, &stealth_cid);
+
+        let donor = Address::generate(&env);
+        let amount: i128 = 50 * STROOP;
+        let token = create_token_helper(&env, &donor, amount);
+        let ephem = BytesN::from_array(&env, &[7u8; 33]);
+        let msg_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+        client.donate_stealth_integrated(&donor, &token, &ephem, &pid, &amount, &msg_hash);
+        let project_wallet = client.get_project(&pid).wallet;
+
+        let result = client.try_withdraw_stealth_integrated(&pid, &token, &(amount + 1));
+        assert!(result.is_err(), "over-balance withdrawal must be rejected");
+
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&project_wallet),
+            0
+        );
+        assert_eq!(
+            StellarAssetClient::new(&env, &token).balance(&stealth_cid),
+            amount
+        );
+    }
+
+    /// Withdrawing through the wrapper for an unknown project is rejected.
+    #[test]
+    fn test_stealth_integrated_withdrawal_unknown_project_rejected() {
+        let (env, _cid, client, admin, _pid) = setup();
+
+        let stealth_cid = env.register_contract(None, crate::donation::contract::DonationContract);
+        client.set_stealth_donation_contract(&admin, &stealth_cid);
+
+        let unknown_pid = String::from_str(&env, "proj-unknown");
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let result = client.try_withdraw_stealth_integrated(&unknown_pid, &token, &1i128);
+        assert!(
+            result.is_err(),
+            "unknown project withdrawal must be rejected"
+        );
     }
 
     /// Covers process_donation_token paused project branch (line 1362).
