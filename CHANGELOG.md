@@ -118,6 +118,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **docs:** `docs/openapi.yml` — stale duplicate of `docs/api/openapi.yaml`
 
+### Security
+
+* **contracts/escrow-contract:** harden milestone payout arithmetic against integer overflow (closes #616)
+  - `release_milestone`, `claim_milestone`, `resolve_milestone_dispute`, and `compute_remaining_funds` now compute `amount * percentage / 100` with `checked_mul` / `checked_div` via a shared `compute_proportional_payout` helper instead of raw `*` / `/`
+  - `job.amount` is fully client-controlled at `create_job` (any positive `i128`); because the contracts workspace release profile previously shipped with `overflow-checks = false`, a near-`i128::MAX` amount silently wrapped to an incorrect (small) payout while the full amount stayed locked
+  - Overflow now surfaces the reserved structured `EscrowError` codes (`ReleaseAmountCalculationFailed`, `ClaimAmountCalculationFailed`, `RefundAmountCalculationFailed`) via `panic_with_error!` instead of silently wrapping; full-payout `100`-percent milestones are short-circuited to `amount` so the tautological `amount * 100` intermediate cannot falsely overflow
+  - Enabled `overflow-checks = true` in the contracts workspace release profile as defense-in-depth
+  - Added regression tests asserting the exact contract error code for the release, claim, milestone-dispute, remaining-funds, and refund paths, plus guards confirming normal and full-payout amounts are unaffected
+
 ## [1.0.0] - 2026-07-12
 
 ### Added
