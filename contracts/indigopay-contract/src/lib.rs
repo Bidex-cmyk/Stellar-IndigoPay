@@ -133,6 +133,34 @@ pub struct ProjectMilestoneNFT {
     pub minted_at_ledger: u32,
 }
 
+/// A time-locked vesting schedule for a donation. `donate_vested` splits
+/// `total_amount` into `installment_count` equal installments; the first is
+/// released to the project wallet immediately and the rest become claimable
+/// by anyone via `claim_vested_installment` once `interval_ledgers` elapse
+/// between claims. The contract holds the unvested remainder in custody.
+///
+/// Accounting convention (see `donate_vested`): only *released* installments
+/// are applied to the donation accounting counters, matching the existing
+/// semantics where `total_raised` reflects funds actually delivered to the
+/// project wallet. `installments_released` is incremented exactly once per
+/// release, which is what guarantees the vested amount can never be
+/// double-counted across `donate_vested` and `claim_vested_installment`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VestingSchedule {
+    pub donor: Address,
+    pub project_id: String,
+    pub total_amount: i128,
+    pub amount_per_installment: i128,
+    pub installment_count: u32,
+    pub interval_ledgers: u32,
+    pub next_installment_ledger: u32,
+    pub installments_released: u32,
+    pub created_at: u32,
+    pub token: Address,
+    pub completed_at: u32,
+}
+
 /// A community voting proposal to verify a project.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -225,6 +253,11 @@ pub enum DataKey {
     // Ledger sequence at which the pending upgrade becomes executable.
     // Set together with `PendingUpgrade` and cleared on execute/cancel.
     UpgradeEffectiveAt,
+    // Time-locked vesting donation schedules. `VestingSchedule(donor, id)`
+    // holds one schedule; `DonorVestingCount(donor)` allocates unique,
+    // monotonically increasing schedule ids per donor.
+    VestingSchedule(Address, u32),
+    DonorVestingCount(Address),
     // Hash of the last EXECUTED contract upgrade. Set by
     // `execute_upgrade` after `env.deployer().update_current_contract_wasm`
     // returns. Used by indexers to confirm which WASM is currently
@@ -303,6 +336,158 @@ fn calculate_badge(total_stroops: i128) -> BadgeTier {
     } else {
         BadgeTier::None
     }
+}
+
+/// Apply the standard donation accounting for one *released* vested
+/// installment. This is the exact same set of state writes performed by the
+/// native `donate` path (project.total_raised, unique donor_count,
+/// DonorStats, badge/NFT, DonorProjectTotal, DonationCount, DonationRecord,
+/// GlobalTotalRaised, GlobalCO2OffsetGrams) so that each released installment
+/// of a vesting schedule is indistinguishable from a plain donation of the
+/// same size.
+///
+/// `released_amount` is the XLM stroop amount that actually reached the
+/// project wallet; `msg_hash` is 0 for keeper-claimed installments because
+/// those releases are permissionless and carry no donor-signed message.
+///
+/// The caller guarantees each release is accounted for exactly once (see
+/// `VestingSchedule.installments_released`), which prevents the vested amount
+/// from being double-counted across `donate_vested` and
+/// `claim_vested_installment`.
+fn apply_vested_donation_effects(
+    env: &Env,
+    donor: &Address,
+    project_id: &String,
+    released_amount: i128,
+    msg_hash: u32,
+) {
+    let mut project: Project = env
+        .storage()
+        .instance()
+        .get(&DataKey::Project(project_id.clone()))
+        .expect("Project not found");
+
+    let xlm_units = released_amount / STROOP;
+    let co2_increment = xlm_units
+        .checked_mul(project.co2_per_xlm as i128)
+        .expect("CO2 calculation overflow");
+
+    let mut donor_stats: DonorStats = env
+        .storage()
+        .instance()
+        .get(&DataKey::DonorStats(donor.clone()))
+        .unwrap_or(DonorStats {
+            total_donated: 0,
+            donation_count: 0,
+            badge: BadgeTier::None,
+            co2_offset_grams: 0,
+        });
+    let prev_badge = donor_stats.badge.clone();
+
+    project.total_raised = project
+        .total_raised
+        .checked_add(released_amount)
+        .expect("Project total_raised overflow");
+    let donated_key = DataKey::HasDonated(project_id.clone(), donor.clone());
+    if !env.storage().instance().has(&donated_key) {
+        env.storage().instance().set(&donated_key, &true);
+        project.donor_count = project
+            .donor_count
+            .checked_add(1)
+            .expect("Project donor_count overflow");
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::Project(project_id.clone()), &project);
+
+    donor_stats.total_donated = donor_stats
+        .total_donated
+        .checked_add(released_amount)
+        .expect("Donor total_donated overflow");
+    donor_stats.donation_count = donor_stats
+        .donation_count
+        .checked_add(1)
+        .expect("Donor donation_count overflow");
+    donor_stats.co2_offset_grams = donor_stats
+        .co2_offset_grams
+        .checked_add(co2_increment)
+        .expect("Donor co2_offset overflow");
+    donor_stats.badge = calculate_badge(donor_stats.total_donated);
+    env.storage()
+        .instance()
+        .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
+
+    // Track per-project cumulative donations for milestone NFT eligibility.
+    let proj_total_key = DataKey::DonorProjectTotal(project_id.clone(), donor.clone());
+    let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
+    env.storage().instance().set(
+        &proj_total_key,
+        &prev_proj_total
+            .checked_add(released_amount)
+            .expect("DonorProjectTotal overflow"),
+    );
+
+    // Auto-mint an Impact NFT when a donor reaches a new badge tier.
+    if donor_stats.badge != BadgeTier::None && donor_stats.badge != prev_badge {
+        let nft_key = DataKey::ImpactNFT(donor.clone(), donor_stats.badge.clone());
+        if !env.storage().instance().has(&nft_key) {
+            let nft = ImpactNFT {
+                owner: donor.clone(),
+                tier: donor_stats.badge.clone(),
+                total_donated: donor_stats.total_donated,
+                minted_at_ledger: env.ledger().sequence(),
+            };
+            env.storage().instance().set(&nft_key, &nft);
+            env.events().publish(
+                (symbol_short!("nft_mint"), donor.clone()),
+                donor_stats.badge.clone(),
+            );
+        }
+    }
+
+    let dc: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::DonationCount)
+        .unwrap_or(0);
+    let new_dc = dc.checked_add(1).expect("DonationCount overflow");
+    env.storage()
+        .instance()
+        .set(&DataKey::DonationCount, &new_dc);
+    // Store donation record for trustless enumeration.
+    let donation_record = DonationRecord {
+        donor: donor.clone(),
+        project: project_id.clone(),
+        amount: released_amount,
+        ledger: env.ledger().sequence(),
+        message_hash: msg_hash,
+        currency: symbol_short!("XLM"),
+    };
+    env.storage()
+        .instance()
+        .set(&DataKey::DonationRecord(dc), &donation_record);
+
+    let gr: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::GlobalTotalRaised)
+        .unwrap_or(0);
+    let new_gr = gr
+        .checked_add(released_amount)
+        .expect("GlobalTotalRaised overflow");
+    env.storage()
+        .instance()
+        .set(&DataKey::GlobalTotalRaised, &new_gr);
+
+    let gc: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::GlobalCO2OffsetGrams)
+        .unwrap_or(0);
+    let new_gc = gc.checked_add(co2_increment).expect("GlobalCO2 overflow");
+    env.storage()
+        .instance()
+        .set(&DataKey::GlobalCO2OffsetGrams, &new_gc);
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -1521,6 +1706,226 @@ impl IndigoPayContract {
             (symbol_short!("donated"), donor.clone(), project_id),
             (usdc_amount, symbol_short!("USDC"), msg_hash),
         );
+    }
+
+    // ─── Time-locked vesting donations ───────────────────────────────────────
+
+    /// Create a time-locked vesting schedule for a donation.
+    ///
+    /// `total_amount` is split into `installment_count` equal installments of
+    /// `amount_per_installment`. The full amount is transferred from the
+    /// donor into this contract's custody, then the first installment is
+    /// released to the project wallet immediately. The remaining installments
+    /// become claimable by anyone via `claim_vested_installment` after each
+    /// `installment_interval_ledgers` elapses.
+    ///
+    /// Returns the newly created `schedule_id` for the donor.
+    ///
+    /// # Accounting convention
+    ///
+    /// Vested donations use **released-funds accounting**, consistent with the
+    /// rest of the contract: `total_raised`, global totals, CO₂, donor stats,
+    /// `DonationCount` and `DonationRecord` only ever reflect installments that
+    /// have actually been released to the project wallet. `donate_vested`
+    /// therefore accounts for the first (immediate) installment only, and each
+    /// subsequent `claim_vested_installment` accounts for the installment it
+    /// releases. Because `VestingSchedule.installments_released` advances once
+    /// per release and claims are time-gated and counted, the committed amount
+    /// is counted exactly once and can never be double-counted across the two
+    /// entry points. Funding committed but not yet released sits in contract
+    /// custody and is intentionally excluded from the accounting counters.
+    ///
+    /// # Panics
+    /// - If `total_amount <= 0`, `installment_count == 0`, or
+    ///   `installment_interval_ledgers == 0`.
+    /// - If the amount per installment would round down to zero.
+    /// - If the project is not found, inactive, or paused.
+    /// - If the token transfers fail.
+    #[allow(clippy::too_many_arguments)]
+    pub fn donate_vested(
+        env: Env,
+        token: Address,
+        donor: Address,
+        project_id: String,
+        total_amount: i128,
+        installment_count: u32,
+        installment_interval_ledgers: u32,
+        msg_hash: u32,
+    ) -> u32 {
+        donor.require_auth();
+        require_not_paused(&env);
+        if total_amount <= 0 {
+            panic!("Donation amount must be positive");
+        }
+        if installment_count == 0 {
+            panic!("Installment count must be positive");
+        }
+        if installment_interval_ledgers == 0 {
+            panic!("Installment interval must be positive");
+        }
+        let project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(project_id.clone()))
+            .expect("Project not found");
+        if !project.active {
+            panic!("Project is not accepting donations");
+        }
+        if project.paused {
+            panic!("Project is temporarily paused");
+        }
+
+        let amount_per_installment = total_amount
+            .checked_div(installment_count as i128)
+            .expect("Installment count must be positive (division by zero)");
+        if amount_per_installment == 0 {
+            panic!("Donation amount too small for installment count");
+        }
+        // Next installment is claimable one interval after the schedule is created.
+        let next_installment_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(installment_interval_ledgers)
+            .expect("overflow");
+
+        let count_key = DataKey::DonorVestingCount(donor.clone());
+        let count: u32 = env.storage().instance().get(&count_key).unwrap_or(0);
+        let schedule_id = count;
+        let next_count = count.checked_add(1).expect("overflow");
+        env.storage().instance().set(&count_key, &next_count);
+        let schedule = VestingSchedule {
+            donor: donor.clone(),
+            project_id: project_id.clone(),
+            total_amount,
+            amount_per_installment,
+            installment_count,
+            interval_ledgers: installment_interval_ledgers,
+            next_installment_ledger,
+            installments_released: 1, // the first installment is immediate
+            created_at: env.ledger().sequence(),
+            token: token.clone(),
+            completed_at: 0,
+        };
+        let schedule_key = DataKey::VestingSchedule(donor.clone(), schedule_id);
+        env.storage().instance().set(&schedule_key, &schedule);
+
+        // ── Effects: account for the first released installment before any
+        //    external token transfer (Checks-Effects-Interactions).
+        apply_vested_donation_effects(&env, &donor, &project_id, amount_per_installment, msg_hash);
+
+        // ── Interaction: transfer the full amount from the donor into
+        //    contract custody, then release the first installment from the
+        //    contract to the project wallet.
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&donor, &contract_addr, &total_amount);
+        token_client.transfer(&contract_addr, &project.wallet, &amount_per_installment);
+        env.events().publish(
+            (symbol_short!("vest_crt"), donor, project_id),
+            (
+                schedule_id,
+                total_amount,
+                amount_per_installment,
+                installment_count,
+                installment_interval_ledgers,
+                msg_hash,
+            ),
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(VOTING_WINDOW_LEDGERS * 4, VOTING_WINDOW_LEDGERS * 4);
+        schedule_id
+    }
+
+    /// Claim the next vested installment for a vesting schedule.
+    ///
+    /// Permissionless — anyone may call this after `interval_ledgers` have
+    /// elapsed since the last release. The contract holds the vesting funds in
+    /// custody and transfers the released installment to the project wallet,
+    /// applying the same released-funds donation accounting as `donate_vested`
+    /// for that installment (so cumulative accounting after all installments
+    /// equals the committed amount exactly once).
+    ///
+    /// # Panics
+    /// - If the schedule is not found.
+    /// - If all installments have already been released.
+    /// - If the interval has not yet elapsed.
+    pub fn claim_vested_installment(env: Env, donor: Address, schedule_id: u32) {
+        require_not_paused(&env);
+        let schedule_key = DataKey::VestingSchedule(donor.clone(), schedule_id);
+        let mut schedule: VestingSchedule = env
+            .storage()
+            .instance()
+            .get(&schedule_key)
+            .expect("Vesting schedule not found");
+        if schedule.installments_released >= schedule.installment_count {
+            panic!("All installments already released");
+        }
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < schedule.next_installment_ledger {
+            panic!("Next installment not yet claimable");
+        }
+
+        // ── Effects: advance the schedule BEFORE the external token transfer
+        //    so a replayed claim can never release (or account for) the same
+        //    installment twice.
+        schedule.installments_released = schedule
+            .installments_released
+            .checked_add(1)
+            .expect("overflow");
+        schedule.next_installment_ledger = current_ledger
+            .checked_add(schedule.interval_ledgers)
+            .expect("overflow");
+        if schedule.installments_released >= schedule.installment_count {
+            schedule.completed_at = current_ledger;
+        }
+        env.storage().instance().set(&schedule_key, &schedule);
+
+        // ── Effects: account for this released installment exactly once.
+        //    `msg_hash` is 0 because permissionless claims carry no
+        //    donor-signed message.
+        apply_vested_donation_effects(
+            &env,
+            &schedule.donor,
+            &schedule.project_id,
+            schedule.amount_per_installment,
+            0,
+        );
+
+        // Load the project to get the wallet for the release transfer.
+        let project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(schedule.project_id.clone()))
+            .expect("Project not found");
+
+        // ── Interaction: transfer installment from contract custody to the
+        //    project wallet.
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &schedule.token);
+        token_client.transfer(
+            &contract_addr,
+            &project.wallet,
+            &schedule.amount_per_installment,
+        );
+        let remaining = schedule
+            .installment_count
+            .saturating_sub(schedule.installments_released);
+        env.events().publish(
+            (symbol_short!("vest_clm"), schedule.project_id),
+            (schedule_id, schedule.amount_per_installment, remaining),
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(VOTING_WINDOW_LEDGERS * 4, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Query a vesting schedule for a donor by schedule id.
+    pub fn get_vesting_schedule(env: Env, donor: Address, schedule_id: u32) -> VestingSchedule {
+        env.storage()
+            .instance()
+            .get(&DataKey::VestingSchedule(donor, schedule_id))
+            .expect("Vesting schedule not found")
     }
 
     /// Admin-only: Set the USDC token address for multi-currency donations.
@@ -2761,6 +3166,251 @@ mod tests {
         let p = client.get_project(&pid);
         assert_eq!(p.donor_count, 2);
         assert_eq!(p.total_raised, 20 * STROOP);
+    }
+
+    // ─── Vested donation accounting tests ────────────────────────────────────
+
+    /// Creating a vested schedule must run the normal donation accounting for
+    /// the first (immediate) released installment: project.total_raised,
+    /// GlobalTotalRaised, GlobalCO2OffsetGrams, donor stats, DonationCount and
+    /// DonationRecord. The committed-but-unreleased remainder is intentionally
+    /// excluded (released-funds accounting).
+    #[test]
+    fn test_vested_creation_accounts_first_installment() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+
+        let total = 100_000_000i128; // 10 XLM
+        let installment = 10_000_000i128; // 1 XLM per installment
+        token_client.mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &10u32, &100u32, &7u32);
+        assert_eq!(schedule_id, 0);
+
+        let schedule = client.get_vesting_schedule(&donor, &schedule_id);
+        assert_eq!(schedule.installments_released, 1);
+        assert_eq!(schedule.amount_per_installment, installment);
+
+        // project accounting
+        let project = client.get_project(&pid);
+        assert_eq!(project.total_raised, installment);
+        assert_eq!(project.donor_count, 1);
+        // global accounting
+        assert_eq!(client.get_global_total(), installment);
+        // co2_per_xlm is 100 for the setup project → 1 XLM → 100 grams
+        assert_eq!(client.get_global_co2(), 100);
+        // donor statistics
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, installment);
+        assert_eq!(stats.donation_count, 1);
+        assert_eq!(stats.co2_offset_grams, 100);
+        assert_eq!(stats.badge, BadgeTier::None); // 1 XLM < 10 XLM threshold
+
+        // donation count + DonationRecord
+        assert_eq!(client.get_donation_count(), 1);
+        let record = client.get_donation_record(&0u32);
+        assert_eq!(record.donor, donor);
+        assert_eq!(record.project, pid);
+        assert_eq!(record.amount, installment);
+        assert_eq!(record.currency, symbol_short!("XLM"));
+    }
+
+    /// Claiming every installment must account for each release exactly once:
+    /// after all releases the total committed amount is reflected without any
+    /// double-counting, and every DonationRecord holds exactly one installment.
+    #[test]
+    fn test_vested_multi_installment_no_double_count() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+
+        let total = 100_000_000i128; // 10 XLM
+        let count = 10u32;
+        let interval = 100u32;
+        let installment = total / count as i128; // 1 XLM
+        token_client.mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &count, &interval, &0u32);
+        assert_eq!(client.get_donation_count(), 1);
+
+        let base = env.ledger().sequence();
+        for k in 1..count {
+            env.ledger().set_sequence_number(base + interval * k);
+            client.claim_vested_installment(&donor, &schedule_id);
+        }
+        let schedule = client.get_vesting_schedule(&donor, &schedule_id);
+        assert_eq!(schedule.installments_released, count);
+        assert_ne!(schedule.completed_at, 0);
+
+        // Exactly `count` installments were accounted, none twice.
+        assert_eq!(client.get_donation_count(), count);
+        let project = client.get_project(&pid);
+        assert_eq!(project.total_raised, total);
+        assert_eq!(project.donor_count, 1);
+        assert_eq!(client.get_global_total(), total);
+        // 10 XLM × 100 grams/XLM
+        assert_eq!(client.get_global_co2(), 10 * 100);
+
+        let stats = client.get_donor_stats(&donor);
+        assert_eq!(stats.total_donated, total);
+        assert_eq!(stats.donation_count, count);
+        assert_eq!(stats.co2_offset_grams, 10 * 100);
+        assert_eq!(stats.badge, BadgeTier::Seedling);
+
+        // Every record holds exactly one installment → sum equals the total.
+        let mut sum = 0i128;
+        for i in 0..count {
+            let r = client.get_donation_record(&i);
+            assert_eq!(r.amount, installment);
+            assert_eq!(r.donor, donor);
+            assert_eq!(r.project, pid);
+            sum += r.amount;
+        }
+        assert_eq!(sum, total);
+
+        // A further claim beyond the last release must panic.
+        env.ledger().set_sequence_number(base + interval * count);
+        let unreleased = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.claim_vested_installment(&donor, &schedule_id);
+        }));
+        assert!(unreleased.is_err());
+    }
+
+    /// Later installment claims apply the released amount to the accounting
+    /// incrementally, and a replay within the same window is rejected (so it
+    /// can never double-count).
+    #[test]
+    fn test_vested_later_claims_accounted_incrementally() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+
+        let total = 100_000_000i128; // 10 XLM
+        let count = 4u32;
+        let interval = 50u32;
+        let installment = total / count as i128; // 2.5 XLM
+        token_client.mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &count, &interval, &0u32);
+        let base = env.ledger().sequence();
+
+        // Early claim before the interval elapses is rejected.
+        let too_early = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.claim_vested_installment(&donor, &schedule_id);
+        }));
+        assert!(too_early.is_err());
+        assert_eq!(client.get_donation_count(), 1);
+
+        // First claim releases and accounts the 2nd installment.
+        env.ledger().set_sequence_number(base + interval);
+        client.claim_vested_installment(&donor, &schedule_id);
+        assert_eq!(client.get_donation_count(), 2);
+        assert_eq!(client.get_project(&pid).total_raised, 2 * installment);
+        assert_eq!(client.get_global_total(), 2 * installment);
+        assert_eq!(
+            client.get_donor_stats(&donor).total_donated,
+            2 * installment
+        );
+        let record = client.get_donation_record(&1u32);
+        assert_eq!(record.amount, installment);
+
+        // Replaying the same claim within the window is rejected.
+        let replay = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.claim_vested_installment(&donor, &schedule_id);
+        }));
+        assert!(replay.is_err());
+        assert_eq!(client.get_donation_count(), 2);
+        assert_eq!(client.get_donation_record(&1u32).amount, installment);
+    }
+
+    /// Vested donations coexist with the regular `donate` path without
+    /// disturbing its accounting (requirement: existing donation behavior is
+    /// unchanged).
+    #[test]
+    fn test_vested_and_regular_donations_coexist() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let token_client = StellarAssetClient::new(&env, &token);
+
+        // A regular donation first.
+        let donor_a = Address::generate(&env);
+        token_client.mint(&donor_a, &(15 * STROOP));
+        client.donate(&token, &donor_a, &pid, &(10 * STROOP), &1u32);
+        assert_eq!(client.get_donation_count(), 1);
+        assert_eq!(client.get_global_total(), 10 * STROOP);
+
+        // A second donor creates a vested schedule on top of that state.
+        let donor_b = Address::generate(&env);
+        token_client.mint(&donor_b, &(50 * STROOP));
+        client.donate_vested(
+            &token,
+            &donor_b,
+            &pid,
+            &(50 * STROOP),
+            &5u32,
+            &100u32,
+            &2u32,
+        );
+        assert_eq!(client.get_donation_count(), 2);
+        // 10 XLM regular + 10 XLM first vested installment
+        assert_eq!(client.get_global_total(), 20 * STROOP);
+
+        let project = client.get_project(&pid);
+        assert_eq!(project.total_raised, 20 * STROOP);
+        assert_eq!(project.donor_count, 2);
+
+        // The regular donation's record is preserved at index 0, the vested
+        // first-installment record at index 1.
+        let record0 = client.get_donation_record(&0u32);
+        assert_eq!(record0.amount, 10 * STROOP);
+        assert_eq!(record0.donor, donor_a);
+        let record1 = client.get_donation_record(&1u32);
+        assert_eq!(record1.amount, 10 * STROOP);
+        assert_eq!(record1.donor, donor_b);
+        assert_eq!(client.get_donor_stats(&donor_a).total_donated, 10 * STROOP);
+    }
+
+    #[test]
+    #[should_panic(expected = "Donation amount too small for installment count")]
+    fn test_vested_installment_rounds_to_zero_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        // 10 stroops divided across 11 installments rounds to 0 per
+        // installment, which must be rejected.
+        StellarAssetClient::new(&env, &token).mint(&donor, &10i128);
+        client.donate_vested(&token, &donor, &pid, &10i128, &11u32, &100u32, &0u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Installment count must be positive")]
+    fn test_vested_zero_installment_count_panics() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        client.donate_vested(&token, &donor, &pid, &(10 * STROOP), &0u32, &100u32, &0u32);
     }
 
     /// `get_voter_list` returns voters in the order they voted.

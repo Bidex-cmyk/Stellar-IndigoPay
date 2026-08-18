@@ -2,6 +2,13 @@
 
 ### Features
 
+* **contracts:** apply donation accounting to time-locked vested donations
+  - `indigopay-contract` now exposes `donate_vested` (split a donation into equal installments released over time) and `claim_vested_installment` (release/claim subsequent installments); the full amount is held in contract custody and released to the project wallet on schedule
+  - Accounting convention: **released-funds accounting** — each released installment is applied once to `project.total_raised`, `GlobalTotalRaised`, `GlobalCO2OffsetGrams`, donor stats, `DonationCount`, and `DonationRecord`, consistent with the existing semantics where totals reflect funds actually delivered to the project wallet; committed-but-unreleased funds are intentionally excluded
+  - `VestingSchedule.installments_released` advances exactly once per release and claims are time-gated, so the vested amount can never be double-counted across `donate_vested` and `claim_vested_installment`
+  - New storage keys: `DataKey::VestingSchedule(donor, id)` and `DataKey::DonorVestingCount(donor)`; existing keys and layouts are unchanged
+  - 6 new tests: first-installment accounting, multi-installment no-double-count, incremental claim accounting / replay rejection, coexistence with the regular `donate` path, and guard panics
+
 * **backend,frontend:** add Idempotency-Key support for donation recording (closes #148)
   - Accept `Idempotency-Key` header (UUID v4) on `POST /api/donations`; store response and replay within 24 hours
   - New `idempotency_keys` table via migration 016 with index on `created_at`
