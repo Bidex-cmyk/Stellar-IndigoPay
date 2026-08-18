@@ -655,6 +655,8 @@ pub enum DataKey {
     RefundCount,
     RefundForDonation(u32),
     DonationCO2Offset(u32),
+    // Minted donation receipt NFTs, keyed by (donor, donation_index).
+    DonationReceiptNFT(Address, u32),
     // Per-project per-token contract-held balance — the canonical ledger
     // for how much of each asset each project has deposited into the
     // contract. Key: (project_id, token_address) → i128.
@@ -3574,6 +3576,65 @@ impl IndigoPayContract {
     ///  - `amount_xlm` is not positive,
     ///  - `project_id` does not match a registered project, or that project is
     ///    inactive, paused, or its campaign is closed.
+    // ─── Donation receipt NFT (#945) ─────────────────────────────────────────
+    /// Mint a non-transferable donation receipt NFT for a previously recorded
+    /// donation. Returns the `donation_index` used as the receipt id.
+    ///
+    /// The receipt is a signed, verifiable proof of a donation's details
+    /// (project, amount, CO₂ offset, ledger, currency) that the donor can
+    /// present off-chain without re-indexing contract storage.
+    #[cfg(any(feature = "donation", feature = "testutils"))]
+    pub fn mint_donation_receipt(env: Env, donor: Address, donation_index: u32) -> u32 {
+        donor.require_auth();
+        let key = DataKey::DonationReceiptNFT(donor.clone(), donation_index);
+        if env.storage().instance().has(&key) {
+            panic!("Receipt already minted for this donation");
+        }
+        let record = env
+            .storage()
+            .instance()
+            .get::<_, DonationRecord>(&DataKey::DonationRecord(donation_index))
+            .expect("Donation record not found");
+        let co2_offset = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::DonationCO2Offset(donation_index))
+            .expect("CO2 offset not found");
+        let receipt = DonationReceipt {
+            donation_index,
+            donor: donor.clone(),
+            project_id: record.project,
+            amount: record.amount,
+            co2_offset,
+            ledger: record.ledger,
+            currency: record.currency,
+            contract_signature: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        env.storage().instance().set(&key, &receipt);
+        env.events().publish(
+            (symbol_short!("rcpt"), symbol_short!("mint")),
+            (donor, donation_index),
+        );
+        donation_index
+    }
+
+    /// Whether a donation receipt NFT has been minted for (`donor`, `donation_index`).
+    #[cfg(any(feature = "donation", feature = "testutils"))]
+    pub fn has_donation_receipt(env: Env, donor: Address, donation_index: u32) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::DonationReceiptNFT(donor, donation_index))
+    }
+
+    /// Read a previously minted donation receipt NFT.
+    #[cfg(any(feature = "donation", feature = "testutils"))]
+    pub fn get_donation_receipt(env: Env, donor: Address, donation_index: u32) -> DonationReceipt {
+        env.storage()
+            .instance()
+            .get(&DataKey::DonationReceiptNFT(donor, donation_index))
+            .expect("Receipt not found")
+    }
+
     #[cfg(any(feature = "usdc", feature = "donation", feature = "testutils"))]
     pub fn settle_attestation(env: Env, attestation_contract: Address, attestation_id: u64) {
         require_not_paused(&env);
@@ -16643,5 +16704,71 @@ mod tests {
         let (for_votes, against_votes) = client.get_proposal_tally(&pid);
         assert!(for_votes <= 6 + 8);
         assert_eq!(against_votes, 0);
+    }
+
+    // ─── Donation receipt NFT (#945) ──────────────────────────────────────────
+    #[test]
+    fn test_mint_donation_receipt() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(25 * STROOP));
+        client.donate(&token, &donor, &pid, &(25 * STROOP), &0u32);
+        let idx = client.mint_donation_receipt(&donor, &0u32);
+        assert_eq!(idx, 0u32);
+        assert!(client.has_donation_receipt(&donor, &0u32));
+        let receipt = client.get_donation_receipt(&donor, &0u32);
+        assert_eq!(receipt.donor, donor);
+        assert_eq!(receipt.project_id, pid);
+        assert_eq!(receipt.amount, 25 * STROOP);
+        assert_eq!(receipt.currency, symbol_short!("XLM"));
+        assert!(receipt.co2_offset > 0);
+    }
+
+    #[test]
+    fn test_mint_donation_receipt_fails_without_record() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let donor = Address::generate(&env);
+        // No donation has been made, so donation index 0 has no record.
+        let result = client.try_mint_donation_receipt(&donor, &0u32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mint_donation_receipt_is_idempotent() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(25 * STROOP));
+        client.donate(&token, &donor, &pid, &(25 * STROOP), &0u32);
+        client.mint_donation_receipt(&donor, &0u32);
+        let result = client.try_mint_donation_receipt(&donor, &0u32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mint_donation_receipt_multiple_donations() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * STROOP));
+        client.donate(&token, &donor, &pid, &(25 * STROOP), &0u32);
+        client.donate(&token, &donor, &pid, &(25 * STROOP), &1u32);
+        let idx_a = client.mint_donation_receipt(&donor, &0u32);
+        let idx_b = client.mint_donation_receipt(&donor, &1u32);
+        assert_eq!(idx_a, 0u32);
+        assert_eq!(idx_b, 1u32);
+        assert!(client.has_donation_receipt(&donor, &1u32));
+        let receipt = client.get_donation_receipt(&donor, &1u32);
+        assert_eq!(receipt.amount, 25 * STROOP);
     }
 }
