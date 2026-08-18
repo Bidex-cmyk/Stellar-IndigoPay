@@ -127,6 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+* **contracts:** bound `challenge_donation` reason length (`MAX_CHALLENGE_REASON_LEN`) and reject self-challenges with structured errors, preventing unbounded challenge-event storage and the self-serving challenge/refund vector (closes #669)
 * **contracts/escrow-contract:** harden milestone payout arithmetic against integer overflow (closes #616)
   - `release_milestone`, `claim_milestone`, `resolve_milestone_dispute`, and `compute_remaining_funds` now compute `amount * percentage / 100` with `checked_mul` / `checked_div` via a shared `compute_proportional_payout` helper instead of raw `*` / `/`
   - `job.amount` is fully client-controlled at `create_job` (any positive `i128`); because the contracts workspace release profile previously shipped with `overflow-checks = false`, a near-`i128::MAX` amount silently wrapped to an incorrect (small) payout while the full amount stayed locked
