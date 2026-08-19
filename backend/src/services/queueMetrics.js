@@ -18,29 +18,29 @@ function isValidQueue(name) {
  * Combines jobs from pgboss.job and pgboss.archive tables.
  */
 async function getQueueMetrics() {
-    const statsQuery = `
-      SELECT 
-        name,
-        COUNT(*) FILTER (WHERE state = 'active') AS active,
-        COUNT(*) FILTER (WHERE state IN ('created', 'retry')) AS waiting,
-        COUNT(*) FILTER (WHERE state = 'failed') AS failed,
-        COUNT(*) FILTER (WHERE state = 'completed') AS completed,
-        AVG(EXTRACT(EPOCH FROM (completed_on - started_on))) FILTER (WHERE state = 'completed') AS avg_latency
-      FROM (
-        SELECT name, state, started_on, completed_on FROM pgboss.job
-        UNION ALL
-        SELECT name, state, started_on, completed_on FROM pgboss.archive
-      ) all_jobs
-      WHERE name = ANY($1)
-      GROUP BY name
-    `;
+  const statsQuery = `
+    SELECT 
+      name,
+      COUNT(*) FILTER (WHERE state = 'active') AS active,
+      COUNT(*) FILTER (WHERE state IN ('created', 'retry')) AS waiting,
+      COUNT(*) FILTER (WHERE state = 'failed') AS failed,
+      COUNT(*) FILTER (WHERE state = 'completed') AS completed,
+      AVG(EXTRACT(EPOCH FROM (completed_on - started_on))) FILTER (WHERE state = 'completed') AS avg_latency
+    FROM (
+      SELECT name, state, started_on, completed_on FROM pgboss.job
+      UNION ALL
+      SELECT name, state, started_on, completed_on FROM pgboss.archive
+    ) all_jobs
+    WHERE name = ANY($1)
+    GROUP BY name
+  `;
 
-    // We run queries in parallel. If pg-boss tables don't exist yet, we catch
-    // the database error and return default/empty counts so that the server doesn't crash.
-    try {
-      const [statsRes] = await Promise.all([
-        pool.query(statsQuery, [VALID_QUEUES])
-      ]);
+  // We run queries in parallel. If pg-boss tables don't exist yet, we catch
+  // the database error and return default/empty counts so that the server doesn't crash.
+  try {
+    const [statsRes] = await Promise.all([
+      pool.query(statsQuery, [VALID_QUEUES])
+    ]);
 
     const statsMap = {};
     for (const row of statsRes.rows) {
