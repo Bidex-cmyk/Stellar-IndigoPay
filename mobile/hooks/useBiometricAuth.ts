@@ -28,6 +28,11 @@ const DEFAULT_THRESHOLD_XLM = 50;
 
 const COMPROMISED_DEVICE_ERROR = 'Device integrity check failed';
 
+/**
+ * Biometric-auth hook: detects hardware/enrolment, manages the
+ * per-amount threshold + enabled preference, and gates donation
+ * confirmation on the device-integrity policy before prompting.
+ */
 export function useBiometricAuth() {
   const [isAvailable, setIsAvailable] = useState(false);
   const [biometricType, setBiometricType] = useState<string | null>(null);
@@ -44,6 +49,7 @@ export function useBiometricAuth() {
     refreshIntegrity();
   }, []);
 
+  /** Probe hardware support, enrolment, and the biometric type. */
   async function checkAvailability() {
     const compatible = await LocalAuthentication.hasHardwareAsync();
     const enrolled = await LocalAuthentication.isEnrolledAsync();
@@ -73,6 +79,7 @@ export function useBiometricAuth() {
     }
   }
 
+  /** Restore the stored threshold and enabled preference. */
   async function loadPreferences() {
     try {
       const stored = await AsyncStorage.getItem(BIOMETRIC_THRESHOLD_KEY);
@@ -84,6 +91,12 @@ export function useBiometricAuth() {
     }
   }
 
+  /**
+   * Confirm a donation, enforcing the device-integrity policy first:
+   * `block` refuses before any prompt, `warn` proceeds but records a
+   * warning. Skips the prompt entirely when disabled/unavailable or
+   * below the configured threshold.
+   */
   async function confirmDonation(amount: number): Promise<{ success: boolean; error?: string }> {
     setIsAuthenticating(true);
     try {
@@ -115,6 +128,7 @@ export function useBiometricAuth() {
     }
   }
 
+  /** Persist the amount threshold above which a prompt is required. */
   async function setBiometricThreshold(newThreshold: number) {
     setThreshold(newThreshold);
     try {
@@ -124,6 +138,7 @@ export function useBiometricAuth() {
     }
   }
 
+  /** Persist whether the biometric gate is enabled at all. */
   async function updateIsEnabled(value: boolean) {
     setIsEnabled(value);
     try {

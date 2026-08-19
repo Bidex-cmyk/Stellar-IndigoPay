@@ -215,7 +215,9 @@ describe("useBiometricAuth (enhanced hook)", () => {
       fireEvent.press(getByTestId("confirm-btn"));
     });
 
-    expect(LA.authenticateAsync).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(LA.authenticateAsync).toHaveBeenCalled();
+    });
   });
 
   it("standalone authenticate() refuses on a compromised device under block policy", async () => {

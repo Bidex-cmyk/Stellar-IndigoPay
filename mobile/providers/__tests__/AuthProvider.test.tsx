@@ -25,6 +25,7 @@ jest.mock("../../lib/secureStore");
 jest.mock("../../hooks/useBiometricAuth");
 jest.mock("../../lib/deviceIntegrity", () => ({
   checkDeviceIntegrity: jest.fn(),
+  enforceIntegrityPolicy: jest.fn(),
   getIntegrityPolicy: jest.fn(() => "block"),
 }));
 import * as secureStore from "../../lib/secureStore";
@@ -68,6 +69,7 @@ const appStateMock = AppState as unknown as {
 };
 const integrityMock = deviceIntegrity as unknown as {
   checkDeviceIntegrity: jest.Mock;
+  enforceIntegrityPolicy: jest.Mock;
   getIntegrityPolicy: jest.Mock;
 };
 
@@ -89,6 +91,13 @@ beforeEach(() => {
     isCompromised: false,
     reasons: [],
     supported: true,
+  });
+  integrityMock.enforceIntegrityPolicy.mockReset();
+  integrityMock.enforceIntegrityPolicy.mockResolvedValue({
+    action: "allow",
+    policy: "block",
+    isCompromised: false,
+    result: { isCompromised: false, reasons: [], supported: true },
   });
   integrityMock.getIntegrityPolicy.mockReturnValue("block");
 });
@@ -162,6 +171,29 @@ describe("AuthProvider", () => {
     expect(result.current.state).toBe<AuthState>("locked");
   });
 
+  test("unlock() refuses to authenticate or read the session on a compromised device under block policy", async () => {
+    ssMock.get.mockResolvedValue(sampleSession);
+    authMock.authenticate.mockResolvedValue(true);
+    integrityMock.enforceIntegrityPolicy.mockResolvedValue({
+      action: "block",
+      policy: "block",
+      isCompromised: true,
+      result: { isCompromised: true, reasons: ["mock rooted"], supported: true },
+    });
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => expect(result.current.state).toBe<AuthState>("locked"));
+    await act(async () => {
+      const success = await result.current.unlock();
+      expect(success).toBe(false);
+    });
+    expect(result.current.state).toBe<AuthState>("locked");
+    expect(result.current.session).toBeNull();
+    // Hydration reads once; the blocked unlock must not read again.
+    expect(ssMock.get).toHaveBeenCalledTimes(1);
+    expect(authMock.authenticate).not.toHaveBeenCalled();
+  });
+
   test('lock() returns to "locked" without erasing storage', async () => {
     ssMock.get.mockResolvedValue(sampleSession);
     authMock.authenticate.mockResolvedValue(true);
@@ -221,6 +253,30 @@ describe("AuthProvider", () => {
       "wallet_session",
       expect.objectContaining({ publicKey: sampleSession.publicKey }),
     );
+  });
+
+  test("storeSession() refuses to persist on a compromised device under block policy", async () => {
+    ssMock.get.mockResolvedValue(null);
+    ssMock.set.mockResolvedValue(true);
+    integrityMock.enforceIntegrityPolicy.mockResolvedValue({
+      action: "block",
+      policy: "block",
+      isCompromised: true,
+      result: { isCompromised: true, reasons: ["mock rooted"], supported: true },
+    });
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() =>
+      expect(result.current.state).toBe<AuthState>("cleared"),
+    );
+
+    await act(async () => {
+      const ok = await result.current.storeSession(sampleSession);
+      expect(ok).toBe(false);
+    });
+    expect(ssMock.set).not.toHaveBeenCalled();
+    expect(result.current.state).toBe<AuthState>("cleared");
+    expect(result.current.session).toBeNull();
   });
 
   test("AppState background > 60s auto-locks when previously unlocked", async () => {

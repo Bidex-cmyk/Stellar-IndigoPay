@@ -17,6 +17,7 @@ import {
   evaluateIntegrityPolicy,
   getIntegrityPolicy,
   getLastIntegrityWarning,
+  normalizeIntegrityPolicy,
   onIntegrityWarning,
   resetIntegrityDetector,
   setIntegrityDetector,
@@ -40,8 +41,6 @@ const compromised: DeviceIntegrityResult = {
   supported: true,
 };
 
-const POLICY_KEY = "EXPO_PUBLIC_DEVICE_INTEGRITY_POLICY";
-
 beforeEach(() => {
   jest.clearAllMocks();
   deviceMock.isRootedExperimentalAsync.mockResolvedValue(false);
@@ -49,25 +48,37 @@ beforeEach(() => {
 
 afterEach(() => {
   resetIntegrityDetector();
-  delete process.env[POLICY_KEY];
 });
 
 describe("getIntegrityPolicy", () => {
-  test("defaults to block when the env var is unset", () => {
-    delete process.env[POLICY_KEY];
+  test("returns the inlined env value, defaulting to block when unset", () => {
+    // Expo inlines `process.env.EXPO_PUBLIC_DEVICE_INTEGRITY_POLICY` at
+    // transform time, so at jest runtime the value is whatever was set when
+    // the suite was compiled (unset here) → the default policy.
     expect(getIntegrityPolicy()).toBe<IntegrityPolicy>("block");
   });
+});
 
-  test("accepts valid env values", () => {
+describe("normalizeIntegrityPolicy", () => {
+  test("defaults to block when the raw value is unset or blank", () => {
+    expect(normalizeIntegrityPolicy(undefined)).toBe<IntegrityPolicy>("block");
+    expect(normalizeIntegrityPolicy("")).toBe<IntegrityPolicy>("block");
+    expect(normalizeIntegrityPolicy("   ")).toBe<IntegrityPolicy>("block");
+  });
+
+  test("accepts valid values, trimming and lowercasing", () => {
     for (const policy of ["off", "warn", "block"] as const) {
-      process.env[POLICY_KEY] = policy;
-      expect(getIntegrityPolicy()).toBe<IntegrityPolicy>(policy);
+      expect(normalizeIntegrityPolicy(policy)).toBe<IntegrityPolicy>(policy);
+      expect(normalizeIntegrityPolicy(`  ${policy.toUpperCase()}  `)).toBe<
+        IntegrityPolicy
+      >(policy);
     }
   });
 
   test("falls back to block for an invalid value", () => {
-    process.env[POLICY_KEY] = "explode";
-    expect(getIntegrityPolicy()).toBe<IntegrityPolicy>(DEFAULT_INTEGRITY_POLICY);
+    expect(normalizeIntegrityPolicy("explode")).toBe<IntegrityPolicy>(
+      DEFAULT_INTEGRITY_POLICY,
+    );
   });
 });
 

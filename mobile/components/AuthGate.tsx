@@ -45,6 +45,11 @@ export interface AuthGateProps {
   promptBody?: string;
 }
 
+/**
+ * Gate sensitive screens behind an unlocked session, rendering a
+ * state-aware fallback (spinner / connect / unlock / hard-stop) and
+ * surfacing the configured device-integrity policy on compromise.
+ */
 export function AuthGate({
   children,
   promptTitle = "Unlock to continue",
@@ -90,6 +95,10 @@ interface FallbackContentProps {
   onUnlock: () => Promise<boolean>;
 }
 
+/**
+ * Render the correct fallback for the current auth state and integrity
+ * policy (loading / connect / block / warn / default unlock UI).
+ */
 function FallbackContent({
   state,
   promptTitle,

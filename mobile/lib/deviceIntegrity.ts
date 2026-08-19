@@ -63,18 +63,34 @@ export type IntegrityDetector = () => Promise<DeviceIntegrityResult>;
 
 // ─── Configuration ────────────────────────────────────────────────────────
 
-const POLICY_ENV_KEY = "EXPO_PUBLIC_DEVICE_INTEGRITY_POLICY";
 export const DEFAULT_INTEGRITY_POLICY: IntegrityPolicy = "block";
 
 /**
- * Read the active policy. `EXPO_PUBLIC_*` vars are inlined by Expo's babel
- * transform at build time, so this is stable per-build while remaining
- * overridable in tests / non-Expo environments.
+ * Normalise a raw policy string into a valid `IntegrityPolicy`: trim
+ * whitespace, lowercase, and fall back to the default for anything that is
+ * not one of `off` / `warn` / `block`. Pure and never throws.
+ */
+export function normalizeIntegrityPolicy(
+  raw: string | undefined,
+): IntegrityPolicy {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (value === "off" || value === "warn" || value === "block") return value;
+  return DEFAULT_INTEGRITY_POLICY;
+}
+
+/**
+ * Read the active policy. Expo's babel transform inlines `EXPO_PUBLIC_*`
+ * variables at build time, but only when they are referenced with static
+ * dot notation — a computed lookup (`process.env[KEY]`) is NOT inlined, so
+ * native builds would always fall back to the default. Hence the static
+ * reference below; `normalizeIntegrityPolicy` is kept pure so the
+ * sanitisation/fallback logic stays unit-testable without relying on the
+ * transform.
  */
 export function getIntegrityPolicy(): IntegrityPolicy {
-  const raw = (process.env[POLICY_ENV_KEY] ?? "").trim().toLowerCase();
-  if (raw === "off" || raw === "warn" || raw === "block") return raw;
-  return DEFAULT_INTEGRITY_POLICY;
+  return normalizeIntegrityPolicy(
+    process.env.EXPO_PUBLIC_DEVICE_INTEGRITY_POLICY,
+  );
 }
 
 // ─── Detector ─────────────────────────────────────────────────────────────
