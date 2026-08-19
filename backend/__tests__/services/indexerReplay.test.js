@@ -2,9 +2,9 @@
 
 const fs = require("fs");
 const path = require("path");
-const pool = require("../../../src/db/pool");
-const { fixtureMetadataSchema } = require("../../../src/schemas/sorobanEventSchema");
-const { HANDLERS, extractEventType, extractTopics, extractValue } = require("../../../src/services/sorobanEventService");
+const pool = require("../../src/db/pool");
+const { fixtureMetadataSchema } = require("../../src/schemas/sorobanEventSchema");
+const { HANDLERS, extractEventType, extractTopics, extractValue } = require("../../src/services/sorobanEventService");
 const { v4: uuid } = require("uuid");
 
 const fixturePath = path.join(__dirname, "../../fixtures/events/golden-events.json");
