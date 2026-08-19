@@ -18,10 +18,6 @@ describe("Indexer Pipeline Replay Determinism", () => {
     fixtureData = fixtureMetadataSchema.parse(rawData);
   });
 
-  afterAll(async () => {
-    await pool.end();
-  });
-
 async function tableExists(client, tableName) {
   const { rows } = await client.query(
     `SELECT EXISTS (
