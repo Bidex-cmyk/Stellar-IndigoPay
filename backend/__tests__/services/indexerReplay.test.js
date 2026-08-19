@@ -44,9 +44,15 @@ async function tableExists(client, tableName) {
       if (await tableExists(client, "indexer_state")) {
         await client.query("DELETE FROM indexer_state");
       }
-      await client.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
-      await client.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
-      await client.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+      if (await tableExists(client, "donations")) {
+        await client.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+      }
+      if (await tableExists(client, "projects")) {
+        await client.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
+      }
+      if (await tableExists(client, "profiles")) {
+        await client.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+      }
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK");
@@ -108,9 +114,15 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "indexer_state")) {
       await pool.query("DELETE FROM indexer_state");
     }
-    await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
-    await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
-    await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+    if (await tableExists(pool, "donations")) {
+      await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    }
+    if (await tableExists(pool, "projects")) {
+      await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    }
+    if (await tableExists(pool, "profiles")) {
+      await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+    }
 
     // Apply second time
     await applyFixtureEvents(fixtureData.events);
@@ -134,9 +146,15 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "indexer_state")) {
       await pool.query("DELETE FROM indexer_state");
     }
-    await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
-    await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
-    await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+    if (await tableExists(pool, "donations")) {
+      await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    }
+    if (await tableExists(pool, "projects")) {
+      await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    }
+    if (await tableExists(pool, "profiles")) {
+      await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
+    }
 
     // Mutate fixture slightly
     const mutatedEvents = JSON.parse(JSON.stringify(fixtureData.events));
