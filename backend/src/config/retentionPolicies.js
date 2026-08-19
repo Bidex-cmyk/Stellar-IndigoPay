@@ -57,6 +57,7 @@ const ALLOWED_TABLES = new Set([
   "project_ratings",
   "projection_donor_history",
   "digest_sends",
+  "donation_receipts",
 ]);
 
 /**
@@ -79,7 +80,9 @@ const ALLOWED_COLUMNS = new Set([
   "display_name",
   "bio",
   "matcher_address",
-  "review"
+  "review",
+  "receipt_hash",
+  "signature"
 ]);
 
 function isIdentifier(value) {
@@ -220,6 +223,17 @@ const policies = [
     anonymizeFields: ["donor_address"],
     anonymizedAtColumn: "anonymised_at",
     description: "Anonymize digest sends after 24 months.",
+  },
+  {
+    name: "donation-receipts-anonymize",
+    table: "donation_receipts",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "created_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["receipt_hash", "signature"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize donation receipts after 24 months.",
   }
 ];
 

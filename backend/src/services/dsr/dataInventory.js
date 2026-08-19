@@ -11,7 +11,7 @@ const DONOR_DATA_CLASSES = [
   { name: "push_tokens", table: "device_tokens" },
   { name: "analytics_identifiers", table: "projection_donor_history" },
   { name: "digests", table: "digest_sends" },
-  { name: "receipts", table: "receipts" },
+  { name: "receipts", table: "donation_receipts" },
   { name: "audit_entries", table: "admin_audit_log" },
   { name: "on_chain_references", table: "on_chain_references" },
   { name: "project_subscriptions", table: "project_subscriptions" }
@@ -62,7 +62,9 @@ function getInventory() {
       supportsExport: true,
       supportsErase: true,
       action: policy.strategy, // 'delete' or 'anonymize'
-      policyName: policy.name
+      policyName: policy.name,
+      anonymizeFields: policy.anonymizeFields || [],
+      anonymizedAtColumn: policy.anonymizedAtColumn || null
     });
   }
 
