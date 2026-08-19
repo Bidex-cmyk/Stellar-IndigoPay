@@ -41,7 +41,9 @@ async function tableExists(client, tableName) {
         await client.query("DELETE FROM soroban_event_dlq");
       }
       
-      await client.query("DELETE FROM indexer_state");
+      if (await tableExists(client, "indexer_state")) {
+        await client.query("DELETE FROM indexer_state");
+      }
       await client.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
       await client.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
       await client.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
@@ -103,7 +105,9 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "soroban_event_dlq")) {
       await pool.query("DELETE FROM soroban_event_dlq");
     }
-    await pool.query("DELETE FROM indexer_state");
+    if (await tableExists(pool, "indexer_state")) {
+      await pool.query("DELETE FROM indexer_state");
+    }
     await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
@@ -127,7 +131,9 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "soroban_event_dlq")) {
       await pool.query("DELETE FROM soroban_event_dlq");
     }
-    await pool.query("DELETE FROM indexer_state");
+    if (await tableExists(pool, "indexer_state")) {
+      await pool.query("DELETE FROM indexer_state");
+    }
     await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
