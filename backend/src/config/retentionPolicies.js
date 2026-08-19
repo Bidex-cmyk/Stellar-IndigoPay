@@ -52,6 +52,11 @@ const ALLOWED_TABLES = new Set([
   "webhook_dlq",
   "pgboss.archive",
   "token_blacklist",
+  "profiles",
+  "donation_matches",
+  "project_ratings",
+  "projection_donor_history",
+  "digest_sends",
 ]);
 
 /**
@@ -70,6 +75,11 @@ const ALLOWED_COLUMNS = new Set([
   "anonymised_at",
   "retention_expires_at",
   "expires_at",
+  "public_key",
+  "display_name",
+  "bio",
+  "matcher_address",
+  "review"
 ]);
 
 function isIdentifier(value) {
@@ -156,6 +166,61 @@ const policies = [
     description:
       "Delete pg-boss archived jobs (completed) older than 30 days. Operational only.",
   },
+  {
+    name: "profiles-anonymize",
+    table: "profiles",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "created_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["public_key", "display_name", "bio"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize profiles after 24 months.",
+  },
+  {
+    name: "donation-matches-anonymize",
+    table: "donation_matches",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "created_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["matcher_address"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize donation matches after 24 months.",
+  },
+  {
+    name: "project-ratings-anonymize",
+    table: "project_ratings",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "created_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["donor_address", "review"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize project ratings after 24 months.",
+  },
+  {
+    name: "projection-donor-history-anonymize",
+    table: "projection_donor_history",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "created_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["donor_address"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize donor history projection after 24 months.",
+  },
+  {
+    name: "digest-sends-anonymize",
+    table: "digest_sends",
+    strategy: "anonymize",
+    retentionPeriod: { value: 24, unit: "months" },
+    schedule: { cron: "0 4 6 * *", timezone: "UTC" },
+    condition: "claimed_at < now() - ($1::int || ' months')::interval AND anonymised_at IS NULL",
+    anonymizeFields: ["donor_address"],
+    anonymizedAtColumn: "anonymised_at",
+    description: "Anonymize digest sends after 24 months.",
+  }
 ];
 
 /**
