@@ -44,8 +44,8 @@ async function tableExists(client, tableName) {
       if (await tableExists(client, "indexer_state")) {
         await client.query("DELETE FROM indexer_state");
       }
-      await client.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
-      await client.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
+      await client.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+      await client.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
       await client.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
       await client.query("COMMIT");
     } catch (e) {
@@ -108,8 +108,8 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "indexer_state")) {
       await pool.query("DELETE FROM indexer_state");
     }
-    await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
-    await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
+    await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
     await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
 
     // Apply second time
@@ -134,8 +134,8 @@ async function tableExists(client, tableName) {
     if (await tableExists(pool, "indexer_state")) {
       await pool.query("DELETE FROM indexer_state");
     }
-    await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
-    await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
+    await pool.query("DELETE FROM donations WHERE project_id = $1", ["11111111-1111-1111-1111-111111111111"]);
+    await pool.query("DELETE FROM projects WHERE id = $1", ["11111111-1111-1111-1111-111111111111"]);
     await pool.query("DELETE FROM profiles WHERE public_key = $1", ["GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC"]);
 
     // Mutate fixture slightly

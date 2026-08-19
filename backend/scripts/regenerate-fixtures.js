@@ -41,7 +41,7 @@ async function regenerateFixtures() {
     ledgerClosedAt: new Date().toISOString(),
     contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
     pagingToken: `token_${Date.now()}`,
-    topic: ["donated", "GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC", "PROJECT_ID_MOCK"],
+    topic: ["donated", "GBDONORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABC", "11111111-1111-1111-1111-111111111111"],
     value: [5000000, 1, 12345],
     inSuccessfulContractCall: true,
     txHash: `txn_${Date.now()}`
