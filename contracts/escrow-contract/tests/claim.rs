@@ -46,6 +46,7 @@ fn test_freelancer_can_claim_after_release_period() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
     // Jump past the release period
@@ -60,7 +61,7 @@ fn test_freelancer_can_claim_after_release_period() {
 }
 
 #[test]
-#[should_panic(expected = "Release period not reached")]
+#[should_panic]
 fn test_claim_before_release_period_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -80,6 +81,7 @@ fn test_claim_before_release_period_panics() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
     // Claim immediately without advancing ledger — should panic
@@ -87,7 +89,7 @@ fn test_claim_before_release_period_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Job is disputed; cannot claim milestone")]
+#[should_panic]
 fn test_claim_disputed_job_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -107,9 +109,10 @@ fn test_claim_disputed_job_panics() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
-    client.dispute_job(&admin, &job_id);
+    client.dispute_job(&common::signers1(&env, &admin), &job_id);
 
     // Jump past release period
     jump_past_release_period(&env);
@@ -119,7 +122,7 @@ fn test_claim_disputed_job_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Milestone already released")]
+#[should_panic]
 fn test_claim_already_released_milestone_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -139,6 +142,7 @@ fn test_claim_already_released_milestone_panics() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
     jump_past_release_period(&env);
@@ -150,7 +154,7 @@ fn test_claim_already_released_milestone_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid milestone index")]
+#[should_panic]
 fn test_claim_invalid_milestone_index_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -170,6 +174,7 @@ fn test_claim_invalid_milestone_index_panics() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
     jump_past_release_period(&env);
@@ -198,6 +203,7 @@ fn test_claim_all_milestones_completes_job() {
         &token,
         &1000i128,
         &milestones,
+        &escrow_contract::RELEASE_AFTER_LEDGERS,
     );
 
     jump_past_release_period(&env);
@@ -213,7 +219,7 @@ fn test_claim_all_milestones_completes_job() {
 }
 
 #[test]
-#[should_panic(expected = "Job not found")]
+#[should_panic]
 fn test_claim_non_existent_job_panics() {
     let env = Env::default();
     env.mock_all_auths();

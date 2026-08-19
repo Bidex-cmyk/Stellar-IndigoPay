@@ -14,6 +14,7 @@
 
 const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
+const logger = require("../logger");
 const { v4: uuid } = require("uuid");
 
 const QUEUE = "donation-match";
@@ -27,12 +28,16 @@ async function start() {
 
   boss = new PgBoss(connectionString);
   boss.on("error", (err) =>
-    console.error("[matchQueue] pg-boss error:", err.message),
+    logger.error(
+      { event: "match_queue_error", err: err.message },
+      "Match queue pg-boss error",
+    ),
   );
 
   await boss.start();
+  await boss.createQueue(QUEUE);
 
-  await boss.work(QUEUE, { teamSize: 2, teamConcurrency: 1 }, async (job) => {
+  await boss.work(QUEUE, { teamSize: 2, teamConcurrency: 1 }, async ([job]) => {
     const { projectId, donorAddress, parsedAmount, transactionHash } =
       job.data;
 
@@ -40,11 +45,13 @@ async function start() {
     try {
       await client.query("BEGIN");
 
-      // Check for active matching offers
+      // Check for active matching offers with a row-level lock (FOR UPDATE)
+      // to ensure concurrent matching jobs do not over-allocate beyond the cap.
       const matchesResult = await client.query(
         `SELECT id, matcher_address, cap_xlm, matched_xlm, multiplier
          FROM donation_matches
-         WHERE project_id = $1 AND expires_at > NOW()`,
+         WHERE project_id = $1 AND expires_at > NOW()
+         FOR UPDATE`,
         [projectId],
       );
 
@@ -86,21 +93,15 @@ async function start() {
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
-      console.error(
-        "[matchQueue] error processing match for project",
-        projectId,
-        err.message,
+      logger.error(
+        { event: "match_queue_job_error", projectId, err: err.message },
+        "Match queue job failed",
       );
       throw err; // pg-boss will retry
     } finally {
       client.release();
     }
   });
-
-  console.log(
-    "[matchQueue] pg-boss started, worker registered on queue:",
-    QUEUE,
-  );
 }
 
 async function stop() {

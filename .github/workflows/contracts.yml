@@ -74,13 +74,21 @@ jobs:
           toolchain: 1.91.0
           components: llvm-tools-preview
 
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: contracts
+
+      - name: Cache cargo-tarpaulin binary
+        id: tarpaulin-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: cargo-tarpaulin-${{ runner.os }}-${{ hashFiles('.github/workflows/contracts.yml') }}
+
+      - name: Install cargo-tarpaulin
+        if: steps.tarpaulin-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-tarpaulin
 
       - name: Run coverage
         run: cargo tarpaulin --config indigopay-contract/.tarpaulin.toml --features testutils --out Html --out Lcov -- --skip fuzz

@@ -27,6 +27,7 @@ const { enqueue: enqueueDLQ } = require("./indexerDLQWorker");
 const logger = require("../logger");
 const { metrics } = require("./metrics");
 const { runBackfill } = require("./indexerBackfill");
+const DonationBatcher = require("./donationBatcher");
 
 const {
   indigopayIndexerStreamReconnectsTotal: indexerStreamReconnects,
@@ -43,6 +44,7 @@ const BACKOFF_FACTOR = 2;
 // ─── Internal state ─────────────────────────────────────────────────────────
 let isRunning = false;
 let io = null;
+let donationBatcher = null; // accumulates donations for batched emission
 let projectWallets = new Map(); // wallet_address -> project_id
 let projectWalletsInterval = null;
 let horizonStream = null;
@@ -67,6 +69,8 @@ const USDC_ASSET_CODE = "USDC";
 
 /**
  * Read the persisted cursor from indexer_state.
+ *
+ * @returns {Promise<number>} Last processed ledger, or 0 when unavailable.
  */
 async function readCursor() {
   try {
@@ -85,6 +89,10 @@ async function readCursor() {
 
 /**
  * Atomically update the cursor (called WITHIN the donation transaction).
+ *
+ * @param {{query: Function}} client - Database client from the active transaction.
+ * @param {number|string} ledger - Ledger sequence to store if it is newer.
+ * @returns {Promise<void>}
  */
 async function updateCursor(client, ledger) {
   await client.query(
@@ -98,6 +106,8 @@ async function updateCursor(client, ledger) {
 
 /**
  * Fetch all active project wallets and cache them, plus resolve USDC config.
+ *
+ * @returns {Promise<void>}
  */
 async function updateProjectWallets() {
   try {
@@ -196,9 +206,11 @@ async function openStream() {
             const result = await handleDonation(projectId, op, { isNative, isUSDC, isBackfill: false }, {
               onCursorUpdate: updateCursor,
             });
-            // Emit WebSocket event only for stream-processed donations (not backfill/DLQ)
-            if (io && result) {
-              io.emit("newDonation", {
+            // Batch donations for emission (not backfill/DLQ)
+            // Instead of emitting one event per donation, accumulate them
+            // and emit a single batch event after a time window (500ms by default).
+            if (donationBatcher && result) {
+              donationBatcher.addDonation({
                 projectId,
                 donorAddress: op.from,
                 amountXLM: isNative ? parseFloat(op.amount) : null,
@@ -404,6 +416,16 @@ async function startIndexer(socketIo) {
   isRunning = true;
   io = socketIo;
 
+  // Initialize the donation batcher with configurable window
+  // INDEXER_BATCH_WINDOW_MS defaults to 500ms for reasonable latency
+  // INDEXER_BATCH_MAX_SIZE defaults to 50 donations per batch
+  const batchWindowMs = Number(process.env.INDEXER_BATCH_WINDOW_MS || 500);
+  const batchMaxSize = Number(process.env.INDEXER_BATCH_MAX_SIZE || 50);
+  donationBatcher = new DonationBatcher(io, {
+    batchWindowMs,
+    maxBatchSize: batchMaxSize,
+  });
+
   await updateProjectWallets();
   projectWalletsInterval = setInterval(updateProjectWallets, 10 * 60 * 1000);
   if (typeof projectWalletsInterval.unref === "function")
@@ -412,17 +434,17 @@ async function startIndexer(socketIo) {
   lagBackoffMs = Number(process.env.INDEXER_LAG_CHECK_INTERVAL_MS || 30_000);
   await checkLag();
 
-  logger.info(
-    { event: "indexer_started", usdcEnabled: Boolean(usdcTokenAddress) },
-    "Starting Horizon operations stream" +
-      (usdcTokenAddress ? " (USDC indexing enabled)" : ""),
-  );
-
   await openStream();
 }
 
 /**
  * Returns the indexer status for the health endpoint.
+ *
+ * @returns {{isRunning: boolean, lastProcessedLedger: number,
+ *   projectWalletsCount: number, usdcTokenConfigured: boolean,
+ *   usdcToXlmRate: number, reconnectAttempt: number, lagLedgers: number,
+ *   lastLagCheckAt: number|null, backoffMs: number,
+ *   lastBackfillOutcome: string|null, timestamp: string}}
  */
 function getStatus() {
   return {
@@ -442,6 +464,8 @@ function getStatus() {
 
 /**
  * Stop the indexer. Idempotent.
+ *
+ * @returns {Promise<void>}
  */
 async function stop() {
   closeStream();
@@ -454,6 +478,12 @@ async function stop() {
   if (projectWalletsInterval) {
     clearInterval(projectWalletsInterval);
     projectWalletsInterval = null;
+  }
+
+  // Flush any pending donations before stopping
+  if (donationBatcher) {
+    donationBatcher.stop();
+    donationBatcher = null;
   }
 
   stopLagMonitor();

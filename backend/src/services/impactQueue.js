@@ -2,6 +2,7 @@
 
 const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
+const logger = require("../logger");
 const { get: redisGet, set: redisSet } = require("./redis");
 const { computeBadges } = require("./store"); // reuse badge computation if needed
 
@@ -17,12 +18,18 @@ async function start(io) {
     process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/indigopay";
 
   boss = new PgBoss(connectionString);
-  boss.on("error", (err) => console.error("[impactQueue] pg-boss error:", err.message));
+  boss.on("error", (err) =>
+    logger.error(
+      { event: "impact_queue_error", err: err.message },
+      "Impact queue pg-boss error",
+    ),
+  );
 
   await boss.start();
+  await boss.createQueue(QUEUE);
 
   // teamSize 1 as per requirement
-  await boss.work(QUEUE, { teamSize: 1, teamConcurrency: 1 }, async (job) => {
+  await boss.work(QUEUE, { teamSize: 1, teamConcurrency: 1 }, async ([job]) => {
     const { donationId, projectId, donorAddress, amountXLM } = job.data;
 
     // Idempotency: check log – if already completed, skip
@@ -142,8 +149,12 @@ async function start(io) {
       throw err; // let pg‑boss retry per its config
     }
   });
+}
 
-  console.log("[impactQueue] pg‑boss started, worker registered on queue:", QUEUE);
+async function stop() {
+  if (!boss) return;
+  await boss.stop({ graceful: true, timeout: 15_000 });
+  boss = null;
 }
 
 /** Enqueue a background impact recalculation after a donation is persisted. */
@@ -158,4 +169,4 @@ async function enqueueImpactRecalc({ donationId, projectId, donorAddress, amount
   );
 }
 
-module.exports = { start, enqueueImpactRecalc };
+module.exports = { start, stop, enqueueImpactRecalc };

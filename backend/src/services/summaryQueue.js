@@ -9,7 +9,9 @@
 const crypto = require("crypto");
 const PgBoss = require("pg-boss");
 const pool = require("../db/pool");
+const logger = require("../logger");
 const { generateProjectSummary } = require("./claude");
+const { sanitizeSummary } = require("../lib/summarySanitize");
 const { logAdminAction } = require("./audit");
 
 const QUEUE = "ai-summary";
@@ -31,12 +33,16 @@ async function start(io) {
   boss = new PgBoss(connectionString);
 
   boss.on("error", (err) =>
-    console.error("[summaryQueue] pg-boss error:", err.message),
+    logger.error(
+      { event: "summary_queue_error", err: err.message },
+      "Summary queue pg-boss error",
+    ),
   );
 
   await boss.start();
+  await boss.createQueue(QUEUE);
 
-  await boss.work(QUEUE, { teamSize: 2, teamConcurrency: 1 }, async (job) => {
+  await boss.work(QUEUE, { teamSize: 2, teamConcurrency: 1 }, async ([job]) => {
     const { projectId, name, category, description, adminAddress } = job.data;
 
     let summaryResult;
@@ -63,6 +69,17 @@ async function start(io) {
       .update(description || "")
       .digest("hex");
 
+    // Final storage-boundary guard: never persist a summary that still
+    // contains markdown/HTML or that sanitizes down to nothing.
+    const summary = sanitizeSummary(summaryResult.summary);
+    if (!summary) {
+      console.error(
+        "[summaryQueue] summary empty after sanitization; skipping store",
+        projectId,
+      );
+      return;
+    }
+
     const updated = await pool.query(
       `UPDATE projects
           SET ai_summary              = $1,
@@ -72,7 +89,7 @@ async function start(io) {
               updated_at              = NOW()
         WHERE id = $4
         RETURNING ai_summary, ai_summary_generated_at, ai_summary_model`,
-      [summaryResult.summary, summaryResult.model, sourceHash, projectId],
+      [summary, summaryResult.model, sourceHash, projectId],
     );
 
     const row = updated.rows[0];
@@ -98,11 +115,12 @@ async function start(io) {
       ipAddress: null,
     });
   });
+}
 
-  console.log(
-    "[summaryQueue] pg-boss started, worker registered on queue:",
-    QUEUE,
-  );
+async function stop() {
+  if (!boss) return;
+  await boss.stop({ graceful: true, timeout: 15_000 });
+  boss = null;
 }
 
 /**
@@ -124,4 +142,4 @@ async function enqueueAISummary(projectId, projectData) {
   return jobId;
 }
 
-module.exports = { start, enqueueAISummary };
+module.exports = { start, stop, enqueueAISummary };
