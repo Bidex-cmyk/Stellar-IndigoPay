@@ -937,6 +937,9 @@ pub enum ContractError {
     // ── Donation reversal finalization (132–133) ────────────────────────────
     DonationAlreadyReversed = 132,
     DonationAccountingUnderflow = 133,
+    // ── Donation challenge (134–135) ────────────────────────────────────────
+    ChallengeReasonTooLong = 134,
+    SelfChallengeNotAllowed = 135,
 }
 // 48 hours × 3600 s / 5 s per ledger = 34 560 ledgers. The minimum delay
 // between `propose_upgrade` and the earliest ledger at which
@@ -7537,6 +7540,10 @@ impl IndigoPayContract {
             .get(&DataKey::DonationRecord(donation_index))
             .expect("Donation record not found");
 
+        if challenger == donation.donor {
+            panic_with_error!(env, ContractError::SelfChallengeNotAllowed);
+        }
+
         #[cfg(feature = "refund")]
         if refund_approved(&env, donation_index) {
             panic_with_error!(&env, ContractError::DonationAlreadyReversed);
@@ -13920,12 +13927,13 @@ mod tests {
 
     #[test]
     fn test_challenge_reversal_blocks_refund_without_double_accounting() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (env, cid, client, admin, pid) = setup();
         let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
         let admins = soroban_sdk::vec![&env, admin.clone()];
         client.set_challenge_threshold(&admins, &(10 * STROOP));
+        let challenger = challenger_with_badge(&env, &cid);
         client.challenge_donation(
-            &donor,
+            &challenger,
             &donation_index,
             &String::from_str(&env, "Reverse donation"),
         );
@@ -13959,12 +13967,13 @@ mod tests {
 
     #[test]
     fn test_refund_reversal_blocks_challenge_resolution_without_double_accounting() {
-        let (env, _cid, client, admin, pid) = setup();
+        let (env, cid, client, admin, pid) = setup();
         let (donor, token, donation_index) = setup_donation(&env, &client, &pid);
         let admins = soroban_sdk::vec![&env, admin.clone()];
         client.set_challenge_threshold(&admins, &(10 * STROOP));
+        let challenger = challenger_with_badge(&env, &cid);
         client.challenge_donation(
-            &donor,
+            &challenger,
             &donation_index,
             &String::from_str(&env, "Review before refund"),
         );
@@ -14016,7 +14025,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #132)")]
+    #[should_panic(expected = "Error(Contract, #134)")]
     fn test_challenge_reason_too_long_panics() {
         let (env, cid, client, admin, pid) = setup();
         let (_donor, _token, donation_index) = setup_donation(&env, &client, &pid);
@@ -14047,7 +14056,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #133)")]
+    #[should_panic(expected = "Error(Contract, #135)")]
     fn test_self_challenge_panics() {
         let (env, _cid, client, admin, pid) = setup();
         let (donor, _token, donation_index) = setup_donation(&env, &client, &pid);
