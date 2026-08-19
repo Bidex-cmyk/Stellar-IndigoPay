@@ -688,9 +688,6 @@ pub enum DataKey {
     // protection.
     Nullifier(BytesN<32>),
     ZkDonationRecord(u32),
-    // Time-locked donation vesting (#386)
-    VestingSchedule(Address, u32),
-    DonorVestingCount(Address),
     // Platform fee configuration (#385)
     /// Fee in basis points (0–500, max 5%).
     PlatformFeeBps,
