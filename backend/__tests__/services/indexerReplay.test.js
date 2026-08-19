@@ -22,12 +22,29 @@ describe("Indexer Pipeline Replay Determinism", () => {
     await pool.end();
   });
 
+async function tableExists(client, tableName) {
+  const { rows } = await client.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name = $1
+     ) AS exists`,
+    [tableName]
+  );
+  return rows[0].exists;
+}
+
   beforeEach(async () => {
     // Clear state before each run
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("DELETE FROM soroban_event_dlq");
+      
+      if (await tableExists(client, "soroban_event_dlq")) {
+        await client.query("DELETE FROM soroban_event_dlq");
+      }
+      
       await client.query("DELETE FROM indexer_state");
       await client.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
       await client.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
@@ -67,7 +84,17 @@ describe("Indexer Pipeline Replay Determinism", () => {
     const donations = (await pool.query("SELECT * FROM donations ORDER BY id")).rows;
     const profiles = (await pool.query("SELECT * FROM profiles ORDER BY public_key")).rows;
     const projects = (await pool.query("SELECT * FROM projects ORDER BY id")).rows;
-    const dlq = (await pool.query("SELECT * FROM soroban_event_dlq ORDER BY id")).rows;
+    
+    let dlq = [];
+    const client = await pool.connect();
+    try {
+      if (await tableExists(client, "soroban_event_dlq")) {
+        dlq = (await client.query("SELECT * FROM soroban_event_dlq ORDER BY id")).rows;
+      }
+    } finally {
+      client.release();
+    }
+    
     return { donations, profiles, projects, dlq };
   }
 
@@ -77,7 +104,9 @@ describe("Indexer Pipeline Replay Determinism", () => {
     const state1 = await getDatabaseState();
 
     // Clear state
-    await pool.query("DELETE FROM soroban_event_dlq");
+    if (await tableExists(pool, "soroban_event_dlq")) {
+      await pool.query("DELETE FROM soroban_event_dlq");
+    }
     await pool.query("DELETE FROM indexer_state");
     await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
@@ -99,7 +128,9 @@ describe("Indexer Pipeline Replay Determinism", () => {
     const state1 = await getDatabaseState();
 
     // Clear state
-    await pool.query("DELETE FROM soroban_event_dlq");
+    if (await tableExists(pool, "soroban_event_dlq")) {
+      await pool.query("DELETE FROM soroban_event_dlq");
+    }
     await pool.query("DELETE FROM indexer_state");
     await pool.query("DELETE FROM donations WHERE project_id = $1", ["PROJECT_ID_MOCK"]);
     await pool.query("DELETE FROM projects WHERE id = $1", ["PROJECT_ID_MOCK"]);
