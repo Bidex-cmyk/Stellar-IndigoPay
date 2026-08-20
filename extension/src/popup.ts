@@ -6,6 +6,8 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import { loadSettings, type ExtensionSettings } from './settings';
+import { apiFetch, ApiClientError, type BreakerState } from './lib/apiClient';
+import { renderApiStatusBanner, breakerEventTypeToState } from './lib/apiStatusBanner';
 
 // Module-level vars
 let API_BASE = 'https://api.stellar-indigopay.app';
@@ -104,7 +106,7 @@ function initProjectSearch(): void {
     }
     debounce(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/projects?search=${encodeURIComponent(query)}&limit=5`);
+        const res = await apiFetch(`${API_BASE}/api/projects?search=${encodeURIComponent(query)}&limit=5`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         const projects: ProjectResult[] = (json.data || []).map((p: any) => ({
@@ -271,6 +273,52 @@ function initProjectListKeyNav() {
   });
 }
 
+// ==================== API DEGRADED-STATE BANNER ====================
+//
+// Reflects the shared background circuit breaker state (see
+// extension/src/lib/apiClient.ts and background.ts's GET_API_STATUS /
+// API_STATUS_CHANGED messages) without ever blocking the donate flow —
+// donations are signed and submitted directly via Freighter/Horizon, so
+// an API outage only means degraded project sync, not a broken donate
+// button. The state->copy/DOM mapping lives in lib/apiStatusBanner.ts so
+// it stays unit-testable independent of this file's stellar-sdk import.
+
+function getApiStatusBannerElements() {
+  const banner = document.getElementById('api-status-banner') as HTMLElement | null;
+  const text = document.getElementById('api-status-text') as HTMLElement | null;
+  const retryButton = document.getElementById('api-status-retry') as HTMLButtonElement | null;
+  if (!banner || !text) return null;
+  return { banner, text, retryButton };
+}
+
+function applyApiStatus(state: BreakerState | null): void {
+  const elements = getApiStatusBannerElements();
+  if (!elements) return;
+  renderApiStatusBanner(elements, state);
+}
+
+function requestApiStatus(): void {
+  chrome.runtime.sendMessage({ type: 'GET_API_STATUS' }, (response) => {
+    if (chrome.runtime.lastError) return;
+    applyApiStatus(response?.status?.state ?? null);
+  });
+}
+
+function initApiStatusBanner(): void {
+  // Pull current state on popup open (background may already know).
+  requestApiStatus();
+
+  // Live updates while the popup stays open.
+  chrome.runtime.onMessage.addListener((message: any) => {
+    if (message?.type === 'API_STATUS_CHANGED') {
+      applyApiStatus(breakerEventTypeToState(message.event?.type));
+    }
+  });
+
+  const elements = getApiStatusBannerElements();
+  elements?.retryButton?.addEventListener('click', () => requestApiStatus());
+}
+
 function debounce(fn: () => void, ms: number) {
   if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(fn, ms);
@@ -333,11 +381,15 @@ async function updateTotalAfterDonation(amount: number) {
 // ==================== PROFILE API ====================
 async function fetchProfile(publicKey: string): Promise<any> {
   try {
-    const res = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(publicKey)}`);
+    const res = await apiFetch(`${API_BASE}/api/profiles/${encodeURIComponent(publicKey)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (e) {
-    console.warn('Profile fetch failed (using local storage fallback):', e);
+    if (e instanceof ApiClientError) {
+      console.warn(`Profile fetch unavailable (${e.category}) — using local storage fallback`);
+    } else {
+      console.warn('Profile fetch failed (using local storage fallback):', e);
+    }
     return null;
   }
 }
@@ -410,13 +462,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   initProjectSearch();
   initProjectListKeyNav();
+  initApiStatusBanner();
 
   // Check for pending context-menu donation
   chrome.storage.local.get(['pendingDonationProjectId', 'pendingDonationAddress'], async (res) => {
     if (res.pendingDonationProjectId) {
       chrome.storage.local.remove('pendingDonationProjectId');
       try {
-        const response = await fetch(`${API_BASE}/api/projects/${res.pendingDonationProjectId}`);
+        const response = await apiFetch(`${API_BASE}/api/projects/${res.pendingDonationProjectId}`);
         if (response.ok) {
           const json = await response.json();
           const projectData = json.data;

@@ -11,6 +11,14 @@
  */
 
 import { loadSettings, type ExtensionSettings } from "./settings";
+import {
+  apiFetch,
+  ApiClientError,
+  getBreakerSnapshot,
+  hostOf,
+  subscribeBreakerEvents,
+  type BreakerSnapshot,
+} from "./lib/apiClient";
 
 // ── constants ────────────────────────────────────────────────────────
 
@@ -25,6 +33,31 @@ function getApiBase(): Promise<string> {
     (s: ExtensionSettings) => s.backendUrl,
     () => DEFAULT_API_BASE,
   );
+}
+
+// ── API degraded-state broadcasting ─────────────────────────────────
+//
+// The circuit breaker lives in apiClient.ts and is shared across every
+// call site that talks to the backend host (project lookup, and any
+// future balance/status calls). Whenever it trips/recovers we relay the
+// transition to the popup UI via chrome.runtime messaging so it can show
+// "connecting" / "API degraded" without polling.
+
+subscribeBreakerEvents((event) => {
+  chrome.runtime.sendMessage(
+    { type: "API_STATUS_CHANGED", event },
+    () => {
+      // No popup listening — chrome.runtime.lastError is expected and
+      // safe to ignore in that case.
+      void chrome.runtime.lastError;
+    },
+  );
+});
+
+/** Current breaker snapshot for the configured API host (for popup init). */
+async function getApiStatusSnapshot(): Promise<BreakerSnapshot> {
+  const apiBase = await getApiBase();
+  return getBreakerSnapshot(hostOf(apiBase));
 }
 
 // ── initialization ───────────────────────────────────────────────────
@@ -81,6 +114,14 @@ chrome.runtime.onMessage.addListener(
         );
       return true;
     }
+
+    // ── GET_API_STATUS: current circuit breaker snapshot (for popup) ─
+    if (message.type === "GET_API_STATUS") {
+      getApiStatusSnapshot()
+        .then((status) => sendResponse({ status }))
+        .catch(() => sendResponse({ status: null }));
+      return true;
+    }
   },
 );
 
@@ -107,10 +148,23 @@ async function lookupProject(address: string): Promise<ProjectResult | null> {
   // locations, and tags. We search for the address to find matching projects.
   const url = `${apiBase}/api/projects?search=${encodeURIComponent(address)}&limit=20`;
 
-  const res = await fetch(url, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(8000),
-  });
+  let res: Response;
+  try {
+    res = await apiFetch(url, {
+      headers: { Accept: "application/json" },
+    });
+  } catch (err) {
+    if (err instanceof ApiClientError) {
+      // Retries exhausted, or the circuit breaker is open — this is the
+      // expected "API degraded" path, not a bug. The popup surfaces the
+      // breaker state separately via GET_API_STATUS / API_STATUS_CHANGED.
+      console.warn(
+        `[IndigoPay] Project lookup unavailable (${err.category}${err.breakerOpen ? ", breaker open" : ""})`,
+      );
+      return null;
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     console.warn(`[IndigoPay] Project lookup failed: HTTP ${res.status}`);
@@ -158,7 +212,7 @@ async function submitDonation(
   destination: string,
   amount: number,
   memo: string,
-): Promise<{ success: boolean; txHash?: string; error?: string }> {
+): Promise<{ success: boolean; txHash?: string; error?: string; degraded?: boolean }> {
   try {
     // The actual signing happens in the content script's injected
     // script context. Here we validate the params and return a
@@ -173,10 +227,18 @@ async function submitDonation(
       throw new Error("Memo must be 28 characters or fewer");
     }
 
+    // The on-chain donation itself doesn't depend on the IndigoPay API
+    // (Freighter signs and submits directly to Horizon), so an API
+    // outage never blocks the donate flow. We do surface a non-blocking
+    // "degraded" hint when the shared circuit breaker is open, so the
+    // UI can warn that project sync / receipts may lag behind.
+    const status = await getApiStatusSnapshot().catch(() => null);
+    const degraded = status?.state === "open";
+
     // In a full implementation, this would use the Freighter SDK
     // to build and sign the transaction. For now, we return success
     // and let the content script's overlay handle the actual flow.
-    return { success: true, txHash: "pending" };
+    return { success: true, txHash: "pending", ...(degraded ? { degraded: true } : {}) };
   } catch (err: any) {
     return { success: false, error: err.message || "Donation failed" };
   }
