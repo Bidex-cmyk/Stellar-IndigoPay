@@ -8,12 +8,38 @@ const TWAP_WINDOW: u32 = 10;
 const STALENESS_THRESHOLD: u32 = 720;
 const PRICE_SCALE: i128 = 10_000_000;
 
+/// Maximum number of slash events retained per reporter.
+/// Older entries are evicted in a ring-buffer fashion.
+const MAX_SLASH_HISTORY: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceObservation {
     pub price: i128,
     pub reporter: Address,
     pub recorded_at: u32,
+}
+
+/// A record of a single slash event against a reporter.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlashEvent {
+    /// Ledger sequence at which the slash occurred.
+    pub at: u32,
+    /// Admin who performed the slash.
+    pub slashed_by: Address,
+    /// Reason string (max 32 bytes to stay within a single symbol).
+    pub reason: soroban_sdk::Symbol,
+}
+
+/// Ring-buffer pointer for per-reporter slash history.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlashHistoryMeta {
+    /// Index of the *next* write slot (wraps at MAX_SLASH_HISTORY).
+    pub next_index: u32,
+    /// Total events written so far (capped at MAX_SLASH_HISTORY once full).
+    pub count: u32,
 }
 
 #[contracttype]
@@ -25,6 +51,10 @@ pub enum DataKey {
     ObservationIndex,
     Reporter(Address),
     FallbackPrice,
+    /// Per-reporter slash-history ring-buffer metadata.
+    SlashHistoryMeta(Address),
+    /// Individual slash event stored at a ring-buffer slot.
+    SlashEvent(Address, u32),
 }
 
 #[contract]
@@ -182,6 +212,75 @@ impl SimpleOracle {
         }
 
         sum / i128::from(window) / PRICE_SCALE
+    }
+
+    // ── Slash history ────────────────────────────────────────────────────
+
+    /// Admin-only slash: records a bounded SlashEvent for the given reporter.
+    /// History is capped at [`MAX_SLASH_HISTORY`] entries; oldest entries are
+    /// evicted in ring-buffer order. Each slash also emits a `slash_ev` event
+    /// so off-chain observers can still track the full history.
+    pub fn slash_reporter(
+        env: Env,
+        admin: Address,
+        reporter: Address,
+        reason: soroban_sdk::Symbol,
+    ) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+
+        let meta_key = DataKey::SlashHistoryMeta(reporter.clone());
+        let mut meta: SlashHistoryMeta =
+            env.storage()
+                .instance()
+                .get(&meta_key)
+                .unwrap_or(SlashHistoryMeta {
+                    next_index: 0,
+                    count: 0,
+                });
+
+        let slot = meta.next_index;
+        let event = SlashEvent {
+            at: env.ledger().sequence(),
+            slashed_by: admin.clone(),
+            reason,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashEvent(reporter.clone(), slot), &event);
+
+        meta.count = (meta.count + 1).min(MAX_SLASH_HISTORY);
+        meta.next_index = (slot + 1) % MAX_SLASH_HISTORY;
+        env.storage().instance().set(&meta_key, &meta);
+
+        // Emit event so off-chain observers can track the full history
+        env.events()
+            .publish((symbol_short!("slash_ev"), reporter.clone()), event);
+    }
+
+    /// Returns the number of slash events currently stored for a reporter.
+    /// This is capped at [`MAX_SLASH_HISTORY`].
+    pub fn get_slash_count(env: Env, reporter: Address) -> u32 {
+        let meta: SlashHistoryMeta = env
+            .storage()
+            .instance()
+            .get(&DataKey::SlashHistoryMeta(reporter))
+            .unwrap_or(SlashHistoryMeta {
+                next_index: 0,
+                count: 0,
+            });
+        meta.count
+    }
+
+    /// Returns the slash event stored at a specific ring-buffer slot index for
+    /// a reporter. Panics if the slot has never been written.
+    pub fn get_slash_event_at(env: Env, reporter: Address, index: u32) -> SlashEvent {
+        assert!(index < MAX_SLASH_HISTORY, "Slash event index out of bounds");
+        env.storage()
+            .instance()
+            .get(&DataKey::SlashEvent(reporter, index))
+            .expect("Slash event slot is empty")
     }
 }
 
@@ -434,5 +533,149 @@ mod tests {
             let max = recent.iter().copied().max().unwrap();
             assert!(twap >= min && twap <= max);
         }
+    }
+
+    // ── Slash history tests ──────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Only admin can perform this action")]
+    fn non_admin_cannot_slash() {
+        let (env, contract_id, _, reporter) = setup();
+        let non_admin = Address::generate(&env);
+        SimpleOracleClient::new(&env, &contract_id).slash_reporter(
+            &non_admin,
+            &reporter,
+            &symbol_short!("bad"),
+        );
+    }
+
+    #[test]
+    fn slash_records_event_and_emits() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
+        env.ledger().set_sequence_number(42);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+
+        assert_eq!(client.get_slash_count(&reporter), 1);
+
+        let event = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(event.at, 42);
+        assert_eq!(event.slashed_by, admin);
+        assert_eq!(event.reason, symbol_short!("bad"));
+    }
+
+    #[test]
+    fn slash_count_is_zero_for_unslashed_reporter() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        assert_eq!(client.get_slash_count(&reporter), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Slash event slot is empty")]
+    fn get_slash_event_at_panics_on_empty_slot() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        client.get_slash_event_at(&reporter, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Slash event index out of bounds")]
+    fn get_slash_event_at_panics_on_out_of_bounds_index() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        client.get_slash_event_at(&reporter, &MAX_SLASH_HISTORY);
+    }
+
+    #[test]
+    fn slash_history_is_bounded_at_max() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+
+        // Record MAX_SLASH_HISTORY + 5 events
+        for seq in 1..=MAX_SLASH_HISTORY + 5 {
+            env.ledger().set_sequence_number(seq);
+            client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+        }
+
+        // Count must never exceed MAX_SLASH_HISTORY
+        assert_eq!(client.get_slash_count(&reporter), MAX_SLASH_HISTORY);
+
+        // The ring-buffer metadata should show next_index has wrapped
+        env.as_contract(&contract_id, || {
+            let meta: SlashHistoryMeta = env
+                .storage()
+                .instance()
+                .get(&DataKey::SlashHistoryMeta(reporter.clone()))
+                .unwrap();
+            assert_eq!(meta.count, MAX_SLASH_HISTORY);
+            assert_eq!(meta.next_index, 5 % MAX_SLASH_HISTORY);
+        });
+    }
+
+    #[test]
+    fn slash_eviction_overwrites_oldest_entry() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+
+        // Write exactly MAX_SLASH_HISTORY events at known ledger sequences
+        for seq in 1..=MAX_SLASH_HISTORY {
+            env.ledger().set_sequence_number(seq);
+            client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+        }
+
+        // Record the event at slot 0 (should be seq=1)
+        let first = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(first.at, 1);
+
+        // Write one more — it should overwrite slot 0
+        env.ledger().set_sequence_number(MAX_SLASH_HISTORY + 1);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("old"));
+        let overwritten = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(overwritten.at, MAX_SLASH_HISTORY + 1);
+        assert_eq!(overwritten.reason, symbol_short!("old"));
+    }
+
+    #[test]
+    fn slash_events_use_different_reasons() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
+        env.ledger().set_sequence_number(1);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("price"));
+        env.ledger().set_sequence_number(2);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("spam"));
+
+        assert_eq!(client.get_slash_count(&reporter), 2);
+        assert_eq!(
+            client.get_slash_event_at(&reporter, &0).reason,
+            symbol_short!("price")
+        );
+        assert_eq!(
+            client.get_slash_event_at(&reporter, &1).reason,
+            symbol_short!("spam")
+        );
+    }
+
+    #[test]
+    fn slash_emits_event_for_off_chain_observers() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
+        env.ledger().set_sequence_number(10);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("fraud"));
+
+        // Verify the slash was recorded
+        assert_eq!(client.get_slash_count(&reporter), 1);
+
+        // Verify the event data is correct
+        let event = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(event.at, 10);
+        assert_eq!(event.slashed_by, admin);
+        assert_eq!(event.reason, symbol_short!("fraud"));
     }
 }

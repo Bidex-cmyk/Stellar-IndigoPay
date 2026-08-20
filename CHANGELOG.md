@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### Features
+
+* **contracts:** bounded slash history with ring-buffer eviction for oracle reporter accountability (closes #672)
+  - Add `SlashEvent` struct and per-reporter `SlashHistoryMeta` ring buffer to `SimpleOracle`
+  - New admin-only `slash_reporter(admin, reporter, reason)` entry point records a timestamped slash event
+  - History capped at `MAX_SLASH_HISTORY = 20` — oldest entries are evicted in ring-buffer order to prevent unbounded storage growth
+  - New read-only `get_slash_count(reporter)` and `get_slash_event_at(reporter, index)` view functions
+  - Each slash emits a `slash_ev` event so off-chain observers retain full history visibility
+  - 10 new unit tests covering bound enforcement, eviction, access control, and event correctness
+  - All 30 oracle contract tests pass; clippy and rustfmt clean
+
 ### Performance
 
 * **frontend:** isolate LiveDonationTicker component to eliminate 3.5s page-wide re-render cycle
