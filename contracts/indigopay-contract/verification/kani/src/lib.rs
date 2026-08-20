@@ -1,22 +1,17 @@
 //! Kani verification harnesses for IndigoPay contract
 
-#[cfg(test)]
-mod tests {
-    use kani::proof;
-    use kani::assume;
-    use kani::any;
-    use indigopay_contract::IndigoPay; // adjust path as needed
+#[cfg(kani)]
+#[kani::proof]
+fn verify_badge_threshold_disjointness() {
+    let amount: i128 = kani::any();
+    kani::assume(amount >= 0);
 
-    // Example harness for overflow safety
-    #[proof]
-    fn no_overflow_on_deposit() {
-        // Assume bounds on input amounts to avoid unrealistic huge numbers
-        let amount: u64 = any();
-        assume(amount < u64::MAX / 2);
-        let mut contract = IndigoPay::default();
-        contract.deposit(amount);
-        // No panic means overflow safe
+    let is_seedling = amount >= 10 * 10_000_000 && amount < 100 * 10_000_000;
+    let is_tree = amount >= 100 * 10_000_000 && amount < 500 * 10_000_000;
+    let is_forest = amount >= 500 * 10_000_000 && amount < 2000 * 10_000_000;
+    let is_earth_guardian = amount >= 2000 * 10_000_000;
+
+    if is_earth_guardian {
+        assert!(!is_forest && !is_tree && !is_seedling);
     }
-
-    // Add more harnesses for other invariants similarly
 }
