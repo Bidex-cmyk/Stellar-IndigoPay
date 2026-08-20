@@ -69,4 +69,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # The backend image only carries the ./backend build context, so the
+    # OpenAPI drift test (backend/__tests__/scripts/openapi-drift.test.js)
+    # cannot reach the repo-root scripts/ and docs/ trees otherwise. The
+    # script resolves these relative to its own location (/scripts), so it
+    # also expects docs/ and backend/src as siblings at the container root.
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./docs:/docs:ro
+      - ./backend/src:/backend/src:ro
     command: sh -c "npm run db:migrate && npm test"
