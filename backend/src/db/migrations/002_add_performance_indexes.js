@@ -1,5 +1,15 @@
 "use strict";
 
+/**
+ * 002_add_performance_indexes
+ *
+ * NOTE: indexes are created with plain (non-CONCURRENTLY) statements because
+ * the migration runner applies every migration inside a transaction block,
+ * and `CREATE INDEX CONCURRENTLY` cannot run inside a transaction. Concurrent
+ * application across replicas is already prevented by the migration advisory
+ * lock (issue #640), so the lock-free guarantee CONCURRENTLY exists for is
+ * provided by the runner itself.
+ */
 module.exports = {
   name: "002_add_performance_indexes",
 
