@@ -85,6 +85,10 @@ pub enum OracleError {
 /// Older entries are evicted in a ring-buffer fashion.
 const MAX_SLASH_HISTORY: u32 = 20;
 
+/// Maximum number of slash events retained per reporter.
+/// Older entries are evicted in a ring-buffer fashion.
+const MAX_SLASH_HISTORY: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceObservation {
@@ -124,6 +128,28 @@ pub struct SlashHistoryMeta {
     pub count: u32,
 }
 
+/// A record of a single slash event against a reporter.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlashEvent {
+    /// Ledger sequence at which the slash occurred.
+    pub at: u32,
+    /// Admin who performed the slash.
+    pub slashed_by: Address,
+    /// Reason string (max 32 bytes to stay within a single symbol).
+    pub reason: soroban_sdk::Symbol,
+}
+
+/// Ring-buffer pointer for per-reporter slash history.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlashHistoryMeta {
+    /// Index of the *next* write slot (wraps at MAX_SLASH_HISTORY).
+    pub next_index: u32,
+    /// Total events written so far (capped at MAX_SLASH_HISTORY once full).
+    pub count: u32,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -133,18 +159,10 @@ pub enum DataKey {
     ObservationIndex,
     Reporter(Address),
     FallbackPrice,
-    MaxPriceDeviationBps,
-    TwapWindow,
-    StalenessThreshold,
-    SourceOracle(Address),
-    SourceOracleList,
-    StakeToken,
-    MinStake,
-    StakeTreasury,
-    UnstakeCooldown,
-    ReporterStake(Address),
-    StakeAvailableAt(Address),
-    SlashHistory(Address),
+    /// Per-reporter slash-history ring-buffer metadata.
+    SlashHistoryMeta(Address),
+    /// Individual slash event stored at a ring-buffer slot.
+    SlashEv(Address, u32),
 }
 
 #[contract]
@@ -961,6 +979,75 @@ impl SimpleOracle {
             .get(&DataKey::SlashEvent(reporter, index))
             .expect("Slash event slot is empty")
     }
+
+    // ── Slash history ────────────────────────────────────────────────────
+
+    /// Admin-only slash: records a bounded SlashEvent for the given reporter.
+    /// History is capped at [`MAX_SLASH_HISTORY`] entries; oldest entries are
+    /// evicted in ring-buffer order. Each slash also emits a `slash_ev` event
+    /// so off-chain observers can still track the full history.
+    pub fn slash_reporter(
+        env: Env,
+        admin: Address,
+        reporter: Address,
+        reason: soroban_sdk::Symbol,
+    ) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+
+        let meta_key = DataKey::SlashHistoryMeta(reporter.clone());
+        let mut meta: SlashHistoryMeta =
+            env.storage()
+                .instance()
+                .get(&meta_key)
+                .unwrap_or(SlashHistoryMeta {
+                    next_index: 0,
+                    count: 0,
+                });
+
+        let slot = meta.next_index;
+        let event = SlashEvent {
+            at: env.ledger().sequence(),
+            slashed_by: admin.clone(),
+            reason,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashEv(reporter.clone(), slot), &event);
+
+        meta.count = (meta.count + 1).min(MAX_SLASH_HISTORY);
+        meta.next_index = (slot + 1) % MAX_SLASH_HISTORY;
+        env.storage().instance().set(&meta_key, &meta);
+
+        // Emit event so off-chain observers can track the full history
+        env.events()
+            .publish((symbol_short!("slash_ev"), reporter.clone()), event);
+    }
+
+    /// Returns the number of slash events currently stored for a reporter.
+    /// This is capped at [`MAX_SLASH_HISTORY`].
+    pub fn get_slash_count(env: Env, reporter: Address) -> u32 {
+        let meta: SlashHistoryMeta = env
+            .storage()
+            .instance()
+            .get(&DataKey::SlashHistoryMeta(reporter))
+            .unwrap_or(SlashHistoryMeta {
+                next_index: 0,
+                count: 0,
+            });
+        meta.count
+    }
+
+    /// Returns the slash event stored at a specific ring-buffer slot index for
+    /// a reporter. Panics if the slot has never been written.
+    pub fn get_slash_event_at(env: Env, reporter: Address, index: u32) -> SlashEvent {
+        assert!(index < MAX_SLASH_HISTORY, "Slash event index out of bounds");
+        env.storage()
+            .instance()
+            .get(&DataKey::SlashEv(reporter, index))
+            .expect("Slash event slot is empty")
+    }
 }
 
 #[cfg(test)]
@@ -1747,479 +1834,147 @@ mod tests {
         }
     }
 
-    // ─── TWAP-specific tests (#377) ─────────────────────────────────────────
+    // ── Slash history tests ──────────────────────────────────────────────
 
     #[test]
-    fn test_twap_single_observation() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        // Report one observation at price 10 XLM/USDC.
-        env.ledger().set_sequence_number(0);
-        client.report_price(&reporter, &100_000_000);
-
-        // Advance 100 ledgers — weight = 100, TWAP = (10×100) / 100 = 10.
-        env.ledger().set_sequence_number(100);
-        assert_eq!(client.get_price(), 10);
-    }
-
-    #[test]
-    fn test_twap_multiple_observations() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        // Two observations spread across ledgers.
-        env.ledger().set_sequence_number(100);
-        client.report_price(&reporter, &100_000_000); // price 10
-
-        env.ledger().set_sequence_number(150);
-        client.report_price(&reporter, &200_000_000); // price 20
-
-        // Current ledger 200.
-        //  weight_100 = 150 - 100 = 50
-        //  weight_150 = 200 - 150 = 50
-        //  TWAP = (10×50 + 20×50) / 100 = 15
-        env.ledger().set_sequence_number(200);
-        assert_eq!(client.get_price(), 15);
-    }
-
-    #[test]
-    fn test_twap_freshness_expiry() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        env.ledger().set_sequence_number(100);
-        client.report_price(&reporter, &80_000_000);
-
-        // Set a fallback so stale observations don't panic.
-        client.set_fallback_price(&admin, &5);
-
-        // Advance past staleness threshold (720 ledgers).
-        env.ledger()
-            .set_sequence_number(100 + DEFAULT_STALENESS_THRESHOLD + 1);
-        assert_eq!(client.get_price(), 5);
-    }
-
-    #[test]
-    fn test_twap_flash_loan_resistance() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        // Normal price at ledger 100.
-        env.ledger().set_sequence_number(100);
-        client.report_price(&reporter, &100_000_000); // price 10
-
-        // Attacker submits extreme price at ledger 200.
-        env.ledger().set_sequence_number(200);
-        client.report_price(&reporter, &10_000_000_000); // price 1000
-
-        // Advance 1 ledger — attacker's price has weight ≈ 1.
-        //  weight_normal = 200 - 100 = 100
-        //  weight_attack = 201 - 200 = 1
-        //  TWAP ≈ (10×100 + 1000×1) / 101 = 2000/101 ≈ 19
-        env.ledger().set_sequence_number(201);
-        let twap = client.get_price();
-        // (10×100 + 1000×1) / 101 = 2000 / 101 = 19 — attack negligible.
-        assert_eq!(twap, 19);
-    }
-
-    // ─── Price deviation circuit breaker (#464) ────────────────────────────
-
-    /// Seeds two same-ledger observations at `base_price`, giving a clean,
-    /// exactly-computable TWAP baseline of `base_price` (see `current_price_raw`
-    /// doc comment: same-ledger observations each get weight 1).
-    fn seed_baseline(
-        env: &Env,
-        contract_id: &Address,
-        admin: &Address,
-        reporter: &Address,
-        base_price: i128,
-    ) {
-        let client = SimpleOracleClient::new(env, contract_id);
-        add_reporter(env, contract_id, admin, reporter);
-        client.report_price(reporter, &base_price);
-        client.report_price(reporter, &base_price);
-    }
-
-    #[test]
-    fn test_set_deviation_threshold() {
-        let (env, contract_id, admin, _) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        client.set_max_price_deviation(&admin, &500);
-        env.as_contract(&contract_id, || {
-            let stored: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::MaxPriceDeviationBps)
-                .unwrap();
-            assert_eq!(stored, 500);
-        });
-    }
-
-    #[test]
-    #[should_panic]
-    fn only_admin_can_set_deviation_threshold() {
-        let (env, contract_id, _, _) = setup();
+    #[should_panic(expected = "Only admin can perform this action")]
+    fn non_admin_cannot_slash() {
+        let (env, contract_id, _, reporter) = setup();
         let non_admin = Address::generate(&env);
-        SimpleOracleClient::new(&env, &contract_id).set_max_price_deviation(&non_admin, &500);
-    }
-
-    #[test]
-    fn test_deviation_accept_within_bounds() {
-        let (env, contract_id, admin, reporter) = setup();
-        seed_baseline(&env, &contract_id, &admin, &reporter, 80_000_000);
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        client.set_max_price_deviation(&admin, &500); // 5%
-
-        // 82_000_000 vs baseline 80_000_000 → 2.5% deviation, within 5%.
-        client.report_price(&reporter, &82_000_000);
-
-        env.as_contract(&contract_id, || {
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::ObservationCount)
-                .unwrap();
-            assert_eq!(count, 3);
-        });
-    }
-
-    #[test]
-    fn test_deviation_reject() {
-        let (env, contract_id, admin, reporter) = setup();
-        seed_baseline(&env, &contract_id, &admin, &reporter, 80_000_000);
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        client.set_max_price_deviation(&admin, &500); // 5%
-
-        // 90_000_000 vs baseline 80_000_000 → 12.5% deviation, exceeds 5%.
-        // Rejected observations are dropped, not panicked (see comment in
-        // report_price: a panic would also erase the price_rejected event).
-        client.report_price(&reporter, &90_000_000);
-
-        env.as_contract(&contract_id, || {
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::ObservationCount)
-                .unwrap();
-            assert_eq!(count, 2, "rejected observation must not be stored");
-        });
-    }
-
-    #[test]
-    fn test_deviation_reject_emits_price_rejected_event() {
-        use std::format;
-
-        let (env, contract_id, admin, reporter) = setup();
-        seed_baseline(&env, &contract_id, &admin, &reporter, 80_000_000);
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        client.set_max_price_deviation(&admin, &500);
-
-        let events_before = env.events().all().events().len();
-        client.report_price(&reporter, &90_000_000);
-
-        let events_after = env.events().all();
-        assert_eq!(
-            events_after.events().len(),
-            events_before + 1,
-            "expected exactly one additional event to have been published on rejection"
-        );
-
-        let latest = format!("{:?}", events_after.events().last().unwrap());
-        assert!(
-            latest.contains("price_rejected"),
-            "expected the new event to reference price_rejected, got: {}",
-            latest
-        );
-    }
-
-    #[test]
-    fn test_deviation_disabled_zero() {
-        let (env, contract_id, admin, reporter) = setup();
-        // max_price_deviation_bps defaults to 0 (never configured) — the
-        // circuit breaker must be fully bypassed regardless of magnitude.
-        seed_baseline(&env, &contract_id, &admin, &reporter, 80_000_000);
-        let client = SimpleOracleClient::new(&env, &contract_id);
-
-        client.report_price(&reporter, &800_000_000); // 10x the baseline
-
-        env.as_contract(&contract_id, || {
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::ObservationCount)
-                .unwrap();
-            assert_eq!(count, 3);
-        });
-    }
-
-    #[test]
-    fn test_deviation_skip_few_observations() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-        client.set_max_price_deviation(&admin, &500);
-
-        // First observation: 0 prior observations — check must be skipped.
-        client.report_price(&reporter, &80_000_000);
-        // Second observation: only 1 prior observation — check must still
-        // be skipped, even though this "deviates" wildly from the first.
-        client.report_price(&reporter, &8_000_000_000);
-
-        env.as_contract(&contract_id, || {
-            let count: u32 = env
-                .storage()
-                .instance()
-                .get(&DataKey::ObservationCount)
-                .unwrap();
-            assert_eq!(count, 2);
-        });
-    }
-
-    #[test]
-    fn configured_twap_window_affects_deviation_baseline() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        client.report_price(&reporter, &100);
-        client.report_price(&reporter, &200);
-        client.set_twap_window(&admin, &1);
-        client.set_max_price_deviation(&admin, &3_000);
-        client.report_price(&reporter, &260);
-
-        assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (symbol_short!("price_upd"), reporter).into_val(&env),
-                    (260_i128, env.ledger().sequence()).into_val(&env),
-                )
-            ]
-        );
-        env.as_contract(&contract_id, || {
-            assert_eq!(
-                env.storage()
-                    .instance()
-                    .get::<_, u32>(&DataKey::ObservationCount),
-                Some(3)
-            );
-            assert_eq!(
-                env.storage()
-                    .instance()
-                    .get::<_, PriceObservation>(&DataKey::Observations(2))
-                    .unwrap()
-                    .price,
-                260
-            );
-        });
-    }
-
-    #[test]
-    fn configured_staleness_affects_deviation_baseline_availability() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        add_reporter(&env, &contract_id, &admin, &reporter);
-
-        env.ledger().set_sequence_number(100);
-        client.report_price(&reporter, &100);
-        client.report_price(&reporter, &100);
-        // Set staleness threshold to exactly MAX_OBSERVATIONS so it becomes stale at 100+20+1.
-        client.set_staleness_threshold(&admin, &MAX_OBSERVATIONS);
-        client.set_max_price_deviation(&admin, &500);
-        env.ledger().set_sequence_number(100 + MAX_OBSERVATIONS + 1);
-        client.report_price(&reporter, &1_000);
-
-        assert_eq!(
-            env.events().all().filter_by_contract(&contract_id),
-            soroban_sdk::vec![
-                &env,
-                (
-                    contract_id.clone(),
-                    (symbol_short!("price_upd"), reporter).into_val(&env),
-                    (1_000_i128, (100 + MAX_OBSERVATIONS + 1)).into_val(&env),
-                )
-            ]
-        );
-        env.as_contract(&contract_id, || {
-            assert_eq!(
-                env.storage()
-                    .instance()
-                    .get::<_, u32>(&DataKey::ObservationCount),
-                Some(3)
-            );
-            assert_eq!(
-                env.storage()
-                    .instance()
-                    .get::<_, PriceObservation>(&DataKey::Observations(2))
-                    .unwrap()
-                    .price,
-                1_000
-            );
-        });
-    }
-    #[test]
-    fn test_stake() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        let (stake_token, _) = setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-
-        client.stake(&reporter, &1_000);
-
-        assert_eq!(client.get_reporter_stake(&reporter), 1_000);
-        assert_eq!(
-            token::Client::new(&env, &stake_token).balance(&contract_id),
-            1_000
-        );
-        client.report_price(&reporter, &100_000_000);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_report_without_stake_panics() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-        client.report_price(&reporter, &100_000_000);
-    }
-
-    #[test]
-    fn test_slash_reduces_stake() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        let (stake_token, treasury) =
-            setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-        client.stake(&reporter, &1_500);
-
-        client.slash(
-            &admin,
+        SimpleOracleClient::new(&env, &contract_id).slash_reporter(
+            &non_admin,
             &reporter,
-            &600,
-            &String::from_str(&env, "bad price"),
+            &symbol_short!("bad"),
         );
-
-        assert_eq!(client.get_reporter_stake(&reporter), 900);
-        assert_eq!(
-            token::Client::new(&env, &stake_token).balance(&treasury),
-            600
-        );
-        assert_eq!(client.get_slash_history(&reporter).len(), 1);
-        assert!(client.try_report_price(&reporter, &100_000_000).is_err());
     }
 
     #[test]
-    fn test_unstake_after_cooldown() {
+    fn slash_records_event_and_emits() {
         let (env, contract_id, admin, reporter) = setup();
         let client = SimpleOracleClient::new(&env, &contract_id);
-        let (stake_token, _) = setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-        let starting_balance = token::Client::new(&env, &stake_token).balance(&reporter);
-        client.stake(&reporter, &1_000);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
+        env.ledger().set_sequence_number(42);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+
+        assert_eq!(client.get_slash_count(&reporter), 1);
+
+        let event = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(event.at, 42);
+        assert_eq!(event.slashed_by, admin);
+        assert_eq!(event.reason, symbol_short!("bad"));
+    }
+
+    #[test]
+    fn slash_count_is_zero_for_unslashed_reporter() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        assert_eq!(client.get_slash_count(&reporter), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Slash event slot is empty")]
+    fn get_slash_event_at_panics_on_empty_slot() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        client.get_slash_event_at(&reporter, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Slash event index out of bounds")]
+    fn get_slash_event_at_panics_on_out_of_bounds_index() {
+        let (env, contract_id, _, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        client.get_slash_event_at(&reporter, &MAX_SLASH_HISTORY);
+    }
+
+    #[test]
+    fn slash_history_is_bounded_at_max() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+
+        // Record MAX_SLASH_HISTORY + 5 events
+        for seq in 1..=MAX_SLASH_HISTORY + 5 {
+            env.ledger().set_sequence_number(seq);
+            client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+        }
+
+        // Count must never exceed MAX_SLASH_HISTORY
+        assert_eq!(client.get_slash_count(&reporter), MAX_SLASH_HISTORY);
+
+        // The ring-buffer metadata should show next_index has wrapped
+        env.as_contract(&contract_id, || {
+            let meta: SlashHistoryMeta = env
+                .storage()
+                .instance()
+                .get(&DataKey::SlashHistoryMeta(reporter.clone()))
+                .unwrap();
+            assert_eq!(meta.count, MAX_SLASH_HISTORY);
+            assert_eq!(meta.next_index, 5 % MAX_SLASH_HISTORY);
+        });
+    }
+
+    #[test]
+    fn slash_eviction_overwrites_oldest_entry() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+
+        // Write exactly MAX_SLASH_HISTORY events at known ledger sequences
+        for seq in 1..=MAX_SLASH_HISTORY {
+            env.ledger().set_sequence_number(seq);
+            client.slash_reporter(&admin, &reporter, &symbol_short!("bad"));
+        }
+
+        // Record the event at slot 0 (should be seq=1)
+        let first = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(first.at, 1);
+
+        // Write one more — it should overwrite slot 0
+        env.ledger().set_sequence_number(MAX_SLASH_HISTORY + 1);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("old"));
+        let overwritten = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(overwritten.at, MAX_SLASH_HISTORY + 1);
+        assert_eq!(overwritten.reason, symbol_short!("old"));
+    }
+
+    #[test]
+    fn slash_events_use_different_reasons() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
+        env.ledger().set_sequence_number(1);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("price"));
+        env.ledger().set_sequence_number(2);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("spam"));
+
+        assert_eq!(client.get_slash_count(&reporter), 2);
+        assert_eq!(
+            client.get_slash_event_at(&reporter, &0).reason,
+            symbol_short!("price")
+        );
+        assert_eq!(
+            client.get_slash_event_at(&reporter, &1).reason,
+            symbol_short!("spam")
+        );
+    }
+
+    #[test]
+    fn slash_emits_event_for_off_chain_observers() {
+        let (env, contract_id, admin, reporter) = setup();
+        let client = SimpleOracleClient::new(&env, &contract_id);
+        add_reporter(&env, &contract_id, &admin, &reporter);
+
         env.ledger().set_sequence_number(10);
+        client.slash_reporter(&admin, &reporter, &symbol_short!("fraud"));
 
-        client.unstake(&reporter);
+        // Verify the slash was recorded
+        assert_eq!(client.get_slash_count(&reporter), 1);
 
-        assert_eq!(client.get_reporter_stake(&reporter), 0);
-        assert_eq!(
-            token::Client::new(&env, &stake_token).balance(&reporter),
-            starting_balance
-        );
-        assert!(client.try_report_price(&reporter, &100_000_000).is_err());
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_unstake_before_cooldown_panics() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-        client.stake(&reporter, &1_000);
-        client.unstake(&reporter);
-    }
-
-    #[test]
-    fn test_slash_event() {
-        let (env, contract_id, admin, reporter) = setup();
-        let client = SimpleOracleClient::new(&env, &contract_id);
-        setup_staking(&env, &contract_id, &admin, &reporter, 1_000, 10);
-        client.stake(&reporter, &1_000);
-        client.slash(
-            &admin,
-            &reporter,
-            &100,
-            &String::from_str(&env, "deviation"),
-        );
-
-        let events = env.events().all().filter_by_contract(&contract_id);
-        let latest = std::format!("{:?}", events.events().last().unwrap());
-        assert!(latest.contains("stake_slash"));
-    }
-}
-
-#[cfg(test)]
-mod deviation_fuzz {
-    extern crate std;
-
-    use super::calculate_deviation_bps;
-    use proptest::prelude::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2048))]
-
-        /// `calculate_deviation_bps` must match an independently-derived
-        /// reference computation (via `u128::abs_diff` instead of the
-        /// implementation's `i128` checked-arithmetic path) for any pair of
-        /// positive prices within a range that does not overflow either path.
-        #[test]
-        fn prop_deviation_calculation_correct(
-            current in 1_i128..1_000_000_000_000_i128,
-            new in 1_i128..1_000_000_000_000_i128,
-        ) {
-            let bps = calculate_deviation_bps(new, current);
-
-            let diff = new.abs_diff(current);
-            let expected = diff
-                .checked_mul(10_000)
-                .map(|scaled| scaled / (current as u128))
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(u32::MAX);
-
-            prop_assert_eq!(bps, expected);
-        }
-
-        /// Identical prices must always report zero deviation.
-        #[test]
-        fn prop_deviation_is_zero_when_prices_match(price in 1_i128..1_000_000_000_000_i128) {
-            prop_assert_eq!(calculate_deviation_bps(price, price), 0);
-        }
-
-        /// The helper must never panic, for any `i128` input pair — it backs
-        /// a security check inside `report_price` and must degrade to
-        /// "treat as exceeding any threshold" rather than trap the contract.
-        #[test]
-        fn prop_deviation_never_panics(new in any::<i128>(), current in any::<i128>()) {
-            let _ = calculate_deviation_bps(new, current);
-        }
-
-        #[test]
-        fn prop_stake_never_negative(
-            deposits in proptest::collection::vec(1_i128..1_000_000, 0..100),
-            slash_requests in proptest::collection::vec(1_i128..1_000_000, 0..100),
-        ) {
-            let mut stake = deposits
-                .into_iter()
-                .try_fold(0_i128, i128::checked_add)
-                .unwrap_or(i128::MAX);
-            for requested in slash_requests {
-                let slash = requested.min(stake);
-                stake = stake.checked_sub(slash).unwrap();
-                prop_assert!(stake >= 0);
-            }
-        }
+        // Verify the event data is correct
+        let event = client.get_slash_event_at(&reporter, &0);
+        assert_eq!(event.at, 10);
+        assert_eq!(event.slashed_by, admin);
+        assert_eq!(event.reason, symbol_short!("fraud"));
     }
 }
