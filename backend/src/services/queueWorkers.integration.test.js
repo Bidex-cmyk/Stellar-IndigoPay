@@ -179,6 +179,31 @@ describe("Queue workers smoke (compose Postgres)", () => {
     );
   }
 
+  // The compose job runs the full production migration set, where donations
+  // and donation_matches correctly reference projects. Keep the smoke test
+  // self-contained by creating the project row that each generated test ID
+  // needs before inserting child records.
+  async function ensureProject(projectId) {
+    await adminPool.query(
+      `INSERT INTO projects (
+         id, name, description, category, location, wallet_address,
+         goal_xlm, raised_xlm, donor_count, co2_offset_kg, status,
+         verified, on_chain_verified, tags
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, 0, 'active', false, false, $8)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        projectId,
+        "Queue smoke project",
+        "Project used by the queue worker smoke test",
+        "Other",
+        "Test",
+        makePublicKey("P"),
+        "100.0000000",
+        [],
+      ],
+    );
+  }
+
   /**
    * Wait until pg-boss has no pending jobs for the two queues under test.
    * Completed jobs may still sit in pgboss.job (state 'completed') until they
@@ -208,6 +233,7 @@ describe("Queue workers smoke (compose Postgres)", () => {
     const projectId = randomUUID();
 
     await cleanDb();
+    await ensureProject(projectId);
     await adminPool.query(
       `INSERT INTO donations (id, project_id, donor_address, amount_xlm, amount, currency, transaction_hash)
        VALUES ($1, $2, $3, $4, $5, 'XLM', $6)`,
@@ -247,6 +273,7 @@ describe("Queue workers smoke (compose Postgres)", () => {
     const txHash = "b".repeat(64);
 
     await cleanDb();
+    await ensureProject(projectId);
     await adminPool.query(
       `INSERT INTO donation_matches (id, project_id, matcher_address, cap_xlm, multiplier, expires_at, matched_xlm)
        VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '1 hour', $6)`,
@@ -290,6 +317,7 @@ describe("Queue workers smoke (compose Postgres)", () => {
     // Total attempted match is 100.
     // If cap is enforced, only 50 should be matched.
     await cleanDb();
+    await ensureProject(projectId);
     await adminPool.query(
       `INSERT INTO donation_matches (id, project_id, matcher_address, cap_xlm, multiplier, expires_at, matched_xlm)
        VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '1 hour', $6)`,
