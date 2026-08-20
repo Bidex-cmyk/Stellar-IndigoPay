@@ -230,9 +230,10 @@ describe("Queue workers smoke (compose Postgres)", () => {
     if (!ready) return console.warn("skipping – database unavailable");
 
     const matchQueue = require("./matchQueue");
-    // matchQueue is already started by previous tests, but it's safe to start again or just rely on it.
-    await matchQueue.start();
-    stops.push(matchQueue.stop);
+    // matchQueue is already started by the previous test. Re-starting it here
+    // would overwrite the module's `boss` reference and orphan the earlier
+    // pg-boss instance, whose polling workers then leak past teardown (the
+    // "require after teardown" / force-exited-worker noise in CI).
 
     const projectId = randomUUID();
     const matcher = makePublicKey("C");
