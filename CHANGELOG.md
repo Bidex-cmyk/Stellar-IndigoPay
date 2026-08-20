@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 * **contracts:** `donate_vested` pays the integer-division remainder with the final installment and `cancel_vesting` refunds it exactly, so no dust is stranded in contract custody and the project is fully paid (closes #665)
+* **contracts:** `cancel_vesting` marks the schedule as fully consumed so repeated cancels and post-cancellation claims are rejected, preventing double payouts from custody
 * **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
 * **contracts:** require admin-gated attestation for `donate_asset` path-payment donations — the recorded `xlm_amount` must be co-signed by an admin-appointed attester, so a caller can no longer claim an arbitrary amount (closes #712)
 * **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)

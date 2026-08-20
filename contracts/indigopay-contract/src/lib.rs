@@ -8213,6 +8213,10 @@ impl IndigoPayContract {
         // Mark the schedule as cancelled with completed_at so it can be
         // cleaned up after the grace period. The schedule is NOT removed
         // immediately — see `cleanup_vesting_schedule`.
+        // Also mark all installments as released so neither a repeat
+        // `cancel_vesting` call nor a later `claim_vested_installment`
+        // call can pay out the same unvested balance again.
+        schedule.installments_released = schedule.installment_count;
         schedule.completed_at = env.ledger().sequence();
         env.storage().instance().set(&schedule_key, &schedule);
 
@@ -12593,6 +12597,72 @@ mod tests {
         // Refund = 1 remaining installment + the 1-stroop remainder.
         assert_eq!(asset.balance(&donor), 33_333_334);
         assert_eq!(asset.balance(&id), 0); // exact refund — no dust left in custody
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    #[should_panic]
+    fn test_vesting_cancel_twice_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "double-cancel");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Double Cancel"),
+            &project_wallet,
+            &100u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 100_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id =
+            client.donate_vested(&token, &donor, &pid, &total, &10u32, &720u32, &0u32);
+        // First cancel succeeds and refunds the unvested balance.
+        client.cancel_vesting(&donor, &schedule_id);
+        // Second cancel must be rejected — the schedule is already consumed.
+        client.cancel_vesting(&donor, &schedule_id);
+    }
+    #[cfg(feature = "vesting")]
+    #[test]
+    #[should_panic]
+    fn test_vesting_claim_after_cancel_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &id);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+        let project_wallet = Address::generate(&env);
+        let pid = String::from_str(&env, "claim-after-cancel");
+        client.register_project(
+            &admin,
+            &pid,
+            &String::from_str(&env, "Claim After Cancel"),
+            &project_wallet,
+            &100u32,
+        );
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let total: i128 = 100_000_000;
+        StellarAssetClient::new(&env, &token).mint(&donor, &total);
+        let schedule_id = client.donate_vested(&token, &donor, &pid, &total, &3u32, &50u32, &0u32);
+        // Cancel mid-schedule, then fast-forward past the next interval.
+        client.cancel_vesting(&donor, &schedule_id);
+        env.ledger().set_sequence_number(200);
+        // Claim must be rejected — funds were already refunded to the donor.
+        client.claim_vested_installment(&donor, &schedule_id);
     }
     #[cfg(feature = "vesting")]
     #[test]
