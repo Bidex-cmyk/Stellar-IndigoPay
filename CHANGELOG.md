@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **backend:** Serialize migration runs across replicas with a Postgres advisory lock so concurrent boot (k8s HPA min 2) can never apply the same migrations twice (closes #640). Also fixes the migration chain so a fresh database can be bootstrapped end-to-end: `002` drops `CREATE INDEX CONCURRENTLY` (invalid inside the runner's transaction), a new `010_admin_audit_log` migration creates the audit table `011` depends on, `011`'s hash-chain backfill is repaired (uuid/json casts, missing CTE column, `pgcrypto` extension), `021` uses drop-then-add for its CHECK constraint, and `027` guards its example `credits` migration against a missing table. Adds a testcontainers concurrency test proving two concurrent `runMigrations()` calls apply each migration exactly once.
+- **backend:** Enforce match pool caps atomically at match-time using row-level locks, preventing pools from overspending under concurrent load.
+
 ### Added
+- **backend:** make projection rebuild atomic by replaying into staging tables and swapping within a transaction; concurrent reads now observe either the complete previous or complete new state, never empty/partial projections (closes #639)
 - **backend/security:** Load guardian and recurring keeper signing seeds from managed secret files, add signer provider tests, and document signer rotation workflow.
 
 * **extension:** audit `chrome.storage` usage, confirm no plaintext wallet secrets are persisted (signing is delegated entirely to Freighter), and add CI secret-scan to enforce this going forward (closes #656)
+* **mobile:** audit auth client and confirm it uses a distinct nonce-based wallet session that is unaffected by the admin JWT `httpOnly` cookie rotation changes (closes #655)
 
 - **backend:** deduplicate push device tokens per user+device with a sliding expiry window (default 180 days) refreshed on register, soft-invalidate on unregister/expiry, and purge expired tokens from push sends (closes #717)
 - **frontend:** announce `DonateForm` validation errors to screen readers via `aria-live="assertive"` region (GrantFox GF-a11y-donate-form)
@@ -155,6 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+* **backend/security:** harden AI project summaries against prompt injection and unsafe output — frame project content in typed delimiters with system-prompt guardrails, and strip/truncate markdown and HTML from generated summaries before storage and serving (closes #684)
 * **contracts/escrow-contract:** harden milestone payout arithmetic against integer overflow (closes #616)
   - `release_milestone`, `claim_milestone`, `resolve_milestone_dispute`, and `compute_remaining_funds` now compute `amount * percentage / 100` with `checked_mul` / `checked_div` via a shared `compute_proportional_payout` helper instead of raw `*` / `/`
   - `job.amount` is fully client-controlled at `create_job` (any positive `i128`); because the contracts workspace release profile previously shipped with `overflow-checks = false`, a near-`i128::MAX` amount silently wrapped to an incorrect (small) payout while the full amount stayed locked
