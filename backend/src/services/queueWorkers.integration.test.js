@@ -175,7 +175,7 @@ describe("Queue workers smoke (compose Postgres)", () => {
 
   async function cleanDb() {
     await adminPool.query(
-      "TRUNCATE donations, profiles, donation_matches",
+      "TRUNCATE donations, profiles, donation_matches CASCADE",
     );
   }
 
