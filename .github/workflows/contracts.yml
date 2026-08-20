@@ -126,18 +126,21 @@ jobs:
         with:
           workspaces: contracts/indigopay-contract/verification/kani
 
-      - name: Cache cargo-kani binary
+      - name: Cache Kani dependencies
         id: kani-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cargo-kani
-          key: cargo-kani-${{ runner.os }}-${{ hashFiles('.github/workflows/contracts.yml') }}
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.cargo/bin/kani
+            ~/.kani
+          key: kani-verifier-${{ runner.os }}-${{ hashFiles('.github/workflows/contracts.yml') }}
 
-      - name: Install cargo-kani
+      - name: Install Kani Verifier
         if: steps.kani-cache.outputs.cache-hit != 'true'
         run: |
-          # Try installing from crates.io first; fall back to the repository if needed
-          cargo install cargo-kani || cargo install --git https://github.com/model-checking/kani --bin cargo-kani --locked
+          cargo install --locked kani-verifier
+          cargo kani setup
 
       - name: Run Kani verification
         run: cargo kani --release
