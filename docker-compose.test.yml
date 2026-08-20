@@ -69,13 +69,4 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      # backend/__tests__/scripts/openapi-drift.test.js reaches the repo root
-      # via ../../../scripts/... and scripts/validate-openapi.js resolves
-      # SPEC_PATH (docs/api/openapi.yaml) and BACKEND_SRC_DIR (backend/src)
-      # relative to that mounted location. The backend image is built from
-      # backend/ only, so bind-mount the repo-root files it needs.
-      - ./scripts:/scripts:ro
-      - ./docs:/docs:ro
-      - ./backend/src:/backend/src:ro
-    command: npm test
+    command: sh -c "npm run db:migrate && npm test"
