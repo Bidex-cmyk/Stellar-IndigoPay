@@ -72,6 +72,21 @@ pub enum BadgeTier {
     EarthGuardian, // ≥ 2000 XLM
 }
 // ─── Data structures ──────────────────────────────────────────────────────────
+
+/// Rank-order of a badge tier. `None` is lowest, `EarthGuardian` highest.
+/// Used to decide which Impact NFTs a donor is eligible to mint: any tier
+/// at or below the donor's current badge may be minted (once each).
+#[cfg(feature = "impact")]
+fn badge_rank(badge: &BadgeTier) -> u32 {
+    match badge {
+        BadgeTier::None => 0,
+        BadgeTier::Seedling => 1,
+        BadgeTier::Tree => 2,
+        BadgeTier::Forest => 3,
+        BadgeTier::EarthGuardian => 4,
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -5733,8 +5748,8 @@ impl IndigoPayContract {
         if stats.badge == BadgeTier::None {
             panic!("No badge tier reached yet");
         }
-        if stats.badge != tier {
-            panic!("Tier does not match donor's current badge");
+        if badge_rank(&tier) > badge_rank(&stats.badge) {
+            panic!("Tier exceeds donor's current badge");
         }
         let key = DataKey::ImpactNFT(donor.clone(), tier.clone());
         if env.storage().instance().has(&key) {
@@ -8521,6 +8536,64 @@ mod tests {
         assert_eq!(calculate_badge(1999 * STROOP), BadgeTier::Forest);
         assert_eq!(calculate_badge(2000 * STROOP), BadgeTier::EarthGuardian);
         assert_eq!(calculate_badge(100000 * STROOP), BadgeTier::EarthGuardian);
+    }
+
+    /// Inject a specific badge tier directly into donor stats, bypassing the
+    /// donation path so `mint_impact_nft` tier progression can be tested in
+    /// isolation.
+    fn set_donor_badge(env: &Env, cid: &soroban_sdk::Address, donor: &Address, badge: BadgeTier) {
+        env.as_contract(cid, || {
+            env.storage().instance().set(
+                &DataKey::DonorStats(donor.clone()),
+                &DonorStats {
+                    total_donated: 0,
+                    donation_count: 0,
+                    badge,
+                    co2_offset_grams: 0,
+                },
+            );
+        });
+    }
+
+    /// A donor who has progressed to a higher badge must still be able to mint
+    /// every previously-earned lower tier, once each (closes #674).
+    #[test]
+    fn test_mint_impact_nft_allows_previously_earned_lower_tiers() {
+        let (env, cid, client, _admin, _pid) = setup();
+        let donor = Address::generate(&env);
+        set_donor_badge(&env, &cid, &donor, BadgeTier::Forest);
+
+        client.mint_impact_nft(&donor, &BadgeTier::Seedling);
+        client.mint_impact_nft(&donor, &BadgeTier::Tree);
+        client.mint_impact_nft(&donor, &BadgeTier::Forest);
+
+        assert!(client.has_nft(&donor, &BadgeTier::Seedling));
+        assert!(client.has_nft(&donor, &BadgeTier::Tree));
+        assert!(client.has_nft(&donor, &BadgeTier::Forest));
+        assert!(!client.has_nft(&donor, &BadgeTier::EarthGuardian));
+    }
+
+    /// Minting a tier above the donor's current badge must still be rejected.
+    #[test]
+    #[should_panic]
+    fn test_mint_impact_nft_rejects_tier_above_current_badge() {
+        let (env, cid, client, _admin, _pid) = setup();
+        let donor = Address::generate(&env);
+        set_donor_badge(&env, &cid, &donor, BadgeTier::Tree);
+
+        client.mint_impact_nft(&donor, &BadgeTier::Forest);
+    }
+
+    /// Each tier may be minted exactly once.
+    #[test]
+    #[should_panic]
+    fn test_mint_impact_nft_rejects_duplicate_tier() {
+        let (env, cid, client, _admin, _pid) = setup();
+        let donor = Address::generate(&env);
+        set_donor_badge(&env, &cid, &donor, BadgeTier::Forest);
+
+        client.mint_impact_nft(&donor, &BadgeTier::Tree);
+        client.mint_impact_nft(&donor, &BadgeTier::Tree);
     }
     #[test]
     fn test_batch_register_projects() {
