@@ -60,6 +60,29 @@ async function getApiStatusSnapshot(): Promise<BreakerSnapshot> {
   return getBreakerSnapshot(hostOf(apiBase));
 }
 
+/**
+ * A user-initiated "Retry" click needs to actually attempt an API call —
+ * merely re-reading the breaker snapshot (GET_API_STATUS) can't advance a
+ * tripped breaker, since only apiFetch() itself acquires a half-open trial
+ * slot. This issues the cheapest real request against the configured API
+ * (a 1-row project lookup) so a live backend can close the breaker, then
+ * returns the resulting snapshot. Failures are swallowed the same way
+ * lookupProject() swallows them — the caller only cares about the
+ * resulting breaker state, not this request's outcome.
+ */
+async function retryApiConnection(): Promise<BreakerSnapshot> {
+  const apiBase = await getApiBase();
+  try {
+    await apiFetch(`${apiBase}/api/projects?limit=1`, {
+      headers: { Accept: "application/json" },
+    });
+  } catch {
+    // Expected when still degraded or the breaker rejects the trial —
+    // the snapshot below reports the resulting state either way.
+  }
+  return getBreakerSnapshot(hostOf(apiBase));
+}
+
 // ── initialization ───────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -118,6 +141,16 @@ chrome.runtime.onMessage.addListener(
     // ── GET_API_STATUS: current circuit breaker snapshot (for popup) ─
     if (message.type === "GET_API_STATUS") {
       getApiStatusSnapshot()
+        .then((status) => sendResponse({ status }))
+        .catch(() => sendResponse({ status: null }));
+      return true;
+    }
+
+    // ── RETRY_API_CONNECTION: user-initiated retry from the popup ────
+    // Unlike GET_API_STATUS, this issues a real request so a degraded
+    // breaker gets an actual chance to recover (see retryApiConnection).
+    if (message.type === "RETRY_API_CONNECTION") {
+      retryApiConnection()
         .then((status) => sendResponse({ status }))
         .catch(() => sendResponse({ status: null }));
       return true;

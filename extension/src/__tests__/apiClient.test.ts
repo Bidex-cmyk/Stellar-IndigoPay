@@ -436,6 +436,37 @@ describe("circuit breaker state machine", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  test("concurrent failures don't lose updates to consecutiveFailures (no undercounting race)", async () => {
+    // Regression test: acquireBreakerPermission/recordBreakerFailure each do
+    // a read-modify-write against the same per-host record. Without
+    // serializing those read-modify-writes, N concurrent failing calls can
+    // all read consecutiveFailures=0 and all write back 1, undercounting
+    // the threshold and leaving the breaker CLOSED when it should trip.
+    const mockFetch = jest.fn().mockResolvedValue(mockResponse(500));
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    const breakerConfig = { failureThreshold: 5, cooldownMs: 30_000 };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig }),
+      ),
+    );
+
+    // Every concurrent call actually reached the network (breaker was
+    // CLOSED for all of them at dispatch time).
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+    for (const result of results) {
+      expect(result.status).toBe("fulfilled");
+    }
+
+    // All 5 failures must be counted — none lost to a lost-update race —
+    // so the breaker trips exactly at the configured threshold.
+    const snapshot = await getBreakerSnapshot(API_HOST);
+    expect(snapshot.state).toBe("open");
+    expect(snapshot.consecutiveFailures).toBe(5);
+  });
+
   test("a successful call resets the failure counter", async () => {
     const mockFetch = jest
       .fn()

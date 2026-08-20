@@ -298,13 +298,19 @@ function applyApiStatus(state: BreakerState | null): void {
 }
 
 function requestApiStatus(userInitiated = false): void {
-  chrome.runtime.sendMessage({ type: 'GET_API_STATUS' }, (response) => {
+  // A user-initiated Retry click needs to actually attempt an API call —
+  // merely re-reading the breaker snapshot can't advance a tripped
+  // breaker, since only a real request acquires a half-open trial slot
+  // (see background.ts's retryApiConnection). Passive init/polling only
+  // needs the snapshot.
+  const messageType = userInitiated ? 'RETRY_API_CONNECTION' : 'GET_API_STATUS';
+  chrome.runtime.sendMessage({ type: messageType }, (response) => {
     if (chrome.runtime.lastError) return;
     const status = response?.status ?? null;
     applyApiStatus(status?.state ?? null);
 
-    // A user-initiated Retry click while the breaker is still open re-runs
-    // the exact same query and (until the cooldown elapses) gets the exact
+    // A user-initiated Retry click while the breaker is still open (the
+    // trial above failed, or no trial slot was available) gets the exact
     // same "open" state back, which on its own looks like the click did
     // nothing. Tell them how much longer the cooldown has so the control
     // gives visible feedback instead of silently re-rendering.

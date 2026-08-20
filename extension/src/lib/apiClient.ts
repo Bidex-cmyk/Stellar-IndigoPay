@@ -320,7 +320,32 @@ type BreakerPermission =
   | { allowed: true; trial: boolean }
   | { allowed: false; retryAfterMs: number };
 
+// acquireBreakerPermission / recordBreakerSuccess / recordBreakerFailure /
+// releaseBreakerTrialSlot all do a read-modify-write against the same
+// per-host record (in-memory cache + chrome.storage.local). Concurrent
+// apiFetch() calls to the same host can interleave at the `await` points
+// inside those reads and writes, which would otherwise lose updates (e.g.
+// two concurrent failures both reading consecutiveFailures=n and both
+// writing n+1, undercounting the threshold). Route every mutation through
+// a per-host promise chain so each read-modify-write completes before the
+// next one starts.
+const breakerUpdateQueues = new Map<string, Promise<unknown>>();
+
+function withBreakerLock<T>(host: string, task: () => Promise<T>): Promise<T> {
+  const previous = breakerUpdateQueues.get(host) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  breakerUpdateQueues.set(host, next.then(() => undefined, () => undefined));
+  return next;
+}
+
 async function acquireBreakerPermission(
+  host: string,
+  config: CircuitBreakerConfig,
+): Promise<BreakerPermission> {
+  return withBreakerLock(host, () => acquireBreakerPermissionLocked(host, config));
+}
+
+async function acquireBreakerPermissionLocked(
   host: string,
   config: CircuitBreakerConfig,
 ): Promise<BreakerPermission> {
@@ -379,16 +404,26 @@ async function acquireBreakerPermission(
  */
 async function releaseBreakerTrialSlot(host: string, wasTrial: boolean): Promise<void> {
   if (!wasTrial) return;
-  const record = await loadBreakerRecord(host);
-  if (record.state !== "half_open") return;
-  await saveBreakerRecord(host, {
-    ...record,
-    halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
-    updatedAt: Date.now(),
+  await withBreakerLock(host, async () => {
+    const record = await loadBreakerRecord(host);
+    if (record.state !== "half_open") return;
+    await saveBreakerRecord(host, {
+      ...record,
+      halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
+      updatedAt: Date.now(),
+    });
   });
 }
 
 async function recordBreakerSuccess(
+  host: string,
+  config: CircuitBreakerConfig,
+  wasTrial: boolean,
+): Promise<BreakerRecord> {
+  return withBreakerLock(host, () => recordBreakerSuccessLocked(host, config, wasTrial));
+}
+
+async function recordBreakerSuccessLocked(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
@@ -419,6 +454,17 @@ async function recordBreakerSuccess(
 }
 
 async function recordBreakerFailure(
+  host: string,
+  config: CircuitBreakerConfig,
+  wasTrial: boolean,
+  forceOpenCooldownMs?: number,
+): Promise<BreakerRecord> {
+  return withBreakerLock(host, () =>
+    recordBreakerFailureLocked(host, config, wasTrial, forceOpenCooldownMs),
+  );
+}
+
+async function recordBreakerFailureLocked(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
