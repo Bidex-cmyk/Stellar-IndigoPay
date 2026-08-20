@@ -6,4 +6,4 @@ edition = "2021"
 [workspace]
 
 [dev-dependencies]
-kani = "0.49"
+kani = "0.0.1"
