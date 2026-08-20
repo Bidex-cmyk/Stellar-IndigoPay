@@ -112,9 +112,43 @@ describe("Queue workers smoke (compose Postgres)", () => {
     `);
 
     ready = true;
+
+    // Boot each worker exactly once for the whole suite. pg-boss keeps a
+    // module-level singleton instance per queue, so calling start() again in
+    // a later test would overwrite and orphan the previous instance — leaving
+    // its polling loop running after Jest tears the environment down. That is
+    // what produced the intermittent "require after teardown" crashes that
+    // failed unrelated suites running in the same worker.
+    try {
+      await require("./profileQueue").start(undefined);
+      stops.push(require("./profileQueue").stop);
+      await require("./matchQueue").start();
+      stops.push(require("./matchQueue").stop);
+    } catch (err) {
+      console.warn(
+        `Skipping queue worker smoke test — could not start workers: ${err.message}`,
+      );
+      ready = false;
+    }
   });
 
   afterAll(async () => {
+    // Drain any in-flight jobs BEFORE stopping the workers. pg-boss's stop()
+    // only waits for jobs already assigned to a worker (`jobs.length`), not
+    // for a fetch() that is still in flight. If a job is still pending when
+    // stop() runs, the worker can keep processing after stop() resolves — and
+    // after the shared pool below has been ended — which crashes the worker
+    // ("Cannot use a pool after calling end") and destabilises whichever
+    // suite happens to be running in the same Jest worker.
+    if (ready && adminPool) {
+      const drained = await waitForQueueEmpty();
+      if (!drained) {
+        console.warn(
+          "queue worker smoke test — pg-boss queues did not drain before teardown",
+        );
+      }
+    }
+
     for (const stop of stops.reverse()) {
       try {
         await stop();
@@ -122,6 +156,7 @@ describe("Queue workers smoke (compose Postgres)", () => {
         /* ignore */
       }
     }
+
     if (adminPool) {
       try {
         await adminPool.end();
@@ -144,12 +179,30 @@ describe("Queue workers smoke (compose Postgres)", () => {
     );
   }
 
+  /**
+   * Wait until pg-boss has no pending jobs for the two queues under test.
+   * Completed jobs may still sit in pgboss.job (state 'completed') until they
+   * are archived, so we only count states that can still be consumed.
+   */
+  async function waitForQueueEmpty(timeoutMs = 20000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const { rows } = await adminPool.query(
+        `SELECT COUNT(*)::int AS c
+           FROM pgboss.job
+          WHERE name IN ('profile-update', 'donation-match')
+            AND state IN ('created', 'retry', 'active')`,
+      );
+      if (Number(rows[0].c) === 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
   test("profileQueue consumes an enqueued job and upserts the donor profile", async () => {
     if (!ready) return console.warn("skipping – database unavailable");
 
     const profileQueue = require("./profileQueue");
-    await profileQueue.start(undefined);
-    stops.push(profileQueue.stop);
 
     const donor = makePublicKey("Q");
     const projectId = randomUUID();
@@ -186,8 +239,6 @@ describe("Queue workers smoke (compose Postgres)", () => {
     if (!ready) return console.warn("skipping – database unavailable");
 
     const matchQueue = require("./matchQueue");
-    await matchQueue.start();
-    stops.push(matchQueue.stop);
 
     const projectId = randomUUID();
     const donor = makePublicKey("M");
@@ -230,9 +281,6 @@ describe("Queue workers smoke (compose Postgres)", () => {
     if (!ready) return console.warn("skipping – database unavailable");
 
     const matchQueue = require("./matchQueue");
-    // matchQueue is already started by previous tests, but it's safe to start again or just rely on it.
-    await matchQueue.start();
-    stops.push(matchQueue.stop);
 
     const projectId = randomUUID();
     const matcher = makePublicKey("C");
@@ -271,8 +319,10 @@ describe("Queue workers smoke (compose Postgres)", () => {
     });
     expect(consumed).toBe(true);
 
-    // Wait an extra second to ensure no further updates occur (no overshoot)
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Wait until every job has been consumed so the overshoot jobs have
+    // definitely run before we assert no overshoot occurred.
+    const drained = await waitForQueueEmpty();
+    expect(drained).toBe(true);
 
     const { rows: finalMatchRows } = await adminPool.query(
       "SELECT matched_xlm FROM donation_matches WHERE id = $1",

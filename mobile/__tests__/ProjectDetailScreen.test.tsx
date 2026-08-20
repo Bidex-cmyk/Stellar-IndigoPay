@@ -75,7 +75,6 @@ function renderWithTheme(ui: React.ReactElement) {
 
 describe("ProjectDetailScreen – Follow button", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
     jest.clearAllMocks();
     // Default: project loads successfully
     (axios.get as jest.Mock).mockResolvedValue({
@@ -90,10 +89,6 @@ describe("ProjectDetailScreen – Follow button", () => {
     // Default: follow/unfollow succeed
     (notifUtils.followProject as jest.Mock).mockResolvedValue(true);
     (notifUtils.unfollowProject as jest.Mock).mockResolvedValue(true);
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
   });
 
   // ── Initial render ───────────────────────────────────────────────────────────
