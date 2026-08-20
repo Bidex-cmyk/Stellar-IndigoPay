@@ -350,15 +350,42 @@ async function acquireBreakerPermission(
   }
 
   // half_open
-  if (record.halfOpenInFlight < config.halfOpenMaxConcurrent) {
+  // A trial slot whose outcome never got recorded (the caller cancelled,
+  // or the MV3 worker was killed mid-trial) must not hold the breaker in
+  // half_open forever — treat it as expired once it's older than the
+  // cooldown. `apiFetch` also proactively releases its own slot on every
+  // cancellation path (see `releaseBreakerTrialSlot`); this is the
+  // defense-in-depth path for a slot that never got released at all.
+  const trialIsStale = now - record.updatedAt > effectiveCooldownMs(record, config);
+  const inFlight = trialIsStale ? 0 : record.halfOpenInFlight;
+  if (inFlight < config.halfOpenMaxConcurrent) {
     await saveBreakerRecord(host, {
       ...record,
-      halfOpenInFlight: record.halfOpenInFlight + 1,
+      halfOpenInFlight: inFlight + 1,
       updatedAt: now,
     });
     return { allowed: true, trial: true };
   }
   return { allowed: false, retryAfterMs: effectiveCooldownMs(record, config) };
+}
+
+/**
+ * Release a half-open trial slot without recording a success or failure —
+ * used on every cancellation path in `apiFetch` so an aborted trial can't
+ * permanently occupy `halfOpenMaxConcurrent` and wedge the breaker open
+ * forever (see `acquireBreakerPermission`'s stale-trial fallback for the
+ * complementary defense against a slot that never gets released at all,
+ * e.g. a hard worker kill).
+ */
+async function releaseBreakerTrialSlot(host: string, wasTrial: boolean): Promise<void> {
+  if (!wasTrial) return;
+  const record = await loadBreakerRecord(host);
+  if (record.state !== "half_open") return;
+  await saveBreakerRecord(host, {
+    ...record,
+    halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
+    updatedAt: Date.now(),
+  });
 }
 
 async function recordBreakerSuccess(
@@ -405,7 +432,13 @@ async function recordBreakerFailure(
       ...record,
       state: "open",
       openedAt: now,
-      cooldownOverrideMs: forceOpenCooldownMs ?? null,
+      // Always record the cooldown actually in effect for this open
+      // period — a Retry-After hint overrides it, otherwise it's this
+      // call's own (possibly non-default) config.cooldownMs. This is what
+      // getBreakerSnapshot() reads, so a caller using a custom breaker
+      // config gets an accurate retryAfterMs instead of one computed from
+      // DEFAULT_CIRCUIT_BREAKER_CONFIG.
+      cooldownOverrideMs: forceOpenCooldownMs ?? config.cooldownMs,
       halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
       halfOpenSuccesses: 0,
       updatedAt: now,
@@ -420,7 +453,7 @@ async function recordBreakerFailure(
       state: "open",
       consecutiveFailures: failures,
       openedAt: now,
-      cooldownOverrideMs: forceOpenCooldownMs ?? null,
+      cooldownOverrideMs: forceOpenCooldownMs ?? config.cooldownMs,
       halfOpenInFlight: 0,
       halfOpenSuccesses: 0,
       updatedAt: now,
@@ -439,6 +472,12 @@ export async function getBreakerSnapshot(host: string): Promise<BreakerSnapshot>
   let retryAfterMs = 0;
   if (record.state === "open") {
     const openedAt = record.openedAt ?? now;
+    // recordBreakerFailure() always stamps cooldownOverrideMs with the
+    // cooldown actually in effect (a Retry-After hint, or that call's own
+    // possibly-custom config.cooldownMs) whenever it opens the breaker, so
+    // this only falls back to the default for a record that somehow
+    // predates that (there is no such live path today, but this keeps the
+    // snapshot correct rather than silently wrong if one appears).
     const cooldownMs = record.cooldownOverrideMs ?? DEFAULT_CIRCUIT_BREAKER_CONFIG.cooldownMs;
     retryAfterMs = Math.max(0, cooldownMs - (now - openedAt));
   }
@@ -579,6 +618,7 @@ export async function apiFetch(
 
   for (let attempt = 1; attempt <= retryConfig.maxAttempts; attempt++) {
     if (externalSignal?.aborted) {
+      await releaseBreakerTrialSlot(host, isTrial);
       throw new ApiClientError("Request cancelled", {
         category: "aborted",
         retryable: false,
@@ -627,6 +667,7 @@ export async function apiFetch(
       return res;
     } catch (err) {
       if (externalSignal?.aborted) {
+        await releaseBreakerTrialSlot(host, isTrial);
         throw new ApiClientError("Request cancelled", {
           category: "aborted",
           retryable: false,
@@ -639,6 +680,7 @@ export async function apiFetch(
       if (isAbortError(err)) {
         // Aborted, but not by our external signal or our own timeout
         // controller in a way we recognize — treat as non-retryable.
+        await releaseBreakerTrialSlot(host, isTrial);
         throw new ApiClientError("Request aborted", {
           category: "aborted",
           retryable: false,

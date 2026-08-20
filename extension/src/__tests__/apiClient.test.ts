@@ -484,4 +484,136 @@ describe("apiFetch cancellation", () => {
     expect(snapshot.state).toBe("closed");
     expect(snapshot.consecutiveFailures).toBe(0);
   });
+
+  test("cancelling a HALF_OPEN trial releases its slot instead of wedging the breaker open forever", async () => {
+    const clock = installClock();
+    const mockFetch = jest.fn();
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    const breakerConfig = {
+      failureThreshold: 1,
+      cooldownMs: 30_000,
+      halfOpenMaxConcurrent: 1,
+      halfOpenSuccessThreshold: 1,
+    };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    // Trip the breaker, then advance past its cooldown so the next call is
+    // eligible to become a HALF_OPEN trial.
+    mockFetch.mockResolvedValueOnce(mockResponse(500));
+    await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    clock.advance(30_001);
+
+    // This call acquires the (only) trial slot, then is cancelled before
+    // the fetch ever completes — the pre-fetch abort check in the retry
+    // loop fires immediately since the signal is already aborted.
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig, signal: controller.signal }),
+    ).rejects.toMatchObject({ category: "aborted" });
+    // The cancelled trial must not have touched the network or counted as
+    // a breaker outcome.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // Without releasing the slot, halfOpenInFlight would still be 1 here
+    // (== halfOpenMaxConcurrent) and every subsequent call would
+    // short-circuit as breaker_open forever, with no time-based recovery.
+    // A normal (non-cancelled) call must be able to claim the trial slot.
+    mockFetch.mockResolvedValueOnce(mockResponse(200));
+    const res = await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    expect(res.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect((await getBreakerSnapshot(API_HOST)).state).toBe("closed");
+  });
+
+  test("an abort that isn't the external signal (e.g. our own recognized-but-unmatched abort) also releases the trial slot", async () => {
+    const clock = installClock();
+    const mockFetch = jest.fn();
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    const breakerConfig = {
+      failureThreshold: 1,
+      cooldownMs: 30_000,
+      halfOpenMaxConcurrent: 1,
+      halfOpenSuccessThreshold: 1,
+    };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    mockFetch.mockResolvedValueOnce(mockResponse(500));
+    await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    clock.advance(30_001);
+
+    // fetch() itself rejects with an AbortError that isn't our timeout
+    // controller and isn't the (absent) external signal.
+    mockFetch.mockRejectedValueOnce(new DOMException("aborted elsewhere", "AbortError"));
+    await expect(
+      apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig }),
+    ).rejects.toMatchObject({ category: "aborted" });
+
+    mockFetch.mockResolvedValueOnce(mockResponse(200));
+    const res = await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    expect(res.ok).toBe(true);
+  });
+
+  test("a HALF_OPEN trial whose outcome is never recorded (e.g. a hard worker kill) self-heals once stale, even without an explicit cancellation", async () => {
+    const clock = installClock();
+    const store = installStorageMock();
+    const mockFetch = jest.fn();
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    const breakerConfig = {
+      failureThreshold: 1,
+      cooldownMs: 30_000,
+      halfOpenMaxConcurrent: 1,
+      halfOpenSuccessThreshold: 1,
+    };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    mockFetch.mockResolvedValueOnce(mockResponse(500));
+    await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    clock.advance(30_001);
+
+    // Directly poke storage into a half_open state whose trial was never
+    // resolved — simulating a service worker that was killed mid-request,
+    // after acquireBreakerPermission() persisted the trial slot but before
+    // any outcome was ever recorded. __resetApiClientRuntimeStateForTests
+    // simulates the worker restart (in-memory cache gone, storage intact).
+    const key = `indigopay:apiClient:v1:breaker:${API_HOST}`;
+    const stuck = store.get(key) as Record<string, unknown>;
+    store.set(key, { ...stuck, state: "half_open", halfOpenInFlight: 1, updatedAt: Date.now() });
+    __resetApiClientRuntimeStateForTests();
+
+    // Immediately after the "restart", the trial is still fresh — blocked.
+    await expect(
+      apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig }),
+    ).rejects.toMatchObject({ breakerOpen: true });
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the original trip
+
+    // Once the stuck trial is older than the cooldown, it's treated as
+    // expired and a fresh trial is allowed through.
+    clock.advance(30_001);
+    mockFetch.mockResolvedValueOnce(mockResponse(200));
+    const res = await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    expect(res.ok).toBe(true);
+    expect((await getBreakerSnapshot(API_HOST)).state).toBe("closed");
+  });
+});
+
+// ── breaker snapshot / custom cooldown ──────────────────────────────────
+
+describe("getBreakerSnapshot with a custom breaker cooldownMs", () => {
+  test("retryAfterMs reflects a custom cooldownMs, not the global default", async () => {
+    const clock = installClock();
+    const mockFetch = jest.fn().mockResolvedValueOnce(mockResponse(500));
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    // Deliberately different from DEFAULT_CIRCUIT_BREAKER_CONFIG.cooldownMs
+    // (30_000) so a snapshot computed from the default would be wrong.
+    const breakerConfig = { failureThreshold: 1, cooldownMs: 90_000 };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    clock.advance(10_000);
+
+    const snapshot = await getBreakerSnapshot(API_HOST);
+    expect(snapshot.state).toBe("open");
+    expect(snapshot.retryAfterMs).toBe(80_000); // 90_000 - 10_000, not 20_000
+  });
 });

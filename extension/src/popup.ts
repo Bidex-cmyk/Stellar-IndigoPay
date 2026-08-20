@@ -297,10 +297,27 @@ function applyApiStatus(state: BreakerState | null): void {
   renderApiStatusBanner(elements, state);
 }
 
-function requestApiStatus(): void {
+function requestApiStatus(userInitiated = false): void {
   chrome.runtime.sendMessage({ type: 'GET_API_STATUS' }, (response) => {
     if (chrome.runtime.lastError) return;
-    applyApiStatus(response?.status?.state ?? null);
+    const status = response?.status ?? null;
+    applyApiStatus(status?.state ?? null);
+
+    // A user-initiated Retry click while the breaker is still open re-runs
+    // the exact same query and (until the cooldown elapses) gets the exact
+    // same "open" state back, which on its own looks like the click did
+    // nothing. Tell them how much longer the cooldown has so the control
+    // gives visible feedback instead of silently re-rendering.
+    if (userInitiated && status?.state === 'open') {
+      const elements = getApiStatusBannerElements();
+      if (elements) {
+        const seconds = Math.max(0, Math.ceil((status.retryAfterMs ?? 0) / 1000));
+        elements.text.textContent =
+          seconds > 0
+            ? `Still degraded — retrying automatically in ${seconds}s. Donations still work.`
+            : 'API degraded — retrying automatically. Donations still work.';
+      }
+    }
   });
 }
 
@@ -316,7 +333,7 @@ function initApiStatusBanner(): void {
   });
 
   const elements = getApiStatusBannerElements();
-  elements?.retryButton?.addEventListener('click', () => requestApiStatus());
+  elements?.retryButton?.addEventListener('click', () => requestApiStatus(true));
 }
 
 function debounce(fn: () => void, ms: number) {
