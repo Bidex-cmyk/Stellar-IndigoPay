@@ -37,3 +37,20 @@ Thumbs.db
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+# Storybook static build output
+frontend/storybook-static/
+
+# Tarpaulin test coverage outputs
+coverage/
+**/coverage/
+
+# Pitch-video toolchain and intermediates
+.pitch-venv/
+.pitch-work/
+assets/pitch-preview/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+

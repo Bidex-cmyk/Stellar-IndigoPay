@@ -4,7 +4,7 @@
  * Renders the donor's active and inactive on-chain recurring donations.
  * Allows trustless cancellation on-chain.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   buildCancelRecurringTransaction,
   submitTransaction,
@@ -12,7 +12,7 @@ import {
   CONTRACT_ID,
 } from "@/lib/stellar";
 import { signTransactionWithWallet } from "@/lib/wallet";
-import { formatXLM } from "@/utils/format";
+import { formatXLM, formatDate } from "@/utils/format";
 
 interface RecurringDonation {
   id: string;
@@ -41,7 +41,7 @@ export default function RecurringDonationsTab({ publicKey }: RecurringDonationsT
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [cancelStatus, setCancelStatus] = useState<string | null>(null);
 
-  const fetchRecurring = async () => {
+  const fetchRecurring = useCallback(async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/api/donations/recurring/${publicKey}`);
@@ -56,13 +56,13 @@ export default function RecurringDonationsTab({ publicKey }: RecurringDonationsT
     } finally {
       setLoading(false);
     }
-  };
+  }, [publicKey]);
 
   useEffect(() => {
     if (publicKey) {
       fetchRecurring();
     }
-  }, [publicKey]);
+  }, [publicKey, fetchRecurring]);
 
   const handleCancel = async (recurringId: number) => {
     if (!CONTRACT_ID) {
@@ -167,7 +167,7 @@ export default function RecurringDonationsTab({ publicKey }: RecurringDonationsT
                   </p>
                   {sub.active && (
                     <p className="text-xs text-gray-500 font-body">
-                      Next execution: {new Date(sub.nextExecutionAt).toLocaleDateString()} (approx)
+                      Next execution: {formatDate(sub.nextExecutionAt)} (approx)
                     </p>
                   )}
                 </div>

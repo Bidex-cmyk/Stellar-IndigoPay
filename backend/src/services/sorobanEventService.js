@@ -35,6 +35,13 @@ const { registry } = require("./metrics");
 const { Counter, Gauge } = require("prom-client");
 const { v4: uuid } = require("uuid");
 const { computeBadges } = require("./store");
+const {
+  insertEvent,
+  processEvent,
+  co2OffsetForDonation,
+  toScaledInt,
+  scaledToDecimalString,
+} = require("./projectionEngine");
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -76,10 +83,6 @@ let pollingTimer = null;
 let currentCursor = "";
 /** @type {import("socket.io").Server|null} */
 let io = null;
-/** @type {Set<string>} Tracks processed pagingTokens within the current session. */
-const processedTokens = new Set();
-/** Max size of the in-memory dedup set before it's pruned. */
-const MAX_DEDUP_SET_SIZE = 100_000;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,21 +163,76 @@ function extractValue(evt) {
 }
 
 /**
- * Prune the in-memory dedup set once it exceeds the max size.
- * Removes the oldest half of entries (Set iteration is insertion-ordered).
+ * Check if an event with this pagingToken has already been processed.
+ * Uses the database for durable deduplication across restarts.
+ * @param {string} pagingToken
+ * @param {object} client - Database client for transaction
+ * @returns {Promise<boolean>}
  */
-function pruneDedupSet() {
-  if (processedTokens.size <= MAX_DEDUP_SET_SIZE) return;
-  const toRemove = Math.floor(processedTokens.size / 2);
-  let removed = 0;
-  for (const token of processedTokens) {
-    processedTokens.delete(token);
-    if (++removed >= toRemove) break;
+async function isEventProcessed(pagingToken, client) {
+  if (!pagingToken) return false;
+  try {
+    const result = await client.query(
+      "SELECT 1 FROM soroban_processed_events WHERE paging_token = $1",
+      [pagingToken],
+    );
+    return result.rows.length > 0;
+  } catch (err) {
+    logger.error(
+      { event: "soroban_events_dedup_check_error", err: err.message },
+      "Failed to check event deduplication",
+    );
+    return false;
   }
-  logger.warn(
-    { event: "soroban_events_dedup_pruned", removed },
-    "Dedup set pruned to prevent memory growth",
-  );
+}
+
+/**
+ * Mark an event as processed by inserting its pagingToken into the database.
+ * @param {string} pagingToken
+ * @param {string} eventType
+ * @param {number} ledger
+ * @param {string} txHash
+ * @param {object} client - Database client for transaction
+ */
+async function markEventProcessed(pagingToken, eventType, ledger, txHash, client) {
+  if (!pagingToken) return;
+  try {
+    await client.query(
+      `INSERT INTO soroban_processed_events
+         (paging_token, event_type, ledger_sequence, transaction_hash, processed_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (paging_token) DO NOTHING`,
+      [pagingToken, eventType, ledger, txHash],
+    );
+  } catch (err) {
+    logger.error(
+      { event: "soroban_events_mark_processed_error", err: err.message, pagingToken },
+      "Failed to mark event as processed",
+    );
+  }
+}
+
+/**
+ * Clean up processed events older than 30 days to prevent unbounded growth.
+ * Called periodically from the polling loop.
+ */
+async function cleanupOldProcessedEvents() {
+  try {
+    const result = await pool.query(
+      "DELETE FROM soroban_processed_events WHERE processed_at < NOW() - INTERVAL '30 days'",
+    );
+    if (result.rowCount > 0) {
+      logger.info(
+        { event: "soroban_events_cleanup", deleted: result.rowCount },
+        "Cleaned up old processed events",
+      );
+    }
+  } catch (err) {
+    logger.error(
+      { event: "soroban_events_cleanup_error", err: err.message },
+      "Failed to clean up old processed events",
+    );
+  }
 }
 
 // ── Cursor persistence ──────────────────────────────────────────────────────
@@ -203,10 +261,12 @@ async function loadCursor() {
 /**
  * Persist the cursor to `indexer_state`.
  * @param {string} cursor
+ * @param {object} [client] - Optional database client for transaction
  */
-async function saveCursor(cursor) {
+async function saveCursor(cursor, client) {
+  const db = client || pool;
   try {
-    await pool.query(
+    await db.query(
       `INSERT INTO indexer_state (key, value, updated_at)
        VALUES ('soroban_event_cursor', $1, NOW())
        ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
@@ -230,14 +290,16 @@ async function saveCursor(cursor) {
  * @param {number} [attemptCount]
  */
 async function writeToDLQ(evt, eventType, error, attemptCount = DLQ_MAX_RETRIES) {
+  const pagingToken = evt.pagingToken || null;
   try {
     await pool.query(
       `INSERT INTO soroban_event_dlq
-         (event_type, contract_id, event_data, error_message, error_stack, attempt_count)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+         (event_type, contract_id, paging_token, event_data, error_message, error_stack, attempt_count)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         eventType,
         CONTRACT_ID,
+        pagingToken,
         JSON.stringify(evt),
         error.message || "Unknown error",
         error.stack || null,
@@ -302,7 +364,7 @@ async function handleDonated(evt, topics, value) {
     const num = parseFloat(amount);
     xlmStr = isNaN(num) ? "0" : (num / 10_000_000).toFixed(7);
   }
-  const xlmAmount = parseFloat(xlmStr);
+  const xlmAmount = parseFloat(xlmStr); // display-only; DB/event writes use xlmStr below
 
   // Dedup by txHash — if already recorded, skip.
   // NOTE: evt.txHash is always present for contract-invoked events.
@@ -332,7 +394,7 @@ async function handleDonated(evt, topics, value) {
     await client.query(
       `INSERT INTO donations (id, project_id, donor_address, amount_xlm, amount, currency, transaction_hash, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-      [donationId, projectId, donor, xlmAmount, xlmAmount, "XLM", txHash || "soroban-" + donationId],
+      [donationId, projectId, donor, xlmStr, xlmStr, "XLM", txHash || "soroban-" + donationId],
     );
 
     // Update project raised_xlm + donor_count
@@ -342,7 +404,7 @@ async function handleDonated(evt, topics, value) {
            donor_count = (SELECT COUNT(DISTINCT donor_address) FROM donations WHERE project_id = $2),
            updated_at = NOW()
        WHERE id = $2`,
-      [xlmAmount, projectId],
+      [xlmStr, projectId],
     );
 
     // Update donor profile
@@ -351,9 +413,12 @@ async function handleDonated(evt, topics, value) {
       [donor],
     );
     const prevTotal = profileResult.rows[0]
-      ? parseFloat(profileResult.rows[0].total_donated_xlm || "0")
-      : 0;
-    const newTotal = prevTotal + xlmAmount;
+      ? String(profileResult.rows[0].total_donated_xlm ?? "0")
+      : "0";
+    const newTotal = scaledToDecimalString(
+      toScaledInt(prevTotal, 7) + toScaledInt(xlmStr, 7),
+      7,
+    );
 
     const projectsSupportedResult = await client.query(
       "SELECT COUNT(DISTINCT project_id) AS count FROM donations WHERE donor_address = $1",
@@ -373,10 +438,64 @@ async function handleDonated(evt, topics, value) {
          projects_supported = EXCLUDED.projects_supported,
          badges = EXCLUDED.badges,
          updated_at = NOW()`,
-      [donor, newTotal.toFixed(7), projectsSupported, JSON.stringify(badges)],
+      [donor, newTotal, projectsSupported, JSON.stringify(badges)],
     );
 
     await client.query("COMMIT");
+
+    // ── Event sourcing: append the immutable event, then update projections ──
+    // The `donations`/`projects`/`profiles` writes above remain the
+    // authoritative row store for endpoints that join on `donations`, while
+    // the projection tables become the canonical read models for the
+    // leaderboard, project stats, donor history, and global stats endpoints.
+    // Appending the event makes the Soroban contract the single source of
+    // truth and lets any projection be rebuilt deterministically.
+    try {
+      const projectStats = await pool.query(
+        "SELECT raised_xlm, co2_offset_kg FROM projects WHERE id = $1",
+        [projectId],
+      );
+      const raisedXlm = projectStats.rows[0]
+        ? String(projectStats.rows[0].raised_xlm ?? "0")
+        : "0";
+      const co2Kg = projectStats.rows[0]
+        ? String(projectStats.rows[0].co2_offset_kg ?? "0")
+        : "0";
+      const co2OffsetKg = co2OffsetForDonation(xlmStr, raisedXlm, co2Kg);
+
+      const donationEvent = {
+        event_type: "DonationRecorded",
+        aggregate_id: projectId,
+        event_data: {
+          donorAddress: donor,
+          projectId,
+          amountXLM: xlmStr,
+          amount: xlmStr,
+          currency: "XLM",
+          message: msgHash != null ? `msg#${msgHash}` : null,
+          co2OffsetKg,
+          projectsSupported,
+          transactionHash: txHash || "soroban-" + donationId,
+        },
+        soroban_ledger: ledger,
+        transaction_hash: txHash || "soroban-" + donationId,
+      };
+
+      await insertEvent(donationEvent);
+      await processEvent(donationEvent);
+    } catch (projErr) {
+      // Projection failure must not fail the donation commit (which already
+      // succeeded). The admin can rebuild projections from the event store.
+      logger.error(
+        {
+          event: "soroban_events_projection_error",
+          err: projErr.message,
+          projectId,
+          txHash,
+        },
+        "Failed to update projections from donation event",
+      );
+    }
 
     logger.info(
       {
@@ -896,6 +1015,8 @@ const HANDLERS = {
 /**
  * Fetch a batch of events from the Soroban RPC, dispatch to handlers,
  * and persist the cursor. Called once per poll interval.
+ *
+ * @returns {Promise<void>}
  */
 async function pollEvents() {
   const batchStart = Date.now();
@@ -964,61 +1085,98 @@ async function pollEvents() {
 
     for (const evt of events) {
       const pagingToken = evt.pagingToken || "";
-
-      // Dedup by pagingToken
-      if (pagingToken && processedTokens.has(pagingToken)) {
-        skipped++;
-        continue;
-      }
-
       const eventType = extractEventType(evt);
-      const handler = HANDLERS[eventType] || handleOtherEvent; // eslint-disable-line security/detect-object-injection
+      const ledger = evt.ledger || 0;
+      const txHash = evt.txHash || "";
 
+      // Use a transaction to atomically check dedup, process event, mark as processed, and update cursor
+      const client = await pool.connect();
       try {
-        const topics = extractTopics(evt);
-        const value = extractValue(evt);
-        await handler(evt, topics, value);
+        await client.query("BEGIN");
 
-        if (pagingToken) {
-          processedTokens.add(pagingToken);
+        // DB-level dedup check
+        const alreadyProcessed = await isEventProcessed(pagingToken, client);
+        if (alreadyProcessed) {
+          await client.query("COMMIT");
+          client.release();
+          skipped++;
+          logger.debug(
+            { event: "soroban_events_skipped", pagingToken, eventType },
+            "Event already processed - skipping",
+          );
+          continue;
         }
-        processed++;
-        sorobanEventsProcessedTotal.inc({ event_type: eventType, outcome: "success" });
+
+        const handler = HANDLERS[eventType] || handleOtherEvent; // eslint-disable-line security/detect-object-injection
+
+        try {
+          const topics = extractTopics(evt);
+          const value = extractValue(evt);
+          await handler(evt, topics, value);
+
+          // Mark event as processed in DB
+          await markEventProcessed(pagingToken, eventType, ledger, txHash, client);
+          
+          processed++;
+          sorobanEventsProcessedTotal.inc({ event_type: eventType, outcome: "success" });
+        } catch (err) {
+          failed++;
+          logger.error(
+            {
+              event: "soroban_events_handler_error",
+              eventType,
+              pagingToken,
+              err: err.message,
+            },
+            `Event handler "${eventType}" failed`,
+          );
+          sorobanEventsProcessedTotal.inc({ event_type: eventType, outcome: "failed" });
+
+          // Write to DLQ
+          await writeToDLQ(evt, eventType, err);
+          
+          // Still mark as processed to avoid infinite retry loops
+          await markEventProcessed(pagingToken, eventType, ledger, txHash, client);
+        }
+
+        // Update cursor atomically with event processing
+        if (pagingToken) {
+          newCursor = pagingToken;
+          await saveCursor(newCursor, client);
+        }
+
+        await client.query("COMMIT");
       } catch (err) {
-        failed++;
+        await client.query("ROLLBACK");
         logger.error(
           {
-            event: "soroban_events_handler_error",
-            eventType,
+            event: "soroban_events_transaction_error",
             pagingToken,
             err: err.message,
           },
-          `Event handler "${eventType}" failed`,
+          "Transaction failed for event processing",
         );
+        failed++;
         sorobanEventsProcessedTotal.inc({ event_type: eventType, outcome: "failed" });
-
-        // Write to DLQ
-        await writeToDLQ(evt, eventType, err);
-        // Still mark as processed to avoid infinite retry loops
-        if (pagingToken) {
-          processedTokens.add(pagingToken);
-        }
-      }
-
-      // Track the latest cursor
-      if (pagingToken) {
-        newCursor = pagingToken;
+      } finally {
+        client.release();
       }
     }
 
-    // Persist cursor so restarts don't reprocess
+    // Update in-memory cursor
     if (newCursor && newCursor !== currentCursor) {
       currentCursor = newCursor;
-      await saveCursor(currentCursor);
     }
 
-    // Prune dedup set if needed
-    pruneDedupSet();
+    // Cleanup old processed events (run periodically, not on every batch)
+    if (Math.random() < 0.01) { // ~1% of batches
+      cleanupOldProcessedEvents().catch((err) => {
+        logger.error(
+          { event: "soroban_events_cleanup_failed", err: err.message },
+          "Background cleanup of processed events failed",
+        );
+      });
+    }
 
     // Track lag
     if (events.length > 0) {
@@ -1078,15 +1236,6 @@ async function start(socketIo) {
 
   // Load persisted cursor
   currentCursor = await loadCursor();
-  logger.info(
-    {
-      event: "soroban_events_started",
-      cursor: currentCursor || "(start)",
-      contractId: CONTRACT_ID,
-      pollIntervalMs: POLL_INTERVAL_MS,
-    },
-    "Soroban event service started",
-  );
 
   // Run initial poll immediately
   pollEvents().catch((err) =>
@@ -1114,6 +1263,8 @@ async function start(socketIo) {
 /**
  * Stop the service. Clears the polling interval and resets state.
  * Idempotent — safe to call multiple times.
+ *
+ * @returns {Promise<void>}
  */
 async function stop() {
   if (!isRunning) return;
@@ -1132,23 +1283,19 @@ async function stop() {
     await saveCursor(currentCursor);
   }
 
-  logger.info(
-    {
-      event: "soroban_events_stopped",
-      finalCursor: currentCursor,
-    },
-    "Soroban event service stopped",
-  );
 }
 
 /**
  * Return health status for readiness probes.
+ *
+ * @returns {{isRunning: boolean, currentCursor: string,
+ *   contractId: string|undefined,
+ *   pollIntervalMs: number, timestamp: string}}
  */
 function getStatus() {
   return {
     isRunning,
     currentCursor,
-    processedTokenCount: processedTokens.size,
     contractId: CONTRACT_ID,
     pollIntervalMs: POLL_INTERVAL_MS,
     timestamp: new Date().toISOString(),
@@ -1167,7 +1314,19 @@ async function rescan(fromCursor) {
     currentCursor = fromCursor;
   } else {
     currentCursor = ""; // start from beginning
-    processedTokens.clear();
+    // Clear processed events table for full rescan
+    try {
+      await pool.query("TRUNCATE TABLE soroban_processed_events");
+      logger.info(
+        { event: "soroban_events_rescan_cleared" },
+        "Cleared processed events table for full rescan",
+      );
+    } catch (err) {
+      logger.error(
+        { event: "soroban_events_rescan_clear_error", err: err.message },
+        "Failed to clear processed events table",
+      );
+    }
   }
 
   logger.info(

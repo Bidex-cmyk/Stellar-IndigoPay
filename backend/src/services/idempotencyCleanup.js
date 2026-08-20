@@ -53,7 +53,7 @@ async function start() {
       { event: "idempotency_cleanup_disabled" },
       "[idempotencyCleanup] Cleanup disabled via env",
     );
-    return;
+    return false;
   }
 
   const cronSchedule = cronOverride || DEFAULT_CRON;
@@ -70,6 +70,7 @@ async function start() {
   );
 
   await boss.start();
+  await boss.createQueue(QUEUE);
 
   // Register the cron schedule (idempotent — pg-boss deduplicates by name)
   await boss.schedule(QUEUE, cronSchedule, {}, { tz: "UTC" });

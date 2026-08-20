@@ -35,6 +35,7 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS ai_summary_source_hash  TEXT;
 -- signed POSTs when donation milestones are reached.
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS webhook_url    TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS verification_request_id UUID;
 
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS webhook_url    TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
@@ -90,8 +91,9 @@ CREATE TRIGGER project_search_update
   FOR EACH ROW EXECUTE FUNCTION update_project_search_vector();
 
 -- donations: immutable donation ledger. Each row is a single
--- contribution from donor_address to a project. transaction_hash must be
--- unique (one Stellar payment → one donation). No updated_at column —
+-- contribution from donor_address to a project. Horizon-indexed rows use
+-- transaction_hash plus indexer_operation_id for idempotency, while direct
+-- donation rows remain unique by transaction_hash. No updated_at column —
 -- records are never mutated after insert.
 CREATE TABLE IF NOT EXISTS donations (
   id UUID PRIMARY KEY,
@@ -101,9 +103,18 @@ CREATE TABLE IF NOT EXISTS donations (
   amount NUMERIC(20, 7) NOT NULL,
   currency TEXT NOT NULL DEFAULT 'XLM',
   message TEXT,
-  transaction_hash TEXT NOT NULL UNIQUE,
+  transaction_hash TEXT NOT NULL,
+  indexer_operation_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_donations_tx_operation_id
+  ON donations (transaction_hash, indexer_operation_id)
+  WHERE indexer_operation_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_donations_tx_without_operation_id
+  ON donations (transaction_hash)
+  WHERE indexer_operation_id IS NULL;
 
 -- profiles: aggregated donor stats and public profile for a Stellar wallet.
 -- total_donated_xlm and projects_supported are computed counters kept in
@@ -290,16 +301,98 @@ CREATE INDEX IF NOT EXISTS verification_requests_status_idx
 CREATE INDEX IF NOT EXISTS verification_requests_wallet_idx
   ON verification_requests (wallet_address);
 
--- idempotency_keys: stores the cached HTTP response for each Idempotency-Key
--- header value sent by clients to POST /api/donations.  Rows older than 24 h
--- are pruned by the idempotencyCleanup cron service so that retried requests
--- within the same window always receive the same response body and status code.
-CREATE TABLE IF NOT EXISTS idempotency_keys (
-  key              TEXT        PRIMARY KEY,
-  response_status  INTEGER     NOT NULL,
-  response_body    JSONB       NOT NULL,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 
-CREATE INDEX IF NOT EXISTS idempotency_keys_created_at_idx
-  ON idempotency_keys (created_at);
+-- -- Event sourcing: donation event store + projections (migration 026) ------
+-- Mirrors backend/src/db/migrations/026_donation_events.js so the
+-- testcontainers integration suite has the same schema as production.
+
+CREATE TABLE IF NOT EXISTS donation_events (
+  id               BIGSERIAL PRIMARY KEY,
+  event_type       VARCHAR(50)  NOT NULL,
+  aggregate_id     VARCHAR(100) NOT NULL,
+  event_data       JSONB        NOT NULL,
+  soroban_ledger   INTEGER,
+  transaction_hash VARCHAR(64),
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_donation_events_aggregate ON donation_events(aggregate_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_donation_events_type ON donation_events(event_type, created_at);
+
+CREATE TABLE IF NOT EXISTS projection_donor_leaderboard (
+  donor_address     VARCHAR(56) PRIMARY KEY,
+  total_donated     NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  donation_count    INTEGER         NOT NULL DEFAULT 0,
+  projects_supported INTEGER        NOT NULL DEFAULT 0,
+  total_co2_offset  NUMERIC(20, 4) NOT NULL DEFAULT 0,
+  impact_score      NUMERIC(20, 4) NOT NULL DEFAULT 0,
+  last_donation_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_proj_leaderboard_total ON projection_donor_leaderboard(total_donated DESC);
+CREATE INDEX IF NOT EXISTS idx_proj_leaderboard_impact ON projection_donor_leaderboard(impact_score DESC);
+
+CREATE TABLE IF NOT EXISTS projection_project_stats (
+  project_id        VARCHAR(36)  PRIMARY KEY,
+  raised_xlm        NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  donation_count    INTEGER         NOT NULL DEFAULT 0,
+  donor_count       INTEGER         NOT NULL DEFAULT 0,
+  co2_offset_kg     NUMERIC(20, 4) NOT NULL DEFAULT 0,
+  last_donation_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_proj_project_stats_raised ON projection_project_stats(raised_xlm DESC);
+
+CREATE TABLE IF NOT EXISTS projection_donor_history (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  donor_address    VARCHAR(56) NOT NULL,
+  project_id       VARCHAR(36) NOT NULL,
+  amount_xlm       NUMERIC(20, 7) NOT NULL,
+  amount           NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  currency         VARCHAR(8)  NOT NULL DEFAULT 'XLM',
+  message          TEXT,
+  transaction_hash VARCHAR(64) NOT NULL,
+  co2_offset_kg    NUMERIC(20, 4) NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_proj_history_donor ON projection_donor_history(donor_address, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_proj_history_project ON projection_donor_history(project_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_proj_history_tx ON projection_donor_history(transaction_hash);
+
+CREATE TABLE IF NOT EXISTS projection_global_stats (
+  id               INTEGER PRIMARY KEY DEFAULT 1,
+  total_xlm_raised NUMERIC(20, 7) NOT NULL DEFAULT 0,
+  total_co2_offset_kg NUMERIC(20, 4) NOT NULL DEFAULT 0,
+  total_donations  BIGINT         NOT NULL DEFAULT 0,
+  total_donors     INTEGER        NOT NULL DEFAULT 0,
+  total_projects   INTEGER        NOT NULL DEFAULT 0,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO projection_global_stats (id, total_xlm_raised, total_co2_offset_kg, total_donations, total_donors, total_projects, updated_at)
+VALUES (1, 0, 0, 0, 0, 0, NOW())
+ON CONFLICT (id) DO NOTHING;
+
+-- digest_sends: per-recipient, per-period idempotency guard for the
+-- impact-digest email pipeline (services/digestQueue.js). Mirrors
+-- backend/src/db/migrations/028_digest_sends.js so the testcontainers
+-- integration suite has the same schema as production.
+--
+-- Before sending a digest, the queue claims a row here via
+-- INSERT ... ON CONFLICT (digest_type, donor_address, period_start)
+-- DO NOTHING — whichever invocation wins the race sends; every other
+-- invocation for the same recipient+period skips instead of duplicating
+-- the email. status: 'sending' -> 'sent' | 'failed'.
+CREATE TABLE IF NOT EXISTS digest_sends (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  digest_type    TEXT NOT NULL,
+  donor_address  TEXT NOT NULL,
+  period_start   TIMESTAMPTZ NOT NULL,
+  period_end     TIMESTAMPTZ,
+  status         TEXT NOT NULL DEFAULT 'sending',
+  attempts       INTEGER NOT NULL DEFAULT 1,
+  last_error     TEXT,
+  claimed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at        TIMESTAMPTZ,
+  CONSTRAINT digest_sends_status_check
+    CHECK (status IN ('sending', 'sent', 'failed')),
+  CONSTRAINT digest_sends_unique_recipient_period
+    UNIQUE (digest_type, donor_address, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_digest_sends_status ON digest_sends (digest_type, period_start, status);
