@@ -10,11 +10,12 @@
 # Custom/External Metrics API.
 # Install Prometheus adapter via Helm:
 #   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-#   helm install prometheus-adapter prometheus-community/prometheus-adapter -f k8s/prometheus-adapter-configmap.yaml
+#   helm install prometheus-adapter prometheus-community/prometheus-adapter \
+#     --set rules.existing=prometheus-adapter-config
 #
 # Primary scaling triggers:
 #   - queue_depth (pg-boss queue backlog per replica > 20)
-#   - indexer_lag_seconds (average indexer lag > 10s)
+#   - indexer_lag_seconds (cluster-wide indexer lag > 10s)
 # Fallback triggers:
 #   - CPU utilization (70%)
 #   - Memory utilization (80%)
@@ -46,8 +47,8 @@ spec:
         metric:
           name: indexer_lag_seconds
         target:
-          type: AverageValue
-          averageValue: "10"
+          type: Value
+          value: "10"
     - type: Resource
       resource:
         name: cpu

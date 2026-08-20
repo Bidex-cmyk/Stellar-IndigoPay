@@ -32,6 +32,14 @@ describe("HPA and Prometheus Adapter Manifest Validation (Issue #700)", () => {
     expect(metricNames).toContain("queue_depth");
     expect(metricNames).toContain("indexer_lag_seconds");
 
+    const indexerLagMetric = externalMetrics.find(
+      (m) => m.external.metric.name === "indexer_lag_seconds",
+    );
+    expect(indexerLagMetric.external.target).toEqual({
+      type: "Value",
+      value: "10",
+    });
+
     const resourceNames = resourceMetrics.map((m) => m.resource.name);
     expect(resourceNames).toContain("cpu");
     expect(resourceNames).toContain("memory");
@@ -53,6 +61,9 @@ describe("HPA and Prometheus Adapter Manifest Validation (Issue #700)", () => {
     const externalRuleNames = adapterConfig.externalRules.map((r) => r.name.as);
     expect(externalRuleNames).toContain("queue_depth");
     expect(externalRuleNames).toContain("indexer_lag_seconds");
+    for (const rule of adapterConfig.externalRules) {
+      expect(rule.metricsQuery).toContain("<<.LabelMatchers>>");
+    }
   });
 
   test("helm/indigopay/values.yaml autoscaling config mirrors k8s/hpa-backend.yaml", () => {
@@ -67,5 +78,14 @@ describe("HPA and Prometheus Adapter Manifest Validation (Issue #700)", () => {
     const metricNames = externalMetrics.map((m) => m.external.metric.name);
     expect(metricNames).toContain("queue_depth");
     expect(metricNames).toContain("indexer_lag_seconds");
+
+    const indexerLagMetric = externalMetrics.find(
+      (m) => m.external.metric.name === "indexer_lag_seconds",
+    );
+    expect(indexerLagMetric.external.target).toEqual({
+      type: "Value",
+      value: "10",
+    });
+    expect(doc.rules.existing).toBe("prometheus-adapter-config");
   });
 });

@@ -105,7 +105,7 @@ The backend deployment scales dynamically using Kubernetes HorizontalPodAutoscal
 The backend is queue-driven and relies on custom workload metrics as primary scaling signals, backed up by resource metrics as fallbacks:
 
 1. **`queue_depth`** (`External`, target average: `20`): Total pg-boss jobs active or waiting (`webhook-deliveries`, `ai-summary`, `profile-update`, `monthly-impact-digest`).
-2. **`indexer_lag_seconds`** (`External`, target average: `10s`): Seconds between the latest ledger seen by the Soroban/Horizon indexer and current time.
+2. **`indexer_lag_seconds`** (`External`, target value: `10s`): Cluster-wide seconds between the latest ledger seen by the Soroban/Horizon indexer and current time.
 3. **`cpu`** (`Resource`, target average utilization: `70%`): Fallback CPU utilization.
 4. **`memory`** (`Resource`, target average utilization: `80%`): Fallback memory utilization.
 
@@ -114,15 +114,16 @@ The backend is queue-driven and relies on custom workload metrics as primary sca
 Custom metrics are exported by the backend at `/metrics` and scraped by Prometheus. To expose them to Kubernetes HPA, install `k8s-prometheus-adapter` and apply the rule configuration:
 
 ```bash
-# 1. Apply the Prometheus adapter ConfigMap
+# 1. Apply the Prometheus adapter ConfigMap containing the rules
 kubectl apply -f k8s/prometheus-adapter-configmap.yaml
 
 # 2. Install k8s-prometheus-adapter via Helm
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm install prometheus-adapter prometheus-community/prometheus-adapter \
   --namespace stellar-indigopay \
-  -f k8s/prometheus-adapter-configmap.yaml
+  --set rules.existing=prometheus-adapter-config
 ```
 
-If `k8s-prometheus-adapter` is not present, Kubernetes HPA will fall back to scaling on CPU and memory resource utilization.
+The application chart also exposes `rules.existing: prometheus-adapter-config` in `helm/indigopay/values.yaml` for installations that share the values file with the adapter chart.
 
+If custom metrics are unavailable, the HPA reports metric retrieval errors but can still calculate desired replicas from the available CPU and memory metrics.

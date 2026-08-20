@@ -41,7 +41,7 @@ data:
         name:
           matches: "^queue_depth$"
           as: "queue_depth"
-        metricsQuery: 'sum(queue_depth)'
+        metricsQuery: 'sum(queue_depth{<<.LabelMatchers>>})'
 
       - seriesQuery: 'indexer_lag_seconds'
         resources:
@@ -49,4 +49,4 @@ data:
         name:
           matches: "^indexer_lag_seconds$"
           as: "indexer_lag_seconds"
-        metricsQuery: 'max(indexer_lag_seconds)'
+        metricsQuery: 'max(indexer_lag_seconds{<<.LabelMatchers>>})'
