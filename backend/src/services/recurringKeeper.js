@@ -26,6 +26,7 @@ const {
 } = require("@stellar/stellar-sdk");
 const { metrics } = require("./metrics");
 const { getSigningSecret } = require("./signingSecretProvider");
+const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
 
 let intervalId = null;
 let isExecuting = false;

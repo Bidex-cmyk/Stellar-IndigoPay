@@ -4,6 +4,7 @@ const logger = require("../logger");
 const { Counter } = require("prom-client");
 const { registry } = require("./metrics");
 const { getSigningSecret } = require("./signingSecretProvider");
+const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
 
 // 12-hour cadence
 const GUARDIAN_INTERVAL_MS = 12 * 60 * 60 * 1000;
