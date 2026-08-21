@@ -35,6 +35,14 @@ async function getQueueMetrics() {
     GROUP BY name
   `;
 
+  // pg-boss 10 no longer stores a `paused` column on queue. Keep the
+  // response shape used by the admin API, but derive the compatibility value
+  // in SQL so scrapes work against the current pg-boss schema without noisy
+  // PostgreSQL errors.
+  const pausedQuery = `
+    SELECT name, false AS paused FROM pgboss.queue WHERE name = ANY($1)
+  `;
+
   // We run queries in parallel. If pg-boss tables don't exist yet, we catch
   // the database error and return default/empty counts so that the server doesn't crash.
   try {
