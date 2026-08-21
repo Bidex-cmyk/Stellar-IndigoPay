@@ -795,8 +795,15 @@ const DEFAULT_DONATION_RATE_LIMIT_WINDOW: u32 = 720;
 const MIN_VOTING_WINDOW_LEDGERS: u32 = 720; // 1 hour @ 5s/ledger
 #[cfg(feature = "governance")]
 const MAX_VOTING_WINDOW_LEDGERS: u32 = 518_400; // 30 days @ 5s/ledger
-                                                // Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
-                                                // panics and misleading impact figures from misconfigured projects.
+                                                // Minimum total weighted votes (votes_for + votes_against) a proposal must
+                                                // reach at resolution. Below this floor the proposal cannot pass, even with
+                                                // a strict majority — it resolves as rejected with a dedicated `prop_noq`
+                                                // event (#714). Mirrors the frontend's QUORUM_THRESHOLD in
+                                                // frontend/pages/governance.tsx.
+#[cfg(feature = "governance")]
+const PROPOSAL_QUORUM_VOTES: u32 = 15;
+// Upper bound on co2_per_xlm at registration — prevents donate-time CO₂ overflow
+// panics and misleading impact figures from misconfigured projects.
 const MAX_CO2_PER_XLM: u32 = 100_000;
 const MAX_BATCH_SIZE: u32 = 50;
 
@@ -6221,8 +6228,11 @@ impl IndigoPayContract {
         });
         Self::vote_on_proposals(env, voter, allocations);
     }
-    /// Callable by anyone after the deadline. Resolves based on majority.
-    /// Emits proj_ver on approval, prop_rej on rejection.
+    /// Callable by anyone after the deadline. Resolves based on majority,
+    /// subject to a quorum floor (PROPOSAL_QUORUM_VOTES weighted votes) that
+    /// prevents negligible participation from deciding governance outcomes.
+    /// Emits proj_ver on approval, prop_rej on rejection, and prop_noq when
+    /// the quorum floor is not met (which resolves the proposal as rejected).
     #[cfg(feature = "governance")]
     pub fn resolve_proposal(env: Env, project_id: String) {
         let mut proposal: VoteProposal = env
@@ -6238,7 +6248,17 @@ impl IndigoPayContract {
         }
         proposal.resolved = true;
         proposal.resolved_at = env.ledger().sequence();
-        if proposal.votes_for > proposal.votes_against {
+        let total_votes = proposal
+            .votes_for
+            .checked_add(proposal.votes_against)
+            .expect("vote total overflow");
+        if total_votes < PROPOSAL_QUORUM_VOTES {
+            // Quorum floor not met — resolve as rejected with a distinct
+            // event so indexers can tell "no quorum" apart from a majority
+            // rejection.
+            env.events()
+                .publish((symbol_short!("prop_noq"),), project_id.clone());
+        } else if proposal.votes_for > proposal.votes_against {
             env.events()
                 .publish((symbol_short!("proj_ver"),), project_id.clone());
         } else {
@@ -8394,7 +8414,7 @@ impl OracleInterface for MockOracle {
 mod tests {
     extern crate std;
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::{Address, BytesN, ConversionError, Env, Error, InvokeError, String, Vec};
     /// Helper: create a single-element signer Vec for admin calls.
@@ -9607,6 +9627,73 @@ mod tests {
         // soroban-sdk 27 ContractEvents API does not expose topic iteration
         // in a re-exported path. The core resolution logic (resolved flag,
         // vote counts) is verified above.
+    }
+    #[test]
+    fn test_resolve_proposal_below_quorum_rejected() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        // A single badge holder (10 weighted votes) cannot pass a proposal
+        // below the 15-vote quorum floor (#714).
+        let voter = Address::generate(&env);
+        grant_badge(&env, &cid, &voter);
+        client.vote_verify_project(&voter, &pid, &true);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+        // Read events immediately: `env.events().all()` only reflects the
+        // last top-level invocation.
+        let events = env.events().all().filter_by_contract(&cid);
+        let last_event = std::format!("{:?}", events.events().last().unwrap());
+        assert!(
+            last_event.contains("prop_noq"),
+            "expected prop_noq when quorum is not met, got: {}",
+            last_event
+        );
+        let p = client.get_proposal(&pid);
+        assert!(p.resolved);
+        assert_eq!(p.votes_for, 10);
+        assert_eq!(p.votes_against, 0);
+    }
+    #[test]
+    fn test_resolve_proposal_quorum_boundary_approves() {
+        let (env, cid, client, admin, pid) = setup();
+        client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
+        // Exactly 15 weighted votes (10 + 5) — quorum floor met, majority
+        // approves (#714).
+        let v1 = Address::generate(&env);
+        let v2 = Address::generate(&env);
+        grant_badge(&env, &cid, &v1);
+        grant_badge(&env, &cid, &v2);
+        let mut a1 = Vec::new(&env);
+        a1.push_back(VoteAllocation {
+            project_id: pid.clone(),
+            votes_for: 10,
+            votes_against: 0,
+            credits_spent: 100,
+        });
+        client.vote_on_proposals(&v1, &a1);
+        let mut a2 = Vec::new(&env);
+        a2.push_back(VoteAllocation {
+            project_id: pid.clone(),
+            votes_for: 5,
+            votes_against: 0,
+            credits_spent: 25,
+        });
+        client.vote_on_proposals(&v2, &a2);
+        extend_ttl(&env, &cid);
+        env.ledger().set_sequence_number(VOTING_WINDOW_LEDGERS + 2);
+        client.resolve_proposal(&pid);
+        let events = env.events().all().filter_by_contract(&cid);
+        let last_event = std::format!("{:?}", events.events().last().unwrap());
+        assert!(
+            last_event.contains("proj_ver"),
+            "expected proj_ver at quorum boundary, got: {}",
+            last_event
+        );
+        let p = client.get_proposal(&pid);
+        assert!(p.resolved);
+        assert_eq!(p.votes_for, 15);
+        assert_eq!(p.votes_against, 0);
     }
     #[test]
     #[should_panic]

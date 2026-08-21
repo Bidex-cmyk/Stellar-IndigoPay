@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ci:** SBOM generation with anchore/sbom-action, uploads to GitHub dependency graph
 - **ci:** Trivy image scan on CRITICAL/HIGH, cosign keyless signing on release tags
 
+- **contracts:** enforce a 15-weighted-vote quorum in `resolve_proposal` — proposals below the floor resolve as rejected with a dedicated `prop_noq` event (closes #714)
+
 ### Fixed
 
 - **contracts:** prevent challenge and refund flows from reversing the same donation twice; invalid finalization attempts now return structured errors instead of underflowing accounting.
