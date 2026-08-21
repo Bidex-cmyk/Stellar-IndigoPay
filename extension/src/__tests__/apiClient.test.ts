@@ -467,6 +467,48 @@ describe("circuit breaker state machine", () => {
     expect(snapshot.consecutiveFailures).toBe(5);
   });
 
+  test("a stale success from a request admitted before the breaker opened doesn't resurrect it", async () => {
+    // Regression test: request A is admitted while CLOSED (trial: false)
+    // but its fetch is slow. Before it resolves, a concurrent request B
+    // (also admitted while CLOSED) fails and trips the breaker OPEN. A's
+    // late success must not reset that OPEN record back to CLOSED — its
+    // permission was granted under an earlier generation of the breaker
+    // record, which is gone once B moved it to a new one.
+    let resolveA!: (res: Response) => void;
+    const deferredA = new Promise<Response>((resolve) => {
+      resolveA = resolve;
+    });
+    const mockFetch = jest
+      .fn()
+      .mockImplementationOnce(() => deferredA)
+      .mockImplementationOnce(async () => mockResponse(500));
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    const breakerConfig = { failureThreshold: 1, cooldownMs: 30_000 };
+    const retryConfig = { ...FAST_RETRY, maxAttempts: 1 };
+
+    const requestA = apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+
+    // Let A acquire its (CLOSED, generation 0) permission and reach its
+    // pending fetch before starting B.
+    for (let i = 0; i < 50 && mockFetch.mock.calls.length < 1; i++) {
+      await Promise.resolve();
+    }
+
+    const resB = await apiFetch(API_URL, {}, { retry: retryConfig, breaker: breakerConfig });
+    expect(resB.status).toBe(500);
+    expect((await getBreakerSnapshot(API_HOST)).state).toBe("open");
+
+    resolveA(mockResponse(200));
+    const resA = await requestA;
+    expect(resA.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // A's stale success (generation 0) must be a no-op against the record
+    // B already moved to generation 1 — the breaker stays OPEN.
+    const snapshot = await getBreakerSnapshot(API_HOST);
+    expect(snapshot.state).toBe("open");
+  });
+
   test("a successful call resets the failure counter", async () => {
     const mockFetch = jest
       .fn()

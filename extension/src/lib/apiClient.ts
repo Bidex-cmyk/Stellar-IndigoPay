@@ -182,6 +182,16 @@ export interface BreakerRecord {
   halfOpenInFlight: number;
   halfOpenSuccesses: number;
   updatedAt: number;
+  /**
+   * Bumped on every state transition (closed→open, open→half_open,
+   * half_open→open, half_open→closed). A permission captures the
+   * generation in effect when it was granted; an outcome recorded against
+   * a since-changed generation is a no-op (see `acquireBreakerPermission`
+   * / `recordBreakerSuccess` / `recordBreakerFailure`) so a request
+   * admitted under an old epoch can't rewrite a breaker record that has
+   * since moved on to a new one.
+   */
+  generation: number;
 }
 
 export interface BreakerSnapshot {
@@ -201,6 +211,7 @@ const INITIAL_BREAKER_RECORD: BreakerRecord = {
   halfOpenInFlight: 0,
   halfOpenSuccesses: 0,
   updatedAt: 0,
+  generation: 0,
 };
 
 // In-memory cache of breaker records, hydrated lazily from
@@ -317,7 +328,7 @@ function effectiveCooldownMs(record: BreakerRecord, config: CircuitBreakerConfig
 }
 
 type BreakerPermission =
-  | { allowed: true; trial: boolean }
+  | { allowed: true; trial: boolean; generation: number }
   | { allowed: false; retryAfterMs: number };
 
 // acquireBreakerPermission / recordBreakerSuccess / recordBreakerFailure /
@@ -353,7 +364,7 @@ async function acquireBreakerPermissionLocked(
   const now = Date.now();
 
   if (record.state === "closed") {
-    return { allowed: true, trial: false };
+    return { allowed: true, trial: false, generation: record.generation };
   }
 
   if (record.state === "open") {
@@ -361,15 +372,17 @@ async function acquireBreakerPermissionLocked(
     const cooldownMs = effectiveCooldownMs(record, config);
     const elapsed = now - openedAt;
     if (elapsed >= cooldownMs) {
+      const generation = record.generation + 1;
       await saveBreakerRecord(host, {
         ...record,
         state: "half_open",
         halfOpenInFlight: 1,
         halfOpenSuccesses: 0,
         updatedAt: now,
+        generation,
       });
       emitBreakerEvent("breaker_half_open", host);
-      return { allowed: true, trial: true };
+      return { allowed: true, trial: true, generation };
     }
     return { allowed: false, retryAfterMs: cooldownMs - elapsed };
   }
@@ -389,7 +402,7 @@ async function acquireBreakerPermissionLocked(
       halfOpenInFlight: inFlight + 1,
       updatedAt: now,
     });
-    return { allowed: true, trial: true };
+    return { allowed: true, trial: true, generation: record.generation };
   }
   return { allowed: false, retryAfterMs: effectiveCooldownMs(record, config) };
 }
@@ -402,11 +415,15 @@ async function acquireBreakerPermissionLocked(
  * complementary defense against a slot that never gets released at all,
  * e.g. a hard worker kill).
  */
-async function releaseBreakerTrialSlot(host: string, wasTrial: boolean): Promise<void> {
+async function releaseBreakerTrialSlot(
+  host: string,
+  wasTrial: boolean,
+  generation: number,
+): Promise<void> {
   if (!wasTrial) return;
   await withBreakerLock(host, async () => {
     const record = await loadBreakerRecord(host);
-    if (record.state !== "half_open") return;
+    if (record.state !== "half_open" || record.generation !== generation) return;
     await saveBreakerRecord(host, {
       ...record,
       halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
@@ -419,23 +436,38 @@ async function recordBreakerSuccess(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
+  generation: number,
 ): Promise<BreakerRecord> {
-  return withBreakerLock(host, () => recordBreakerSuccessLocked(host, config, wasTrial));
+  return withBreakerLock(host, () => recordBreakerSuccessLocked(host, config, wasTrial, generation));
 }
 
 async function recordBreakerSuccessLocked(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
+  generation: number,
 ): Promise<BreakerRecord> {
   const record = await loadBreakerRecord(host);
   const now = Date.now();
+
+  // The permission that authorized this outcome was granted against an
+  // earlier generation of the record (the breaker has since opened,
+  // closed, or re-opened again due to other concurrent requests) — that
+  // epoch is gone, so this outcome no longer applies to it. Returning the
+  // current record unmodified keeps callers' `updated.state` checks
+  // accurate without letting a stale success rewrite live breaker state
+  // (see the `generation` field doc comment on `BreakerRecord`).
+  if (record.generation !== generation) return record;
 
   if (record.state === "half_open" && wasTrial) {
     const successes = record.halfOpenSuccesses + 1;
     const inFlight = Math.max(0, record.halfOpenInFlight - 1);
     if (successes >= config.halfOpenSuccessThreshold) {
-      const closed = await saveBreakerRecord(host, { ...INITIAL_BREAKER_RECORD, updatedAt: now });
+      const closed = await saveBreakerRecord(host, {
+        ...INITIAL_BREAKER_RECORD,
+        updatedAt: now,
+        generation: record.generation + 1,
+      });
       emitBreakerEvent("breaker_closed", host);
       return closed;
     }
@@ -448,7 +480,11 @@ async function recordBreakerSuccessLocked(
   }
 
   if (record.state !== "closed" || record.consecutiveFailures !== 0) {
-    return saveBreakerRecord(host, { ...INITIAL_BREAKER_RECORD, updatedAt: now });
+    return saveBreakerRecord(host, {
+      ...INITIAL_BREAKER_RECORD,
+      updatedAt: now,
+      generation: record.generation + 1,
+    });
   }
   return record;
 }
@@ -457,10 +493,11 @@ async function recordBreakerFailure(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
+  generation: number,
   forceOpenCooldownMs?: number,
 ): Promise<BreakerRecord> {
   return withBreakerLock(host, () =>
-    recordBreakerFailureLocked(host, config, wasTrial, forceOpenCooldownMs),
+    recordBreakerFailureLocked(host, config, wasTrial, generation, forceOpenCooldownMs),
   );
 }
 
@@ -468,10 +505,16 @@ async function recordBreakerFailureLocked(
   host: string,
   config: CircuitBreakerConfig,
   wasTrial: boolean,
+  generation: number,
   forceOpenCooldownMs?: number,
 ): Promise<BreakerRecord> {
   const record = await loadBreakerRecord(host);
   const now = Date.now();
+
+  // See the matching guard in `recordBreakerSuccessLocked`: a permission
+  // from an earlier generation can't mutate a record that has since moved
+  // on to a new epoch.
+  if (record.generation !== generation) return record;
 
   if (record.state === "half_open" && wasTrial) {
     const reopened = await saveBreakerRecord(host, {
@@ -488,6 +531,7 @@ async function recordBreakerFailureLocked(
       halfOpenInFlight: Math.max(0, record.halfOpenInFlight - 1),
       halfOpenSuccesses: 0,
       updatedAt: now,
+      generation: record.generation + 1,
     });
     emitBreakerEvent("breaker_open", host);
     return reopened;
@@ -503,6 +547,7 @@ async function recordBreakerFailureLocked(
       halfOpenInFlight: 0,
       halfOpenSuccesses: 0,
       updatedAt: now,
+      generation: record.generation + 1,
     });
     emitBreakerEvent("breaker_open", host);
     return opened;
@@ -661,10 +706,11 @@ export async function apiFetch(
     });
   }
   const isTrial = permission.trial;
+  const generation = permission.generation;
 
   for (let attempt = 1; attempt <= retryConfig.maxAttempts; attempt++) {
     if (externalSignal?.aborted) {
-      await releaseBreakerTrialSlot(host, isTrial);
+      await releaseBreakerTrialSlot(host, isTrial, generation);
       throw new ApiClientError("Request cancelled", {
         category: "aborted",
         retryable: false,
@@ -678,7 +724,7 @@ export async function apiFetch(
       const res = await fetchWithTimeout(url, init, retryConfig.timeoutMs, externalSignal);
 
       if (res.ok) {
-        await recordBreakerSuccess(host, breakerConfig, isTrial);
+        await recordBreakerSuccess(host, breakerConfig, isTrial, generation);
         if (attempt > 1) logEvent("retry_succeeded", { host, attempt });
         return res;
       }
@@ -689,11 +735,11 @@ export async function apiFetch(
         const retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
         if (retryAfterMs != null && retryAfterMs > retryConfig.maxInlineRetryAfterMs) {
           const cooldown = Math.min(retryAfterMs, breakerConfig.maxCooldownMs);
-          await recordBreakerFailure(host, breakerConfig, isTrial, cooldown);
+          await recordBreakerFailure(host, breakerConfig, isTrial, generation, cooldown);
           logEvent("retry_after_breaker_trip", { host, retryAfterMs: cooldown });
           return res;
         }
-        const updated = await recordBreakerFailure(host, breakerConfig, isTrial);
+        const updated = await recordBreakerFailure(host, breakerConfig, isTrial, generation);
         if (updated.state !== "open" && attempt < retryConfig.maxAttempts) {
           const delay = retryAfterMs ?? computeBackoffDelayMs(attempt, retryConfig);
           logEvent("retry_scheduled", { host, attempt, delay, reason: category });
@@ -703,7 +749,7 @@ export async function apiFetch(
         return res;
       }
 
-      const updated = await recordBreakerFailure(host, breakerConfig, isTrial);
+      const updated = await recordBreakerFailure(host, breakerConfig, isTrial, generation);
       if (updated.state !== "open" && retryable && attempt < retryConfig.maxAttempts) {
         const delay = computeBackoffDelayMs(attempt, retryConfig);
         logEvent("retry_scheduled", { host, attempt, delay, reason: category });
@@ -713,7 +759,7 @@ export async function apiFetch(
       return res;
     } catch (err) {
       if (externalSignal?.aborted) {
-        await releaseBreakerTrialSlot(host, isTrial);
+        await releaseBreakerTrialSlot(host, isTrial, generation);
         throw new ApiClientError("Request cancelled", {
           category: "aborted",
           retryable: false,
@@ -726,7 +772,7 @@ export async function apiFetch(
       if (isAbortError(err)) {
         // Aborted, but not by our external signal or our own timeout
         // controller in a way we recognize — treat as non-retryable.
-        await releaseBreakerTrialSlot(host, isTrial);
+        await releaseBreakerTrialSlot(host, isTrial, generation);
         throw new ApiClientError("Request aborted", {
           category: "aborted",
           retryable: false,
@@ -738,7 +784,7 @@ export async function apiFetch(
       }
 
       const { retryable, category } = classifyError(err);
-      const updated = await recordBreakerFailure(host, breakerConfig, isTrial);
+      const updated = await recordBreakerFailure(host, breakerConfig, isTrial, generation);
 
       if (updated.state !== "open" && retryable && attempt < retryConfig.maxAttempts) {
         const delay = computeBackoffDelayMs(attempt, retryConfig);
