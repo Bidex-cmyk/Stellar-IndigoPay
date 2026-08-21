@@ -97,10 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-* **contracts:** add a project-authorized `withdraw_stealth_donations` path to `DonationContract` (plus a `withdraw_stealth_integrated` forward wrapper on `IndigoPayContract`) with per-(project, token) withdrawable-balance accounting, CEI ordering, structured errors, and `StealthWithdrawal`/`stlth_wdr` events so stealth-donated funds are no longer permanently locked in the `DonationContract` (closes #621)
-* **frontend:** harden the production CSP — drop `'unsafe-inline'` from `script-src` (rely on nonce + `strict-dynamic`) and report violations via `report-to` alongside the deprecated `report-uri` (closes #688)
-* **backend:** reload the keeper account before each recurring submission so transaction sequence numbers are never stale — prevents `tx_bad_seq` when the account sequence advances externally or after a failed submission (closes #705)
-* **backend:** make Horizon donation indexing idempotent by operation ID, advance the cursor on replay, and allow multiple payment operations per transaction (closes #635)
+* **contracts:** `donate_vested` pays the integer-division remainder with the final installment and `cancel_vesting` refunds it exactly, so no dust is stranded in contract custody and the project is fully paid (closes #665)
+* **contracts:** `cancel_vesting` marks the schedule as fully consumed so repeated cancels and post-cancellation claims are rejected, preventing double payouts from custody
 * **contracts:** skip missing persistent stealth donation entries during scans (closes #506)
 * **contracts:** require admin-gated attestation for `donate_asset` path-payment donations — the recorded `xlm_amount` must be co-signed by an admin-appointed attester, so a caller can no longer claim an arbitrary amount (closes #712)
 * **contracts:** deduplicate the escrow `Milestone` struct across feature configurations (closes #511)
