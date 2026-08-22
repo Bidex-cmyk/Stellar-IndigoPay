@@ -11,7 +11,6 @@ import {
   match,
   queueItem,
   timeline,
-  type ProjectOverrides,
 } from "./builders";
 import type { Project, Donation, QueueItem, TimelineEntry, DonationMatch } from "./types";
 
@@ -79,21 +78,17 @@ export function offlineReplayScenario(opts: { seed?: number } = {}): OfflineRepl
   // 2 items queued while offline
   const pending = [
     queueItem({
-      projectId: p.id,
       type: "donation",
       payload: { amountXLM: "10", projectId: p.id },
       status: "pending",
-      idempotencyKey: createRNG(rng.int(1, 10000)).next().toString(36),
       seed: rng.int(1, 10000),
-    } as any),
+    }),
     queueItem({
-      projectId: p.id,
       type: "follow",
       payload: { projectId: p.id },
       status: "pending",
-      idempotencyKey: createRNG(rng.int(1, 10000)).next().toString(36),
       seed: rng.int(1, 10000),
-    } as any),
+    }),
   ];
 
   return {
@@ -111,6 +106,9 @@ export function offlineReplayScenario(opts: { seed?: number } = {}): OfflineRepl
  * timeout), and the client retries with the same Idempotency-Key. The
  * server should return the original donation, not create a duplicate.
  *
+ * retryDonation is a shallow clone of originalDonation — the retry
+ * carries the exact same payload.
+ *
  * @param opts.seed - Seed for deterministic generation.
  */
 export function idempotentRetryScenario(opts: { seed?: number } = {}): IdempotentRetryScenario {
@@ -124,17 +122,8 @@ export function idempotentRetryScenario(opts: { seed?: number } = {}): Idempoten
     seed: rng.int(1, 10000),
   });
 
-  // Retry — same idempotency key, same projectId, same amount, same hash
-  const retry = donation({
-    id: original.id,
-    projectId: original.projectId,
-    donorAddress: original.donorAddress,
-    amountXLM: original.amountXLM,
-    amount: original.amount,
-    transactionHash: original.transactionHash,
-    createdAt: original.createdAt,
-    seed: rng.int(1, 10000),
-  });
+  // Retry — exact same payload (shallow clone)
+  const retry = { ...original };
 
   return {
     project: p,
@@ -150,14 +139,25 @@ export function idempotentRetryScenario(opts: { seed?: number } = {}): Idempoten
  * Simulates a user who opened the donation form when the project had one
  * price, but by the time they submit, the price has moved.
  *
+ * freshPrice is guaranteed to differ from stalePrice after formatting.
+ *
  * @param opts.seed - Seed for deterministic generation.
  */
 export function stalePriceScenario(opts: { seed?: number } = {}): StalePriceScenario {
   const rng = createRNG(opts.seed ?? 3000);
   const p = project({ seed: rng.int(1, 10000) });
 
-  const stalePrice = (rng.float(50000, 200000)).toFixed(7);
-  const freshPrice = (parseFloat(stalePrice) * rng.float(0.8, 1.2)).toFixed(7);
+  const staleRaw = rng.float(50000, 200000);
+  const stalePrice = staleRaw.toFixed(7);
+
+  // Guarantee a different price after rounding: apply a fixed -5% shift
+  // (the random multiplier approach can collapse to the same value after rounding)
+  let freshRaw = staleRaw * 0.95;
+  if (freshRaw.toFixed(7) === stalePrice) {
+    // nudge further if rounding still produces equality
+    freshRaw = staleRaw * 0.90;
+  }
+  const freshPrice = freshRaw.toFixed(7);
 
   const d = donation({
     projectId: p.id,
@@ -178,6 +178,9 @@ export function stalePriceScenario(opts: { seed?: number } = {}): StalePriceScen
  * Simulates two donations that were submitted nearly simultaneously and
  * conflict (e.g., same donor, same project, same transaction hash).
  *
+ * The timeline includes both conflict donations so that assertions can
+ * verify their presence.
+ *
  * @param opts.seed - Seed for deterministic generation.
  */
 export function conflictScenario(opts: { seed?: number } = {}): ConflictScenario {
@@ -197,9 +200,11 @@ export function conflictScenario(opts: { seed?: number } = {}): ConflictScenario
     seed: rng.int(1, 10000),
   });
 
-  const tl = timeline(p.id, 3, {
+  // Build timeline from the two conflict donations so both appear in entries
+  const tl = timeline(p.id, 0, {
     projectName: p.name,
     projectCategory: p.category,
+    donations: [first, second],
   });
 
   return {

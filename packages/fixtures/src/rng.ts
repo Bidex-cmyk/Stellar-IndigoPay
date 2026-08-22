@@ -47,6 +47,7 @@ export function createRNG(seed: number = 42): SeededRNG {
       return next() * (max - min) + min;
     },
     pick<T>(arr: T[]): T {
+      if (arr.length === 0) throw new RangeError("pick() called with empty array");
       return arr[Math.floor(next() * arr.length)];
     },
     fork(): SeededRNG {

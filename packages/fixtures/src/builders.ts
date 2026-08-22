@@ -89,16 +89,72 @@ function randomUUID(rng: SeededRNG): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${rng.pick(["8", "9", "a", "b"])}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+// ── Stellar StrKey helpers ────────────────────────────────────────────
+
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
 /**
- * Generate a deterministic Stellar public key (G + 55 base32 chars).
+ * CRC16-XMODEM as used by Stellar StrKey encoding.
+ */
+function crc16Xmodem(data: Uint8Array): number {
+  let crc = 0x0000;
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data[i] << 8;
+    for (let j = 0; j < 8; j++) {
+      if (crc & 0x8000) {
+        crc = ((crc << 1) ^ 0x1021) & 0xffff;
+      } else {
+        crc = (crc << 1) & 0xffff;
+      }
+    }
+  }
+  return crc & 0xffff;
+}
+
+/**
+ * Encode a byte array as base32 (no padding, per RFC 4648 §7).
+ */
+function encodeBase32(bytes: Uint8Array): string {
+  let result = "";
+  let bits = 0;
+  let value = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      result += BASE32_ALPHABET[(value >> bits) & 31];
+    }
+  }
+  if (bits > 0) {
+    result += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return result;
+}
+
+/**
+ * Generate a deterministic Stellar ed25519 public key with a valid
+ * StrKey CRC16-XMODEM checksum (G + 55 base32 chars = 56 total).
  */
 function randomStellarKey(rng: SeededRNG): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let key = "G";
-  for (let i = 0; i < 55; i++) {
-    key += rng.pick(chars.split(""));
+  const VERSION_BYTE = 0x30; // ed25519 public key
+  const payload = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    payload[i] = rng.int(0, 255);
   }
-  return key;
+
+  // version + payload = 33 bytes, then append 2-byte CRC = 35 bytes → 56 base32 chars
+  const versionAndPayload = new Uint8Array(33);
+  versionAndPayload[0] = VERSION_BYTE;
+  versionAndPayload.set(payload, 1);
+
+  const crc = crc16Xmodem(versionAndPayload);
+  const full = new Uint8Array(35);
+  full.set(versionAndPayload);
+  full[33] = (crc >> 8) & 0xff;
+  full[34] = crc & 0xff;
+
+  return encodeBase32(full);
 }
 
 /**
@@ -118,6 +174,16 @@ function seededDate(rng: SeededRNG): string {
   const secOffset = rng.int(0, 86399);
   const ms = EPOCH_MS + dayOffset * 86400000 + secOffset * 1000;
   return new Date(ms).toISOString();
+}
+
+/**
+ * Produce a deterministic ISO-8601 date string that is at or after the
+ * given base date by a non-negative offset of 0..3600 seconds.
+ */
+function seededDateAfter(rng: SeededRNG, baseDate: string): string {
+  const baseMs = new Date(baseDate).getTime();
+  const offsetSec = rng.int(0, 3600);
+  return new Date(baseMs + offsetSec * 1000).toISOString();
 }
 
 // ── Strip internal-only keys (seed) before returning ──────────────────
@@ -155,13 +221,14 @@ export function project(overrides: ProjectOverrides = {}): Project {
   );
   const rng = createRNG(baseSeed);
 
+  // Generate RNG-driven values first
   const raised = rng.float(0, 50000);
   const goal = Math.max(raised, rng.float(10000, 200000));
 
   const now = seededDate(rng);
-  const updated = seededDate(rng);
 
-  const result: Project = {
+  // Build base object, then apply overrides
+  const base = {
     id: randomUUID(rng),
     name: rng.pick(PROJECT_NAMES),
     description: `A climate project focused on ${rng.pick(CATEGORIES).toLowerCase()} initiatives.`,
@@ -172,20 +239,35 @@ export function project(overrides: ProjectOverrides = {}): Project {
     raisedXLM: formatXLM(raised),
     donorCount: rng.int(10, 5000),
     co2OffsetKg: rng.int(100, 100000),
-    status: "active",
-    rejectionReason: null,
+    status: "active" as Project["status"],
+    rejectionReason: null as string | null,
     verified: true,
     onChainVerified: rng.pick([true, false]),
     tags: [rng.pick(CATEGORIES).toLowerCase()],
-    aiSummary: null,
-    aiSummaryGeneratedAt: null,
-    aiSummaryModel: null,
-    aiSummarySourceHash: null,
+    aiSummary: null as string | null,
+    aiSummaryGeneratedAt: null as string | null,
+    aiSummaryModel: null as string | null,
+    aiSummarySourceHash: null as string | null,
     createdAt: now,
-    updatedAt: updated,
-    ...stripSeed(overrides as any),
+    updatedAt: now,
   };
-  return result;
+
+  // Apply caller overrides on top of defaults
+  const merged = { ...base, ...stripSeed(overrides as any) };
+
+  // Recompute dependent fields from final source values
+  const raisedFinal = parseFloat(merged.raisedXLM);
+  const goalFinal = parseFloat(merged.goalXLM);
+  if (goalFinal < raisedFinal) {
+    merged.goalXLM = formatXLM(raisedFinal);
+  }
+
+  // Ensure updatedAt >= createdAt
+  if (new Date(merged.updatedAt).getTime() < new Date(merged.createdAt).getTime()) {
+    merged.updatedAt = seededDateAfter(createRNG(rng.int(1, 100000)), merged.createdAt);
+  }
+
+  return merged;
 }
 
 export interface DonationOverrides extends Partial<Omit<Donation, "id" | "createdAt">> {
@@ -208,9 +290,9 @@ export function donation(overrides: DonationOverrides = {}): Donation {
 
   const now = seededDate(rng);
 
-  const result: Donation = {
+  const base: Donation = {
     id: randomUUID(rng),
-    projectId: overrides.projectId ?? randomUUID(rng),
+    projectId: randomUUID(rng),
     donorAddress: randomStellarKey(rng),
     amount: formatXLM(amountXLM),
     amountXLM: formatXLM(amountXLM),
@@ -220,9 +302,9 @@ export function donation(overrides: DonationOverrides = {}): Donation {
     createdAt: now,
     anonymous: false,
     receiptGeneratedAt: null,
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  return { ...base, ...stripSeed(overrides as any) };
 }
 
 export interface MatchOverrides extends Partial<Omit<DonationMatch, "id" | "createdAt">> {
@@ -248,9 +330,9 @@ export function match(overrides: MatchOverrides = {}): DonationMatch {
   const expiresMs = new Date(now).getTime() + daysOffset * 86400000;
   const expires = new Date(expiresMs).toISOString();
 
-  const result: DonationMatch = {
+  const base: DonationMatch = {
     id: randomUUID(rng),
-    projectId: overrides.projectId ?? randomUUID(rng),
+    projectId: randomUUID(rng),
     matcherAddress: randomStellarKey(rng),
     capXLM: formatXLM(cap),
     multiplier,
@@ -258,9 +340,15 @@ export function match(overrides: MatchOverrides = {}): DonationMatch {
     remainingXLM: formatXLM(Math.max(0, cap - matched)),
     expiresAt: expires,
     createdAt: now,
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  // Apply overrides, then recompute remainingXLM from final cap and matched
+  const merged = { ...base, ...stripSeed(overrides as any) };
+  const finalCap = parseFloat(merged.capXLM);
+  const finalMatched = parseFloat(merged.matchedXLM);
+  merged.remainingXLM = formatXLM(Math.max(0, finalCap - finalMatched));
+
+  return merged;
 }
 
 export interface ProfileOverrides extends Partial<Omit<Profile, "publicKey" | "createdAt" | "updatedAt">> {
@@ -279,9 +367,8 @@ export function profile(overrides: ProfileOverrides = {}): Profile {
   const rng = createRNG(baseSeed);
 
   const now = seededDate(rng);
-  const updated = seededDate(rng);
 
-  const result: Profile = {
+  const base: Profile = {
     publicKey: randomStellarKey(rng),
     displayName: rng.pick(["Alice", "Bob", "Carol", "Dave", "Eve"]),
     bio: "Climate enthusiast and donor.",
@@ -291,10 +378,17 @@ export function profile(overrides: ProfileOverrides = {}): Profile {
       { tier: rng.pick(["bronze", "silver", "gold"]), earnedAt: now },
     ],
     createdAt: now,
-    updatedAt: updated,
-    ...stripSeed(overrides as any),
+    updatedAt: now,
   };
-  return result;
+
+  const merged = { ...base, ...stripSeed(overrides as any) };
+
+  // Ensure updatedAt >= createdAt
+  if (new Date(merged.updatedAt).getTime() < new Date(merged.createdAt).getTime()) {
+    merged.updatedAt = seededDateAfter(createRNG(rng.int(1, 100000)), merged.createdAt);
+  }
+
+  return merged;
 }
 
 export interface CampaignOverrides extends Partial<Omit<Campaign, "id" | "createdAt">> {
@@ -318,9 +412,9 @@ export function campaign(overrides: CampaignOverrides = {}): Campaign {
   const deadlineMs = new Date(now).getTime() + daysOffset * 86400000;
   const deadline = new Date(deadlineMs).toISOString();
 
-  const result: Campaign = {
+  const base: Campaign = {
     id: randomUUID(rng),
-    projectId: overrides.projectId ?? randomUUID(rng),
+    projectId: randomUUID(rng),
     title: rng.pick(["Tree Planting Drive", "Solar Panel Fund", "Ocean Cleanup", "Water Well Project"]),
     description: "Help fund this campaign.",
     goalXLM: formatXLM(goal),
@@ -330,9 +424,16 @@ export function campaign(overrides: CampaignOverrides = {}): Campaign {
     completed: raised >= goal,
     active: true,
     createdAt: now,
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  // Apply overrides, then recompute dependent fields from final values
+  const merged = { ...base, ...stripSeed(overrides as any) };
+  const finalGoal = parseFloat(merged.goalXLM);
+  const finalRaised = parseFloat(merged.raisedXLM);
+  merged.progressPercent = finalGoal > 0 ? Math.round((finalRaised / finalGoal) * 100) : 0;
+  merged.completed = finalRaised >= finalGoal;
+
+  return merged;
 }
 
 export interface MilestoneOverrides extends Partial<Omit<Milestone, "id" | "createdAt">> {
@@ -351,17 +452,17 @@ export function milestone(overrides: MilestoneOverrides = {}): Milestone {
 
   const now = seededDate(rng);
 
-  const result: Milestone = {
+  const base: Milestone = {
     id: randomUUID(rng),
-    projectId: overrides.projectId ?? randomUUID(rng),
-    percentage: overrides.percentage ?? rng.pick([25, 50, 75, 100]),
-    title: overrides.title ?? rng.pick(["Phase 1: Planning", "Phase 2: Implementation", "Phase 3: Completion"]),
+    projectId: randomUUID(rng),
+    percentage: rng.pick([25, 50, 75, 100]),
+    title: rng.pick(["Phase 1: Planning", "Phase 2: Implementation", "Phase 3: Completion"]),
     reachedAt: null,
     transactionHash: null,
     createdAt: now,
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  return { ...base, ...stripSeed(overrides as any) };
 }
 
 export interface UpdateOverrides extends Partial<Omit<ProjectUpdate, "id" | "createdAt">> {
@@ -380,15 +481,15 @@ export function update(overrides: UpdateOverrides = {}): ProjectUpdate {
 
   const now = seededDate(rng);
 
-  const result: ProjectUpdate = {
+  const base: ProjectUpdate = {
     id: randomUUID(rng),
-    projectId: overrides.projectId ?? randomUUID(rng),
-    title: overrides.title ?? "Progress Report",
-    body: overrides.body ?? "We've made great progress this quarter.",
+    projectId: randomUUID(rng),
+    title: "Progress Report",
+    body: "We've made great progress this quarter.",
     createdAt: now,
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  return { ...base, ...stripSeed(overrides as any) };
 }
 
 export interface QueueItemOverrides extends Partial<Omit<QueueItem, "id" | "createdAt">> {
@@ -407,7 +508,7 @@ export function queueItem(overrides: QueueItemOverrides = {}): QueueItem {
 
   const now = seededDate(rng);
 
-  const result: QueueItem = {
+  const base: QueueItem = {
     id: randomUUID(rng),
     type: "donation",
     payload: {},
@@ -417,9 +518,9 @@ export function queueItem(overrides: QueueItemOverrides = {}): QueueItem {
     maxRetries: 3,
     nextRetryAt: null,
     idempotencyKey: randomUUID(rng),
-    ...stripSeed(overrides as any),
   };
-  return result;
+
+  return { ...base, ...stripSeed(overrides as any) };
 }
 
 /**
@@ -452,16 +553,20 @@ export function paginatedResponse<T>(items: T[]): {
 export function timeline(
   projectId: string,
   count: number = 5,
-  overrides: { projectName?: string; projectCategory?: string; seed?: number } = {},
+  overrides: { projectName?: string; projectCategory?: string; seed?: number; donations?: Donation[] } = {},
 ): TimelineEntry[] {
   const rng = createRNG(overrides.seed ?? (hashString(projectId) + count));
   let running = 0;
   const entries: TimelineEntry[] = [];
 
-  for (let i = 0; i < count; i++) {
+  // Use pre-supplied donations if provided, otherwise generate them
+  const donations = overrides.donations ?? Array.from({ length: count }, () => {
     const amount = rng.float(1, 100);
-    running += amount;
-    const d = donation({ projectId, amountXLM: formatXLM(amount), seed: rng.int(1, 100000) });
+    return donation({ projectId, amountXLM: formatXLM(amount), seed: rng.int(1, 100000) });
+  });
+
+  for (const d of donations) {
+    running += parseFloat(d.amountXLM ?? d.amount);
     entries.push({
       donation: d,
       project: {
@@ -469,7 +574,7 @@ export function timeline(
         name: overrides.projectName ?? "Test Project",
         category: overrides.projectCategory ?? "Reforestation",
       },
-      matchedAmount: rng.pick([null, formatXLM(rng.float(0, amount))]),
+      matchedAmount: rng.pick([null, formatXLM(rng.float(0, parseFloat(d.amountXLM ?? d.amount)))]),
       runningTotal: formatXLM(running),
     });
   }

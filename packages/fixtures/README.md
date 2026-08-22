@@ -37,7 +37,7 @@ const retry = idempotentRetryScenario({ seed: 42 });
 
 ## Determinism
 
-Same seed → identical objects every time. The package uses a seeded mulberry32 PRNG with no external dependencies.
+Same seed → identical objects every time. The seeded mulberry32 PRNG has no external dependencies. OpenAPI schema validation (the `validation` entrypoint) uses `ajv` and `js-yaml`.
 
 ```ts
 const a = project({ seed: 42 });
@@ -51,7 +51,7 @@ Each consumer suite maps the import path via Jest `moduleNameMapper`:
 
 ```js
 moduleNameMapper: {
-  "^@stellar-indigopay/fixtures$": "<rootDir>/../packages/fixtures/src/index",
+  "^@stellar-indigopay/fixtures$": "<rootDir>/../packages/fixtures/dist/index",
 }
 ```
 

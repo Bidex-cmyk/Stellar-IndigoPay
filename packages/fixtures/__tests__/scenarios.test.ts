@@ -64,6 +64,11 @@ describe("idempotentRetryScenario()", () => {
     expect(s.idempotencyKey).toBeDefined();
   });
 
+  test("retryDonation is an exact clone of originalDonation", () => {
+    const s = idempotentRetryScenario({ seed: 42 });
+    expect(s.retryDonation).toEqual(s.originalDonation);
+  });
+
   test("original and retry have the same transaction hash", () => {
     const s = idempotentRetryScenario({ seed: 42 });
     expect(s.retryDonation.transactionHash).toBe(s.originalDonation.transactionHash);
@@ -93,12 +98,11 @@ describe("stalePriceScenario()", () => {
     expect(s.donation).toBeDefined();
   });
 
-  test("stale and fresh prices are different", () => {
-    const s = stalePriceScenario({ seed: 42 });
-    // They could be the same in rare edge cases with the RNG, but generally different
-    // Just verify both are valid numbers
-    expect(Number.isNaN(parseFloat(s.stalePrice))).toBe(false);
-    expect(Number.isNaN(parseFloat(s.freshPrice))).toBe(false);
+  test("stale and fresh prices are guaranteed to be different", () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const s = stalePriceScenario({ seed });
+      expect(s.stalePrice).not.toBe(s.freshPrice);
+    }
   });
 
   test("donation belongs to the project", () => {
@@ -148,6 +152,13 @@ describe("conflictScenario()", () => {
     for (const entry of s.timeline) {
       expect(entry.project.id).toBe(s.project.id);
     }
+  });
+
+  test("timeline contains both conflict donations", () => {
+    const s = conflictScenario({ seed: 42 });
+    const ids = s.timeline.map((e) => e.donation.id);
+    expect(ids).toContain(s.firstDonation.id);
+    expect(ids).toContain(s.secondDonation.id);
   });
 
   test("deterministic: same seed produces identical scenario", () => {

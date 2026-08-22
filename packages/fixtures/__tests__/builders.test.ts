@@ -18,6 +18,7 @@ import {
   timeline,
 } from "../src/index";
 import type { Project, Donation, DonationMatch } from "../src/types";
+import { createRNG } from "../src/rng";
 
 // ── project() ─────────────────────────────────────────────────────────
 
@@ -59,6 +60,20 @@ describe("project()", () => {
       const p = project({ seed: i });
       expect(p.walletAddress).toMatch(/^G[A-Z2-7]{55}$/);
     }
+  });
+
+  test("updatedAt is never before createdAt", () => {
+    for (let i = 0; i < 20; i++) {
+      const p = project({ seed: i });
+      expect(new Date(p.updatedAt).getTime()).toBeGreaterThanOrEqual(
+        new Date(p.createdAt).getTime(),
+      );
+    }
+  });
+
+  test("raisedXLM never exceeds goalXLM even with overrides", () => {
+    const p = project({ raisedXLM: "50000", goalXLM: "10000" });
+    expect(parseFloat(p.goalXLM)).toBeGreaterThanOrEqual(parseFloat(p.raisedXLM));
   });
 });
 
@@ -124,6 +139,11 @@ describe("match()", () => {
     const remaining = parseFloat(m.remainingXLM);
     expect(remaining).toBeCloseTo(cap - matched, 2);
   });
+
+  test("remainingXLM recomputes when capXLM/matchedXLM are overridden", () => {
+    const m = match({ capXLM: "100", matchedXLM: "30" });
+    expect(parseFloat(m.remainingXLM)).toBeCloseTo(70, 2);
+  });
 });
 
 // ── profile() ─────────────────────────────────────────────────────────
@@ -137,6 +157,15 @@ describe("profile()", () => {
     expect(Array.isArray(p.badges)).toBe(true);
     expect(p.createdAt).toBeDefined();
     expect(p.updatedAt).toBeDefined();
+  });
+
+  test("updatedAt is never before createdAt", () => {
+    for (let i = 0; i < 10; i++) {
+      const p = profile({ seed: i });
+      expect(new Date(p.updatedAt).getTime()).toBeGreaterThanOrEqual(
+        new Date(p.createdAt).getTime(),
+      );
+    }
   });
 });
 
@@ -154,6 +183,18 @@ describe("campaign()", () => {
     expect(typeof c.progressPercent).toBe("number");
     expect(typeof c.completed).toBe("boolean");
     expect(typeof c.active).toBe("boolean");
+  });
+
+  test("progressPercent and completed derive from overridden goalXLM/raisedXLM", () => {
+    const c = campaign({ goalXLM: "100", raisedXLM: "100" });
+    expect(c.progressPercent).toBe(100);
+    expect(c.completed).toBe(true);
+  });
+
+  test("incomplete campaign when raised < goal", () => {
+    const c = campaign({ goalXLM: "100", raisedXLM: "50" });
+    expect(c.progressPercent).toBe(50);
+    expect(c.completed).toBe(false);
   });
 });
 
@@ -249,5 +290,23 @@ describe("timeline()", () => {
         parseFloat(tl[i - 1].runningTotal),
       );
     }
+  });
+
+  test("accepts pre-supplied donations", () => {
+    const d1 = donation({ projectId: "proj-x", amountXLM: "10" });
+    const d2 = donation({ projectId: "proj-x", amountXLM: "20" });
+    const tl = timeline("proj-x", 0, { donations: [d1, d2] });
+    expect(tl).toHaveLength(2);
+    expect(tl[0].donation.id).toBe(d1.id);
+    expect(tl[1].donation.id).toBe(d2.id);
+  });
+});
+
+// ── rng.pick() edge case ─────────────────────────────────────────────
+
+describe("createRNG()", () => {
+  test("pick() throws on empty array", () => {
+    const rng = createRNG(42);
+    expect(() => rng.pick([])).toThrow(RangeError);
   });
 });
