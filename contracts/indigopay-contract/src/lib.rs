@@ -4038,7 +4038,7 @@ impl IndigoPayContract {
         // ownership when calling generate_receipt.
         let record_donor = if anonymous {
             use soroban_sdk::xdr::ToXdr;
-            let donor_xdr = donor.to_xdr(&env);
+            let donor_xdr = donor.clone().to_xdr(&env);
             let idx_bytes = Bytes::from_array(&env, &dc.to_le_bytes());
             let mut preimage = Bytes::new(&env);
             preimage.append(&donor_xdr);
@@ -5662,7 +5662,7 @@ impl IndigoPayContract {
         // AnonymousCommitment(donation_index) entry written at donation time.
         if record.anonymous {
             // Recompute commitment: SHA-256(donor_xdr ‖ donation_index_le_bytes)
-            let donor_xdr = donor.to_xdr(&env);
+            let donor_xdr = donor.clone().to_xdr(&env);
             let idx_bytes = Bytes::from_array(&env, &donation_index.to_le_bytes());
             let mut preimage = Bytes::new(&env);
             preimage.append(&donor_xdr);
@@ -16954,9 +16954,7 @@ mod tests {
     /// return the token address.
     fn mint_token_for(env: &Env, donor: &Address, amount: i128) -> Address {
         let admin = Address::generate(env);
-        let token = env
-            .register_stellar_asset_contract_v2(admin)
-            .address();
+        let token = env.register_stellar_asset_contract_v2(admin).address();
         StellarAssetClient::new(env, &token).mint(donor, &amount);
         token
     }
