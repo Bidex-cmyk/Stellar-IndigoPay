@@ -14,9 +14,10 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
       - uses: actions/checkout@v4
+      - name: Start Timer
+        working-directory: .
+        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
       - uses: ./.github/actions/setup-node-cached
         with:
           node-version: "22"
@@ -40,7 +41,7 @@ jobs:
         uses: ./.github/actions/budget-check
         with:
           start-time: ${{ env.START_TIME }}
-          max-seconds: '900'
+          max-seconds: "900"
 
   helm:
     name: Helm Chart Validation
