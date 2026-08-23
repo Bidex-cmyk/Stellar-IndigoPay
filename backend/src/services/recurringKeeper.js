@@ -27,6 +27,7 @@ const {
 const { metrics } = require("./metrics");
 const { getSigningSecret } = require("./signingSecretProvider");
 const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
+const { createDrainController } = require("./workerLifecycle");
 
 let intervalId = null;
 let isExecuting = false;
@@ -44,8 +45,7 @@ async function start() {
   if (intervalId) return;
 
   // Run initial cycle
-  drain.trackJob(() => runKeeperCycle()).catch((err) => {
-  runKeeperCycleWithLock().catch((err) => {
+  drain.trackJob(() => runKeeperCycleWithLock()).catch((err) => {
     logger.error({ event: "recurring_keeper_initial_error", err: err.message }, "Error in initial keeper cycle");
   });
 
@@ -57,7 +57,7 @@ async function start() {
     }
     isExecuting = true;
     try {
-      await runKeeperCycleWithLock();
+      await drain.trackJob(() => runKeeperCycleWithLock());
     } catch (err) {
       logger.error({ event: "recurring_keeper_cycle_error", err: err.message }, "Error during keeper cycle");
     } finally {
