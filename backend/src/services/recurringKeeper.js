@@ -26,7 +26,7 @@ const {
 } = require("@stellar/stellar-sdk");
 const { metrics } = require("./metrics");
 const { getSigningSecret } = require("./signingSecretProvider");
-const { createDrainController } = require("./workerLifecycle");
+const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
 
 let intervalId = null;
 let isExecuting = false;
@@ -45,6 +45,7 @@ async function start() {
 
   // Run initial cycle
   drain.trackJob(() => runKeeperCycle()).catch((err) => {
+  runKeeperCycleWithLock().catch((err) => {
     logger.error({ event: "recurring_keeper_initial_error", err: err.message }, "Error in initial keeper cycle");
   });
 
@@ -56,7 +57,7 @@ async function start() {
     }
     isExecuting = true;
     try {
-      await drain.trackJob(() => runKeeperCycle());
+      await runKeeperCycleWithLock();
     } catch (err) {
       logger.error({ event: "recurring_keeper_cycle_error", err: err.message }, "Error during keeper cycle");
     } finally {
@@ -79,6 +80,14 @@ async function stop() {
     intervalId = null;
   }
   await drain.beginDrain();
+}
+
+/**
+ * Main keeper cycle, guarded by a per-worker Postgres advisory lock so only
+ * one replica executes a given cycle at a time (issue #677).
+ */
+async function runKeeperCycleWithLock() {
+  return withAdvisoryLock(LOCK_KEYS.recurringKeeper, runKeeperCycle);
 }
 
 /**
@@ -219,6 +228,5 @@ module.exports = {
   start,
   stop,
   runKeeperCycle,
-  // Test-only: introspect drain state without a real SIGTERM.
-  _drain: drain,
+  runKeeperCycleWithLock,
 };
