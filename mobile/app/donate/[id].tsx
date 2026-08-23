@@ -24,7 +24,7 @@ import {
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import axios from "axios";
+import { apiClient } from "../../lib/apiClient";
 import {
   Keypair,
   Horizon,
@@ -114,7 +114,7 @@ export default function DonateScreen() {
     setLoading(true);
     setStatusMessage(null);
     try {
-      const res = await axios.get(`${API_URL}/api/projects`);
+      const res = await apiClient.get(`${API_URL}/api/projects`);
       const list: ClimateProject[] = Array.isArray(res.data?.data)
         ? res.data.data
         : [];
