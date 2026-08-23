@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ci,extension:** stop tracking the generated `greenpay-extension.zip` in git, generate it from source in CI, and verify the packaged artifact is reproducible across two builds (closes #696)
 - **contracts:** prevent challenge and refund flows from reversing the same donation twice; invalid finalization attempts now return structured errors instead of underflowing accounting.
 - **frontend:** pin locale (`en-US`) and timezone (`UTC`) for date/number formatting helpers (`formatDate`, `formatDateTime`, `formatTime`, `formatMonthYear`, `formatNumber`) and replace raw `Intl.*`/`toLocaleString` calls in SSR-rendered components, making server/client output deterministic and eliminating hydration mismatches (closes #652)
 - **contracts/oracle:** align TWAP observation window with staleness threshold invariant — reduce `DEFAULT_STALENESS_THRESHOLD` from 720 to 120 ledger sequences to match `MAX_OBSERVATIONS` capacity; enforce constraint that staleness threshold ≥ MAX_OBSERVATIONS at config time to prevent misconfiguration where operators believe oracle has long-window averaging when actual TWAP coverage is limited to ~20 observations (~100 seconds) (GrantFox GF-oracle-twap-alignment)
@@ -129,6 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **contracts:** move `DataKey::{Nullifier, ZkDonationRecord}` from instance to persistent storage so the ZK anonymous-donation path (`donate_anonymous_zk`/`donate_anonymous`) no longer grows the always-loaded contract instance entry with every donation; each entry gets its own footprint and TTL, extended to a documented ~1-year retention window on write (closes #706)
 - **backend:** batch Horizon donation stream events to reduce Socket.IO fan-out complexity from O(clients × donations) to O(clients × batches) — configurable 500ms time window and 50-donation max batch size via `INDEXER_BATCH_WINDOW_MS` and `INDEXER_BATCH_MAX_SIZE` environment variables (closes #157)
 - **frontend:** optimize Core Web Vitals with `next/image`, `next/font`, and `next/dynamic` bundle splitting (closes #261)
+- **backend:** bound admin analytics aggregates with a per-query statement timeout, capped date windows, and row limits; add a `created_at` index on `donations` and EXPLAIN regression tests asserting the time-window queries stay index-backed (closes #718)
 
 ### Removed
 
