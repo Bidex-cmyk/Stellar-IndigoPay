@@ -273,8 +273,8 @@ All four contracts use `#[contracterror]` enums with unique numeric codes — no
 
 | Contract | Error Enum | Codes | Categories |
 |----------|-----------|-------|------------|
-| **IndigoPay** | `ContractError` + `VerificationError` | 138 | Init/admin, project, donation, campaign, token, attestation, escrow, governance, ZK, NFT, upgrade, emergency, refund, impact |
-| **Escrow** | `EscrowError` | 62 | Init, job creation, amendment, release, oracle, disputes, refunds, claims, admin |
+| **IndigoPay** | `ContractError` + `VerificationError` | 136 | Init/admin, project, donation, campaign, token, attestation, escrow, governance, ZK, NFT, upgrade, emergency, refund, impact |
+| **Escrow** | `EscrowError` | 64 | Init, job creation, amendment, release, oracle, disputes, refunds, claims, admin, job enumeration |
 | **Attestation** | `AttestationError` | 60 | Init/admin, relayer, pause, validation, attestation lifecycle, upgrade, aggregation |
 | **Oracle** | `OracleError` | 50 | Init/admin, staking, price reporting, config, source oracles, aggregation |
 | **Total** | | **310** | |
