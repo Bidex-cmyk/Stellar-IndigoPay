@@ -82,6 +82,15 @@ pub const RELEASE_AFTER_LEDGERS: u32 = 10;
 pub const DEFAULT_DEADLINE_LEDGERS: u32 = 1_555_200; // 90 days @ 5s/ledger
 pub const MAX_MILESTONE_NAME_LEN: u32 = 64; // bytes; enforced at create + amend
 
+/// Hard cap on the number of jobs kept in instance storage. `create_job`
+/// rejects new jobs once the stored count reaches this limit
+/// (`JobCountExceedsMaximum`).
+pub const MAX_JOBS: u32 = 256;
+
+/// Maximum page size accepted by `get_job_ids(from, count)`. Larger `count`
+/// values are rejected with `JobIdsPageSizeExceedsMaximum`.
+pub const MAX_JOB_IDS_PAGE_SIZE: u32 = 100;
+
 // ─── Contract error codes ───────────────────────────────────────────────────
 //
 // Every error returned by the escrow contract carries a unique numeric code.
@@ -224,9 +233,22 @@ fn compute_proportional_payout(
     if proportion == 100 {
         return amount;
     }
-    amount
-        .checked_mul(proportion)
-        .and_then(|product| product.checked_div(100i128))
+    // Split `amount` into quotient and remainder *before* multiplying so the
+    // intermediate value cannot overflow for large amounts: an
+    // `amount * proportion` product can exceed `i128::MAX` even when the final
+    // payout fits (e.g. `i128::MAX / 2` with two 50% milestones). The
+    // quotient/remainder decomposition preserves floor division exactly.
+    let quotient = amount.checked_div(100i128);
+    let remainder = amount.checked_rem(100i128);
+    quotient
+        .and_then(|whole| whole.checked_mul(proportion))
+        .and_then(|whole| {
+            remainder
+                .and_then(|fraction| fraction.checked_mul(proportion))
+                // `fraction < 100`, so `fraction * proportion / 100` fits for
+                // any valid `proportion <= 100`.
+                .and_then(|fraction| whole.checked_add(fraction / 100i128))
+        })
         .unwrap_or_else(|| panic_with_error!(env, err))
 }
 
