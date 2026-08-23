@@ -14,30 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const yaml = require("js-yaml");
-const { execFileSync } = require("child_process");
-
-function resolveWithin(repoDir, candidatePath) {
-  const root = fs.realpathSync(repoDir);
-  const resolved = path.resolve(root, candidatePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
-    return null;
-  }
-  try {
-    const real = fs.realpathSync(resolved);
-    const realRelative = path.relative(root, real);
-    if (
-      realRelative.startsWith(`..${path.sep}`) ||
-      realRelative === ".." ||
-      path.isAbsolute(realRelative)
-    ) {
-      return null;
-    }
-    return real;
-  } catch {
-    return null;
-  }
-}
+const { execSync } = require("child_process");
 
 function validateGitOps(repoDir) {
   const errors = [];
@@ -68,8 +45,8 @@ function validateGitOps(repoDir) {
   if (!chartPath) {
     errors.push(`${argocdAppPath} spec.source.path is missing.`);
   } else {
-    const fullChartPath = resolveWithin(repoDir, chartPath);
-    if (!fullChartPath || !fs.statSync(fullChartPath).isDirectory()) {
+    const fullChartPath = path.join(repoDir, chartPath);
+    if (!fs.existsSync(fullChartPath)) {
       errors.push(`Referenced Helm chart path "${chartPath}" does not exist.`);
     }
   }

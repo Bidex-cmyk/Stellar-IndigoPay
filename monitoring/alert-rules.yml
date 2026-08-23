@@ -230,6 +230,19 @@ groups:
             Check the worker logs.
           runbook: docs/runbooks/indexer-lag.md
 
+      - alert: WorkerFreshness
+        expr: time() - indigopay_worker_last_heartbeat_timestamp > 300
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Worker freshness alert (>5 min since last heartbeat)"
+          description: |
+            Worker pod has not sent a heartbeat in over 5 minutes.
+            This could indicate a disruption or crash.
+            Runbook: docs/worker-disruption-runbook.md
+
+
       - alert: OracleStale
         expr: time() - indigopay_oracle_price_updated_timestamp > 900
         for: 5m
@@ -281,7 +294,6 @@ groups:
             The last successful secret rotation was {{ $value | humanizeTimestamp }}.
             Rotations are scheduled quarterly (every 91 days). Consider running
             the workflow manually if the automated schedule has been failing.
-          runbook: docs/runbooks/secret-rotation.md
 
   - name: stellar-indigopay-gitops-drift
     interval: 30s
