@@ -126,6 +126,36 @@ jobs:
       - name: Validate spec conventions + detect OpenAPI route drift
         run: node scripts/validate-openapi.js
 
+  chaos:
+    name: Backend Chaos Harness (worker crash-safety)
+    runs-on: ubuntu-latest
+    # Bounded at 10 minutes — all scenarios use testcontainers and
+    # deterministic fault points rather than sleeps, so this is generous.
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      # CHAOS_TEST=1 activates the FaultInjector and the harness tests.
+      # Never set this in any non-test job or in production.
+      - name: Run chaos harness
+        run: |
+          CHAOS_TEST=1 npx jest \
+            --testPathPattern="test/chaos/workerChaos" \
+            --forceExit \
+            --ci \
+            --verbose
+        env:
+          CHAOS_TEST: "1"
+          NODE_ENV: test
+
   zap_scan:
     name: DAST Security Scan (OWASP ZAP)
     runs-on: ubuntu-latest
