@@ -52,6 +52,16 @@ const server = new Horizon.Server(HORIZON_URL);
 const rpcServer = new rpc.Server(RPC_URL);
 const CONTRACT_ID = process.env.CONTRACT_ID || "";
 
+// The v12 Horizon.Server removed the `getTransaction` convenience method
+// (it existed in v11). Existing callers (routes/donations.js,
+// routes/projects.js) still invoke `server.getTransaction(hash)`, so expose
+// the equivalent through the supported transactions() builder. Without this
+// shim, on-chain transaction verification always fails and every donation
+// recording returns TX_NOT_FOUND.
+server.getTransaction = function getTransaction(hash) {
+  return server.transactions().transaction(hash).call();
+};
+
 // ---------------------------------------------------------------------------
 // Prometheus metrics
 // ---------------------------------------------------------------------------
