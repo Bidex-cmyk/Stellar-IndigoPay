@@ -34,6 +34,7 @@ const { OTLPTraceExporter } = require("@opentelemetry/exporter-otlp-http");
 const { BatchSpanProcessor } = require("@opentelemetry/sdk-trace-base");
 const { ParentBasedSampler, TraceIdRatioBasedSampler } = require("@opentelemetry/sdk-trace-base");
 const { getNodeAutoInstrumentations } = require("@opentelemetry/auto-instrumentations-node");
+const { W3CTraceContextPropagator } = require("@opentelemetry/core");
 const logger = require("../logger");
 
 // Track SDK instance for graceful shutdown.
@@ -61,9 +62,9 @@ function isEnabled() {
  */
 async function initTracing() {
   if (initialized) return isEnabled();
-  initialized = true;
 
   if (!isEnabled()) {
+    initialized = true;
     logger.info(
       { event: "otel_tracing_disabled" },
       "OpenTelemetry tracing disabled — set OTEL_EXPORTER_OTLP_ENDPOINT to enable",
@@ -102,7 +103,7 @@ async function initTracing() {
       spanProcessors: [new BatchSpanProcessor(exporter)],
       // Use W3C trace context propagation so downstream services that also
       // speak OTel can join the same trace.
-      textMapPropagator: new W3CTracePropagator(),
+      textMapPropagator: new W3CTraceContextPropagator(),
       instrumentations: [
         getNodeAutoInstrumentations({
           // Only instrument what we actually use — keeps the span payload lean.
@@ -131,12 +132,16 @@ async function initTracing() {
     });
 
     await sdk.start();
+    initialized = true;
     logger.info(
       { event: "otel_tracing_started", serviceName },
       "OpenTelemetry tracing started",
     );
     return true;
   } catch (err) {
+    // Don't mark initialized on failure — next initTracing() call will
+    // retry instead of returning the stale false result forever.
+    sdk = null;
     logger.error(
       { event: "otel_tracing_init_error", err: err.message },
       "Failed to initialize OpenTelemetry tracing — continuing without traces",

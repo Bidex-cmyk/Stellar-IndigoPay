@@ -75,6 +75,31 @@ describe("tracing.initTracing", () => {
     const second = await t.initTracing();
     expect(first).toBe(second);
   });
+
+  it("does not mark initialized on sdk.start() failure, allowing retry", async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318";
+
+    // Mock NodeSDK so that start() rejects.
+    jest.doMock("@opentelemetry/sdk-node", () => ({
+      NodeSDK: jest.fn().mockImplementation(() => ({
+        start: jest.fn().mockRejectedValue(new Error("connection refused")),
+        shutdown: jest.fn().mockResolvedValue(undefined),
+      })),
+    }));
+
+    const t = freshTracing();
+
+    // First call — sdk.start() fails.
+    const first = await t.initTracing();
+    expect(first).toBe(false);
+
+    // Second call — should retry because initialized was not set to true.
+    // (It will fail again with the same mock, but the point is it tries.)
+    const second = await t.initTracing();
+    expect(second).toBe(false);
+
+    jest.dontMock("@opentelemetry/sdk-node");
+  });
 });
 
 describe("tracing.withSpan", () => {

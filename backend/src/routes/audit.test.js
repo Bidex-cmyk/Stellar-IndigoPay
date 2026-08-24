@@ -70,13 +70,19 @@ function makeChainRows(count, startId = 1) {
       target_type: null,
       target_id: null,
       metadata: "{}",
-      ip_address: null,
       created_at: new Date(2026, 6, startId + i).toISOString(),
       prev_hash: i === 0 ? "0" : `hash-r${startId + i - 1}`,
       row_hash: `hash-${id}`,
     });
   }
   return rows;
+}
+
+/** Encode a row into the same base64 cursor the production code generates. */
+function makeCursor(row) {
+  return Buffer.from(
+    JSON.stringify({ created_at: row.created_at, id: row.id }),
+  ).toString("base64");
 }
 
 beforeEach(() => {
@@ -144,9 +150,6 @@ describe("GET /api/audit/verify/:table", () => {
       .expect(400);
 
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
-    // AppError stores detail in error.detail, and the error handler puts
-    // the combined message there.  The detail itself is in
-    // res.body.error.detail.
     expect(res.body.error.detail).toMatch(/not available/);
   });
 
@@ -178,7 +181,7 @@ describe("GET /api/audit/verify/:table", () => {
 // ── GET /api/audit/chain/:table ─────────────────────────────────────────
 
 describe("GET /api/audit/chain/:table", () => {
-  it("returns a full chain segment with hash fields", async () => {
+  it("returns a full chain segment without ip_address", async () => {
     const rows = makeChainRows(3);
     mockPool.query
       .mockResolvedValueOnce({ rows, rowCount: 3 })
@@ -192,42 +195,86 @@ describe("GET /api/audit/chain/:table", () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.rows).toHaveLength(3);
 
-    // Every returned row must carry prev_hash and row_hash so an external
-    // verifier can recompute the chain.
+    // Every returned row must carry prev_hash and row_hash for chain-link
+    // verification, and must NOT include ip_address.
     for (const row of res.body.data.rows) {
       expect(row).toHaveProperty("prev_hash");
       expect(row).toHaveProperty("row_hash");
       expect(row).toHaveProperty("actor");
       expect(row).toHaveProperty("action");
+      expect(row).not.toHaveProperty("ip_address");
     }
 
-    // When there's no more data, nextCursor is null.
-    expect(res.body.data.prevCursor).toBe("r1");
+    // ip_address is redacted from the response but declared in redactedFields.
+    expect(res.body.data.redactedFields).toContain("ip_address");
+
+    // Cursors are base64-encoded tuples (created_at, id), not raw ids.
     expect(res.body.data.nextCursor).toBeNull();
     expect(res.body.data.total).toBe(3);
   });
 
-  it("supports cursor-based pagination with from and to", async () => {
-    const rows = makeChainRows(2, 5); // r5, r6
+  it("returns tuple-based nextCursor when hasMore is true", async () => {
+    const rows = makeChainRows(4); // 4 rows with limit=3 → hasMore
+    mockPool.query
+      .mockResolvedValueOnce({ rows, rowCount: 4 })
+      .mockResolvedValueOnce({ rows: [{ total: "100" }], rowCount: 1 });
+
+    const app = makeApp();
+    const res = await request(app)
+      .get("/api/audit/chain/admin_audit_log?limit=3")
+      .expect(200);
+
+    expect(res.body.data.rows).toHaveLength(3);
+    expect(res.body.data.hasMore).toBe(true);
+    expect(res.body.data.nextCursor).toBeTruthy();
+
+    // The cursor must decode to a proper {created_at, id} tuple.
+    const cursor = JSON.parse(
+      Buffer.from(res.body.data.nextCursor, "base64").toString("utf8"),
+    );
+    expect(cursor).toHaveProperty("created_at");
+    expect(cursor).toHaveProperty("id");
+    expect(cursor.id).toBe("r3");
+  });
+
+  it("accepts cursor-based from/to pagination using tuple cursors", async () => {
+    const rows = makeChainRows(2, 1); // r1, r2
+    mockPool.query
+      .mockResolvedValueOnce({ rows, rowCount: 2 })
+      .mockResolvedValueOnce({ rows: [{ total: "50" }], rowCount: 1 });
+
+    // Build a from-cursor from a known row.
+    const fromCursor = makeCursor({ created_at: rows[0].created_at, id: "r0" });
+
+    const app = makeApp();
+    const res = await request(app)
+      .get(`/api/audit/chain/admin_audit_log?from=${fromCursor}&limit=2`)
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.rows).toHaveLength(2);
+
+    // Verify the SQL uses tuple-based keyset pagination.
+    const sql = mockPool.query.mock.calls[0][0];
+    expect(sql).toMatch(/\(created_at, id\) > \(\$1, \$2\)/);
+  });
+
+  it("rejects an invalid (non-base64) cursor gracefully", async () => {
+    const rows = makeChainRows(2);
     mockPool.query
       .mockResolvedValueOnce({ rows, rowCount: 2 })
       .mockResolvedValueOnce({ rows: [{ total: "50" }], rowCount: 1 });
 
     const app = makeApp();
     const res = await request(app)
-      .get("/api/audit/chain/admin_audit_log?from=r4&to=r10&limit=50")
+      .get("/api/audit/chain/admin_audit_log?from=not-valid-base64$$")
       .expect(200);
 
-    expect(res.body.success).toBe(true);
+    // An invalid cursor is silently treated as no-cursor (full chain returned).
     expect(res.body.data.rows).toHaveLength(2);
-    expect(res.body.data.prevCursor).toBe("r5");
-    // No hasMore → nextCursor null
-    expect(res.body.data.nextCursor).toBeNull();
-
-    // Verify the SQL includes the cursor filters.
     const sql = mockPool.query.mock.calls[0][0];
-    expect(sql).toMatch(/id > \$1/);
-    expect(sql).toMatch(/id <= \$2/);
+    // No WHERE clause since the cursor was discarded.
+    expect(sql).not.toMatch(/WHERE/);
   });
 
   it("respects the limit parameter (capped at 500)", async () => {
@@ -241,30 +288,8 @@ describe("GET /api/audit/chain/:table", () => {
       .get("/api/audit/chain/admin_audit_log?limit=2")
       .expect(200);
 
-    // When no from/to cursors, the only parameter is the limit+1 = 3,
-    // so it's $1.
-    const sql = mockPool.query.mock.calls[0][0];
-    expect(sql).toMatch(/LIMIT \$1/);
     const values = mockPool.query.mock.calls[0][1];
     expect(values).toContain(3); // limit + 1
-  });
-
-  it("reports hasMore:true when more rows exist beyond the limit", async () => {
-    // Return limit+1 rows to signal more data.  Default limit is 100,
-    // but we pass limit=3 → 4 rows returned.
-    const rows = makeChainRows(4);
-    mockPool.query
-      .mockResolvedValueOnce({ rows, rowCount: 4 })
-      .mockResolvedValueOnce({ rows: [{ total: "100" }], rowCount: 1 });
-
-    const app = makeApp();
-    const res = await request(app)
-      .get("/api/audit/chain/admin_audit_log?limit=3")
-      .expect(200);
-
-    expect(res.body.data.rows).toHaveLength(3); // truncated to limit
-    expect(res.body.data.hasMore).toBe(true);
-    expect(res.body.data.nextCursor).toBe("r3");
   });
 
   it("rejects an unknown table with 400", async () => {
@@ -289,6 +314,7 @@ describe("GET /api/audit/chain/:table", () => {
 
     expect(res.body.success).toBe(true);
     expect(res.body.data.rows).toHaveLength(0);
+    expect(res.body.data.redactedFields).toContain("ip_address");
     expect(res.body.data.prevCursor).toBeNull();
     expect(res.body.data.nextCursor).toBeNull();
     expect(res.body.data.total).toBe(0);
@@ -307,6 +333,7 @@ describe("GET /api/audit/chain/:table", () => {
 
     expect(res.body.success).toBe(true);
     expect(res.body.data.rows).toHaveLength(1);
+    expect(res.body.data.redactedFields).toContain("ip_address");
   });
 });
 

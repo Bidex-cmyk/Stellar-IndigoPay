@@ -44,6 +44,15 @@ const AUDITABLE_TABLES = new Set(["admin_audit_log"]);
 // computeRowHash() (see auditChain.canonicalize), ordered here as they
 // appear in the canonicalization to make offline recomputation
 // straightforward.
+//
+// ip_address is intentionally NOT included here: this is a public endpoint
+// with no authentication, and exposing admin/operator source IPs is a
+// security leak.  ip_address IS part of the computed row_hash, so offline
+// recomputation of individual row hashes is not possible from the public
+// payload — but chain-link integrity (prev_hash of row N == row_hash of
+// row N-1) can still be verified independently.  The /verify/:table
+// endpoint runs server-side with full data and returns the authoritative
+// verdict.
 const CHAIN_COLUMNS = [
   "id",
   "actor",
@@ -51,11 +60,57 @@ const CHAIN_COLUMNS = [
   "target_type",
   "target_id",
   "metadata",
-  "ip_address",
   "created_at",
   "prev_hash",
   "row_hash",
 ];
+
+// Fields present in the canonical hash input (auditChain.canonicalize) but
+// intentionally excluded from the public response.  Declared in the
+// response payload so auditors know what they can and cannot recompute.
+const REDACTED_FIELDS = ["ip_address"];
+
+// ── Cursor encoding (tuple-based keyset pagination) ────────────────────
+//
+// Cursors encode a (created_at, id) tuple as base64 JSON so the client can
+// resume pagination from the exact row boundary, even when `id` is a
+// non-monotonic UUID.  "created_at ASC, id ASC" is the deterministic
+// ordering used by verifyChain() and every query in this router.
+
+/**
+ * Encode a DB row into a safe opaque cursor string.
+ * @param {{ created_at: string, id: string }} row
+ * @returns {string} base64-encoded JSON
+ */
+function encodeCursor(row) {
+  if (!row || !row.created_at || !row.id) return null;
+  return Buffer.from(
+    JSON.stringify({ created_at: row.created_at, id: row.id }),
+  ).toString("base64");
+}
+
+/**
+ * Decode an opaque cursor back to { created_at, id }, or null on failure.
+ * @param {string|null|undefined} raw
+ * @returns {{ created_at: string, id: string }|null}
+ */
+function parseCursor(raw) {
+  if (!raw) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
+    if (
+      typeof decoded.created_at === "string" &&
+      decoded.created_at.length > 0 &&
+      typeof decoded.id === "string" &&
+      decoded.id.length > 0
+    ) {
+      return { created_at: decoded.created_at, id: decoded.id };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function validateTable(table) {
   if (!table || !AUDITABLE_TABLES.has(table)) {
@@ -108,17 +163,26 @@ router.get("/verify/:table", async (req, res, next) => {
  * Returns a paginated segment of the hash chain for offline recomputation.
  *
  * Query parameters:
- *   from  — cursor: return rows with id > `from` (lexicographic)
- *   to    — cursor: return rows with id <= `to`
- *   limit — max rows to return (default 100, max 500)
+ *   from   — base64-encoded JSON cursor: {created_at, id} of the page
+ *            boundary (rows AFTER this tuple are returned)
+ *   to     — base64-encoded JSON cursor: {created_at, id} of the page
+ *            boundary (rows up to and including this tuple are returned)
+ *   limit  — max rows to return (default 100, max 500)
  *
  * Rows are returned in chain order (oldest first) so the caller can walk
  * them in a single pass, recomputing row_hash from the preceding prev_hash.
+ * Cursors use (created_at, id) tuples (keyset pagination) because `id` is a
+ * non-monotonic UUID — ordering by `created_at ASC, id ASC` requires the
+ * full tuple for stable boundaries.
+ *
  * The result includes:
- *   - rows:       array of chain rows with all canonical fields
- *   - prevCursor: id of the first returned row (null if no earlier rows)
- *   - nextCursor: id of the last returned row (null if no later rows)
- *   - total:      a rough estimate of total chain length (for progress UX)
+ *   - rows:            array of chain rows with all canonical fields except
+ *                      ip_address (redacted for security)
+ *   - redacted_fields: list of fields excluded from the public response
+ *   - prevCursor:      base64 cursor for the previous page (null if none)
+ *   - nextCursor:      base64 cursor for the next page (null if none)
+ *   - total:           a rough estimate of total chain length (for progress UX)
+ *   - hasMore:         whether more rows exist beyond this page
  *
  * Rate-limited per middleware/rateLimitConfig.js.
  */
@@ -130,21 +194,25 @@ router.get("/chain/:table", async (req, res, next) => {
       Math.max(parseInt(req.query.limit, 10) || 100, 1),
       500,
     );
-    const from = req.query.from || null;
-    const to = req.query.to || null;
+    const from = parseCursor(req.query.from);
+    const to = parseCursor(req.query.to);
 
-    // Build a parameterised query.  All user-supplied values are passed
-    // through $N placeholders — no raw concatenation.
+    // Build a parameterised query with tuple-based keyset pagination.
+    // All user-supplied values are passed through $N placeholders.
     const conditions = [];
     const values = [];
 
     if (from) {
-      values.push(from);
-      conditions.push(`id > $${values.length}`);
+      values.push(from.created_at, from.id);
+      conditions.push(
+        `(created_at, id) > ($${values.length - 1}, $${values.length})`,
+      );
     }
     if (to) {
-      values.push(to);
-      conditions.push(`id <= $${values.length}`);
+      values.push(to.created_at, to.id);
+      conditions.push(
+        `(created_at, id) <= ($${values.length - 1}, $${values.length})`,
+      );
     }
 
     // Column list is drawn from a fixed constant — safe to interpolate.
@@ -175,8 +243,8 @@ router.get("/chain/:table", async (req, res, next) => {
         event: "audit_chain_fetch_public",
         table: req.params.table,
         rowCount: page.length,
-        fromCursor: from,
-        toCursor: to,
+        fromCursor: req.query.from || null,
+        toCursor: req.query.to || null,
         hasMore,
       },
       `Public audit-chain segment fetched for ${req.params.table}: ${page.length} rows`,
@@ -186,8 +254,11 @@ router.get("/chain/:table", async (req, res, next) => {
       success: true,
       data: {
         rows: page,
-        prevCursor: page.length > 0 ? page[0].id : null,
-        nextCursor: hasMore ? page[page.length - 1].id : null,
+        redactedFields: REDACTED_FIELDS,
+        prevCursor:
+          page.length > 0 ? encodeCursor(page[0]) : null,
+        nextCursor:
+          hasMore && page.length > 0 ? encodeCursor(page[page.length - 1]) : null,
         total: Number(countResult.rows[0]?.total || 0),
         hasMore,
       },
