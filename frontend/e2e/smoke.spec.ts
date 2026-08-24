@@ -6,7 +6,7 @@ test('performance budget for LCP and INP', async ({ page }) => {
 
   // Expose a function to collect web vitals
   await page.addInitScript(() => {
-    window['webVitals'] = {
+    (window as any)['webVitals'] = {
       lcp: null,
       inp: null
     };
@@ -15,14 +15,14 @@ test('performance budget for LCP and INP', async ({ page }) => {
     new PerformanceObserver((entryList) => {
       const entries = entryList.getEntries();
       const lastEntry = entries[entries.length - 1];
-      window['webVitals'].lcp = lastEntry.startTime;
+      (window as any)['webVitals'].lcp = lastEntry.startTime;
     }).observe({ type: 'largest-contentful-paint', buffered: true });
 
     // Very basic observer for INP (using event timing as proxy)
     new PerformanceObserver((entryList) => {
       for (const entry of entryList.getEntries()) {
-        if (!window['webVitals'].inp || entry.duration > window['webVitals'].inp) {
-          window['webVitals'].inp = entry.duration;
+        if (!(window as any)['webVitals'].inp || entry.duration > (window as any)['webVitals'].inp) {
+          (window as any)['webVitals'].inp = entry.duration;
         }
       }
     }).observe({ type: 'event', buffered: true });
@@ -37,7 +37,7 @@ test('performance budget for LCP and INP', async ({ page }) => {
   // Wait a moment for layout to settle and observers to fire
   await page.waitForTimeout(2000);
 
-  const vitals = await page.evaluate(() => window['webVitals']);
+  const vitals = await page.evaluate(() => (window as any)['webVitals']);
   
   // Generous thresholds: LCP < 4000ms, INP < 500ms
   // These are higher than ideal production budgets (2.5s / 200ms) to avoid CI flake
