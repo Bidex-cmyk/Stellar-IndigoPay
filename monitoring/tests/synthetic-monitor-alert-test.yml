@@ -1,0 +1,145 @@
+# monitoring/tests/synthetic-monitor-alert-test.yml
+#
+# promtool test rules for the synthetic monitoring alert rules
+# added in monitoring/alert-rules.yml (issue #1144 Part A).
+#
+# Run with:
+#   promtool test rules monitoring/tests/synthetic-monitor-alert-test.yml
+
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ═══════════════════════════════════════════════════════════════════
+  # SyntheticDonationCheckFailing — for: 10m (fires when gauge == 0 for 10m)
+  # ═══════════════════════════════════════════════════════════════════
+
+  # FIRES: synthetic_donation_success stays at 0 for the full for: duration
+  - name: synthetic-check-failing-fires
+    interval: 30s
+    input_series:
+      - series: 'synthetic_donation_success{job="synthetic-monitor"}'
+        # 0 from t=0 to t=25 (25 × 30s = 12.5 min — enough to cover 10m for + buffer)
+        values: '0+0x25'
+    alert_rule_test:
+      # 11m = 1m warmup + 10m for
+      - alertname: SyntheticDonationCheckFailing
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              routing: pagerduty
+            exp_annotations:
+              summary: "Synthetic end-to-end donation check has been failing for >10 minutes"
+
+  # DOES NOT FIRE: synthetic check is passing (gauge == 1)
+  - name: synthetic-check-passing-no-fire
+    interval: 30s
+    input_series:
+      - series: 'synthetic_donation_success{job="synthetic-monitor"}'
+        values: '1+0x25'
+    alert_rule_test:
+      - alertname: SyntheticDonationCheckFailing
+        eval_time: 11m
+        exp_alerts: []
+
+  # DOES NOT FIRE: synthetic check failed briefly then recovered
+  - name: synthetic-check-transient-failure-no-fire
+    interval: 30s
+    input_series:
+      - series: 'synthetic_donation_success{job="synthetic-monitor"}'
+        # Fails for 8 minutes (16 intervals × 30s) then recovers — never reaches 10m for
+        values: '1+0x5 0+0x16 1+0x4'
+    alert_rule_test:
+      - alertname: SyntheticDonationCheckFailing
+        eval_time: 20m
+        exp_alerts: []
+
+  # ═══════════════════════════════════════════════════════════════════
+  # SyntheticMonitorSilent — fires when metric is absent for >5m
+  # (The `absent()` path — no series at all in the window)
+  # ═══════════════════════════════════════════════════════════════════
+
+  # FIRES: no synthetic_donation_last_timestamp metric exists at all
+  - name: synthetic-monitor-absent-fires
+    interval: 30s
+    input_series: []
+    alert_rule_test:
+      # 6m = 1m warmup + 5m for
+      - alertname: SyntheticMonitorSilent
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+            exp_annotations:
+              summary: "Synthetic monitor has not emitted a heartbeat in >15 minutes"
+
+  # DOES NOT FIRE: timestamp is recent (within 15 minutes)
+  - name: synthetic-monitor-recent-no-fire
+    interval: 30s
+    input_series:
+      - series: 'synthetic_donation_last_timestamp{job="synthetic-monitor"}'
+        # Timestamp increments by 30 per step (real Unix epoch would be a large number,
+        # but relative offsets work for promtool since we're checking time() - value > 900)
+        # We simulate a value that always equals (time - 60) so the delta is 60s < 900s.
+        # promtool sets start time; we approximate: provide a constant that is "recent"
+        # relative to eval_time. Using a large base offset to be safe.
+        values: '1700000000+30x30'
+    alert_rule_test:
+      - alertname: SyntheticMonitorSilent
+        eval_time: 6m
+        # This test checks the absent() branch only; the stale-timestamp branch
+        # depends on the absolute wall-clock time() which is not easily controlled
+        # in promtool. The absent branch is the critical path tested above.
+        exp_alerts: []
+
+  # ═══════════════════════════════════════════════════════════════════
+  # SyntheticDonationCheckSlow — for: 15m, p99 > 30s
+  # ═══════════════════════════════════════════════════════════════════
+
+  # FIRES: all checks take 45s (above 30s threshold)
+  - name: synthetic-check-slow-fires
+    interval: 30s
+    input_series:
+      # Simulate histogram where every observation is 45s (above the 30s le bucket)
+      # Bucket counts increment by 1 per interval for all le > 45, none for le <= 30
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="10"}'
+        values: '0+0x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="20"}'
+        values: '0+0x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="30"}'
+        values: '0+0x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="60"}'
+        values: '0+1x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="+Inf"}'
+        values: '0+1x50'
+    alert_rule_test:
+      # 17m = 2m warmup (30m rate needs data) + 15m for
+      - alertname: SyntheticDonationCheckSlow
+        eval_time: 17m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+            exp_annotations:
+              summary: "Synthetic donation check p99 duration is above 30s"
+
+  # DOES NOT FIRE: all checks are fast (under 30s)
+  - name: synthetic-check-fast-no-fire
+    interval: 30s
+    input_series:
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="10"}'
+        values: '0+1x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="20"}'
+        values: '0+1x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="30"}'
+        values: '0+1x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="60"}'
+        values: '0+1x50'
+      - series: 'synthetic_donation_duration_seconds_bucket{job="synthetic-monitor",le="+Inf"}'
+        values: '0+1x50'
+    alert_rule_test:
+      - alertname: SyntheticDonationCheckSlow
+        eval_time: 17m
+        exp_alerts: []

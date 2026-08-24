@@ -54,6 +54,49 @@ services:
     ports:
       - "9093:9093"
 
+  # ── Synthetic monitor (issue #1144 Part A) ─────────────────────────────
+  # Runs a synthetic end-to-end donation check every 5 minutes and exposes
+  # Prometheus metrics at :9091/metrics.
+  synthetic-monitor:
+    image: node:22-alpine
+    container_name: stellar-indigopay-synthetic-monitor
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "scripts/synthetic-monitor.js"]
+    environment:
+      SYNTHETIC_SECRET_KEY: ${SYNTHETIC_DONOR_SECRET_KEY:-}
+      CONTRACT_ID: ${CONTRACT_ID:-CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+      HORIZON_URL: ${HORIZON_URL:-https://horizon-testnet.stellar.org}
+      SOROBAN_RPC_URL: ${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org}
+      SYNTHETIC_PROJECT_ID: ${SYNTHETIC_PROJECT_ID:-project-001}
+      SYNTHETIC_AMOUNT_STROOPS: "100000"
+      METRICS_PORT: "9091"
+      NODE_PATH: /app/backend/node_modules
+    volumes:
+      - ../scripts/synthetic-monitor.js:/app/scripts/synthetic-monitor.js:ro
+      - ../backend/node_modules:/app/backend/node_modules:ro
+    ports:
+      - "9091:9091"
+
+  # ── Business metrics exporter (issue #1144 Part B) ────────────────────
+  # Queries Postgres for business KPIs and exposes them at :9092/metrics.
+  business-metrics-exporter:
+    image: node:22-alpine
+    container_name: stellar-indigopay-business-metrics
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "scripts/business-metrics-exporter.js"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://indigopay:indigopay@postgres:5432/indigopay}
+      METRICS_PORT: "9092"
+      REFRESH_INTERVAL_MS: "60000"
+    volumes:
+      - ../scripts/business-metrics-exporter.js:/app/scripts/business-metrics-exporter.js:ro
+      - ../backend/node_modules/pg:/app/node_modules/pg:ro
+    ports:
+      - "9092:9092"
+
 volumes:
   prometheus-data:
   grafana-data:

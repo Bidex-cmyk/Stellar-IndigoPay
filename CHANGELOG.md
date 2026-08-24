@@ -2,7 +2,18 @@
 
 ### Features
 
-* **contracts:** bounded slash history with ring-buffer eviction for oracle reporter accountability (closes #672)
+* **monitoring:** synthetic on-chain transaction monitoring + business-level metrics dashboards (closes #1144)
+  - Part A: Add `scripts/synthetic-monitor.js` — proactive 5-minute full-path check (Horizon + Soroban RPC + contract simulation) with Prometheus metrics (`synthetic_donation_success`, `synthetic_donation_duration_seconds`, `synthetic_donation_checks_total`, `synthetic_donation_last_timestamp`)
+  - Part A: Add `.github/workflows/synthetic-monitor.yml` — scheduled GitHub Actions workflow (every 5 min) running the check in CI; auto-creates GitHub issue on failure
+  - Part A: Add `SyntheticDonationCheckFailing` (page), `SyntheticMonitorSilent` (warn), and `SyntheticDonationCheckSlow` (warn) alert rules in `monitoring/alert-rules.yml`
+  - Part A: Add `docs/runbooks/synthetic-monitor-failure.md` with step-by-step incident response
+  - Part B: Add `scripts/business-metrics-exporter.js` — Postgres-backed exporter of 17 business KPIs (donation volume, active donors, retention, conversion, CO₂ offsets, AI cost, webhook reliability, recurring subscriptions)
+  - Part B: Add business recording rules group to `monitoring/recording-rules.yml` (14 pre-computed rules)
+  - Part B: Add `monitoring/grafana/dashboards/indigopay-business-overview.json` — Business Overview dashboard (7 rows, 28 panels: volume, retention, projects, CO₂, operations, synthetic monitor, exporter health)
+  - Update `monitoring/prometheus.yml` to scrape `synthetic-monitor` (:9091) and `business-metrics-exporter` (:9092) jobs
+  - Update `monitoring/docker-compose.monitoring.yml` to include both new services
+  - Add `monitoring/grafana/dashboards/provisioner.yml` for automatic Grafana dashboard provisioning
+  - Add `monitoring/tests/synthetic-monitor-alert-test.yml` and `monitoring/tests/business-recording-rules-test.yml` (promtool test suites)
   - Add `SlashEvent` struct and per-reporter `SlashHistoryMeta` ring buffer to `SimpleOracle`
   - New admin-only `slash_reporter(admin, reporter, reason)` entry point records a timestamped slash event
   - History capped at `MAX_SLASH_HISTORY = 20` — oldest entries are evicted in ring-buffer order to prevent unbounded storage growth
