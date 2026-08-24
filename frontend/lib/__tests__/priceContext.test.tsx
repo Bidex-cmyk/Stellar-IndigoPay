@@ -447,19 +447,20 @@ describe("PriceProvider — degraded state", () => {
     // Now start failing
     mockFetchXlmPrice.mockResolvedValue(failedResult());
 
-    // Drive enough retries to reach degraded (MAX_CONSECUTIVE_FAILURES = 3)
-    // By using runOnlyPendingTimers, we advance exactly to the next scheduled poll
-    // (60s, then 5s, 10s, 20s) without skipping over them.
-    for (let i = 0; i < MAX_CONSECUTIVE_FAILURES + 2; i++) {
-      await act(async () => {
-        jest.runOnlyPendingTimers();
-      });
+    // After a *successful* fetch the next poll is scheduled at
+    // POLL_INTERVAL_MS ± 10% jitter (54–66s), so advance past the whole
+    // window first. Only then does the backoff chain (5s, 10s, 20s) apply.
+    const advance = async (ms: number) => {
       await act(async () => {
         await Promise.resolve();
-        await Promise.resolve();
+        jest.advanceTimersByTime(ms);
         await Promise.resolve();
       });
-    }
+    };
+
+    await advance(POLL_INTERVAL_MS * 1.2); // failure #1 (past the jittered poll)
+    await advance(30_000); // failure #2 (backoff 5s)
+    await advance(30_000); // failure #3 (backoff 10s) → degraded
 
     await waitFor(() => {
       expect(screen.getByTestId("isDegraded").textContent).toBe("true");
