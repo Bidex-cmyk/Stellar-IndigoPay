@@ -22,14 +22,16 @@
 
 const h = require("../lib/harness");
 
-const BREAKER_RESET_TIMEOUT_MS = 30000; // resetTimeout configured in backend/src/services/stellar.js
-const BREAKER_RECOVERY_WAIT_MS = BREAKER_RESET_TIMEOUT_MS + 15000;
-
 async function run() {
   const { rpc } = require("@stellar/stellar-sdk");
 
   const stellar = require("/backend/src/services/stellar");
   const { withRetry, rpcBreaker, sorobanRpcRetriesTotal } = stellar;
+
+  // Pull the breaker's real reset timeout from the app config so the test
+  // never drifts from backend/src/services/stellar.js if it changes.
+  const BREAKER_RESET_TIMEOUT_MS = rpcBreaker.resetTimeout;
+  const BREAKER_RECOVERY_WAIT_MS = BREAKER_RESET_TIMEOUT_MS + 15000;
   const stubRpc = new rpc.Server(`${h.STUB_URL}/soroban`, { allowHttp: true });
 
   h.log("=== Scenario 04: Soroban RPC timeout — retry + circuit breaker + eventual success ===");

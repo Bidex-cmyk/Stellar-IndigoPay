@@ -78,13 +78,18 @@ async function run() {
   await h.waitForMarker("01.recovered");
 
   // ── Recovery: cache restored, totals intact ─────────────────────────────
-  // ioredis reconnects asynchronously after the server comes back — poll
-  // until the cache answers again instead of racing the reconnect.
+  // ioredis reconnects asynchronously after the server comes back — poll by
+  // writing a NEW key and reading it back. This environment runs Redis
+  // WITHOUT persistence (default no-persistence config), so a key written
+  // before the crash is not guaranteed to survive the restart; requiring it
+  // would test Redis durability, not recovery. A fresh write/read proves the
+  // cache is genuinely operational again.
   await h.waitFor(async () => {
-    const restored = await h.redis.get("chaos:probe");
-    return restored && restored.v === 1;
-  }, { timeoutMs: 30000, intervalMs: 500, label: "Redis cache to respond after restart" });
-  h.assert(true, "cache restored after Redis restart");
+    await h.redis.set("chaos:recovery-probe", { v: Date.now() });
+    const restored = await h.redis.get("chaos:recovery-probe");
+    return restored !== null && typeof restored.v === "number";
+  }, { timeoutMs: 30000, intervalMs: 500, label: "Redis to accept new writes after restart" });
+  h.assert(true, "cache accepts new writes after Redis restart (recovered)");
   const finalCount = await h.countDonations(PROJECT_ID);
   h.assert(finalCount === SPIKE_BEFORE_FAULT + SPIKE_DURING_FAULT, `no donation lost or duplicated after recovery (count=${finalCount})`);
   h.assert((await h.projectRaised(PROJECT_ID)) === (SPIKE_BEFORE_FAULT + SPIKE_DURING_FAULT) * 10, "project totals unchanged after recovery");

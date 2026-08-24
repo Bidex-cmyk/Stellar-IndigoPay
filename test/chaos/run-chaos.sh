@@ -25,7 +25,10 @@ log() { echo -e "\n\033[1m[chaos-host] $*\033[0m"; }
 cleanup() {
   log "tearing down chaos topology"
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$RUN_DIR" 2>/dev/null || sudo rm -rf "$RUN_DIR" 2>/dev/null || true
+  # Preserve summary.json (and any other results) for the nightly CI to
+  # upload as an artifact / write to the job summary AFTER this script
+  # exits. Only the transient marker files are cleared.
+  rm -f "$RUN_DIR"/*.marker 2>/dev/null || sudo rm -f "$RUN_DIR"/*.marker 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -45,7 +48,11 @@ mkdir -p "$RUN_DIR"
 # World-writable so both the host user and the (root) container can create
 # and clean up marker files across runs.
 chmod 777 "$RUN_DIR"
+# Clear transient state from any previous run. summary.json is removed too
+# so a stale summary from a prior run can never be mistaken for this run's
+# results if the driver dies before writing a fresh one.
 rm -f "$RUN_DIR"/*.marker 2>/dev/null || true
+rm -f "$RUN_DIR"/summary.json 2>/dev/null || true
 
 # ── Start topology ──────────────────────────────────────────────────────────
 log "starting chaos topology ($COMPOSE_FILE)"

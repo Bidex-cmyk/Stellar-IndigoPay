@@ -30,8 +30,17 @@ test/chaos/
 Topology (`docker-compose.chaos.yml`): `postgres` + `redis` (same images as
 `docker-compose.test.yml`) + `chaos-stub` + `backend`. The backend image is
 the same `indigopay-backend-test:ci` image `ci.yml` builds; the container
-mounts `./backend/src`, `./test/chaos`, and a shared `./.chaos-run` marker
-directory, then runs `npm run db:migrate && node /chaos/driver.js`.
+mounts `./backend/src` over BOTH `/app/src` (where `npm run db:migrate`
+resolves migrations from WORKDIR `/app`) and `/backend/src` (where the
+driver requires the app modules), plus `./test/chaos` and a shared
+`./.chaos-run` marker directory, then runs
+`npm run db:migrate && node /chaos/driver.js`. Migrations and the code
+under test therefore always come from the same checked-out revision.
+
+`run-chaos.sh` preserves `.chaos-run/summary.json` across its own teardown
+(only transient marker files are cleaned), so the nightly workflow can
+upload the results as an artifact and write them to the job summary after
+the script exits.
 
 Fault coordination:
 

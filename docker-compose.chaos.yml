@@ -87,7 +87,13 @@ services:
     # The backend image only ships ./backend, so mount the app source (same
     # as docker-compose.test.yml) plus the chaos suite and the shared marker
     # directory used for host-injected faults.
+    #
+    # Both /app/src (where `npm run db:migrate` resolves migrations from
+    # WORKDIR /app) and /backend/src (where the driver requires the app
+    # modules) are mounted from the SAME checked-out ./backend/src, so the
+    # migrations and the code under test always come from one revision.
     volumes:
+      - ./backend/src:/app/src:ro
       - ./backend/src:/backend/src:ro
       - ./test/chaos:/chaos:ro
       - ./.chaos-run:/chaos-run

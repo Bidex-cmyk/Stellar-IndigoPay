@@ -14,6 +14,10 @@
  *     were copied over but never translated; genuinely identical words
  *     (brand names, "Error", "XLM", …) are expected and only logged.
  *
+ * Every `*.json` file in frontend/locales/ is discovered dynamically, so a
+ * newly added locale (ar.json, he.json, …) is checked automatically instead
+ * of requiring the hardcoded file list to be maintained.
+ *
  * Output: a human summary plus a machine-readable `locale-coverage.json`
  * written to the frontend directory (uploaded as a CI artifact so the
  * coverage metric is visible on the dashboard).
@@ -24,7 +28,11 @@ const fs = require("fs");
 const path = require("path");
 
 const localesDir = path.join(__dirname, "..", "locales");
-const files = ["en.json", "fr.json", "es.json"];
+// Discover every locale file automatically — no hardcoded list to maintain.
+const files = fs
+  .readdirSync(localesDir)
+  .filter((file) => file.endsWith(".json"))
+  .sort();
 const outputPath = path.join(__dirname, "..", "locale-coverage.json");
 
 function getKeys(obj, prefix = "") {
@@ -79,10 +87,15 @@ for (const file of files) {
   }
 
   // Translation coverage: keys whose value differs from the English value.
-  const identical = enKeys.filter(
-    (k) => getValueByKey(current.content, k) === getValueByKey(en.content, k),
-  );
-  const translated = enKeys.length - identical.length;
+  // A MISSING key must never count as translated — the lookup returns
+  // undefined, which would otherwise "differ" from the English string. Keys
+  // missing from the locale are already a parity failure above and count as
+  // untranslated here (they render English, i.e. fallback).
+  const identical = enKeys.filter((k) => {
+    const value = getValueByKey(current.content, k);
+    return value !== undefined && value === getValueByKey(en.content, k);
+  });
+  const translated = enKeys.length - identical.length - missingInFile.length;
   const percent =
     enKeys.length === 0 ? 100 : ((translated / enKeys.length) * 100).toFixed(2);
 
@@ -90,10 +103,14 @@ for (const file of files) {
     totalKeys: enKeys.length,
     translatedKeys: translated,
     identicalToEnglish: identical.length,
+    missingKeys: missingInFile.length,
     coveragePercent: Number(percent),
   };
 
   console.log(`📊 ${file}: ${translated}/${enKeys.length} keys translated (${percent}% coverage)`);
+  if (missingInFile.length > 0) {
+    console.log(`   ⚠️  ${missingInFile.length} key(s) missing — these render English (fallback) and are NOT counted as translated`);
+  }
   if (identical.length > 0) {
     console.log(`   ⚠️  ${identical.length} key(s) have the same value as en.json (may be intentional):\n   ${identical.join(", ")}`);
   }

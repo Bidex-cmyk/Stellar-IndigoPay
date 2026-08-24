@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -63,9 +63,13 @@ jobs:
     name: Frontend Locale Parity + Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The check only reads the repo and uploads an artifact — the token
+    # needs no write scopes.
+    permissions:
+      contents: read
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -96,7 +100,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -124,7 +128,7 @@ jobs:
     needs: [frontend-tests-smoke]
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -153,7 +157,7 @@ jobs:
         shardTotal: [3]
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./.github/actions/setup-node-cached
@@ -236,7 +240,7 @@ jobs:
     needs: [frontend-lint, frontend-typecheck, frontend-tests, frontend-e2e]
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -334,7 +338,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -370,7 +374,7 @@ jobs:
         shardTotal: [3]
     steps:
       - name: Start Timer
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@v4
 

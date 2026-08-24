@@ -29,8 +29,6 @@ const h = require("../lib/harness");
 
 const PROJECT_ID = "33333333-3333-3333-3333-333333333333";
 const SCHEDULE_ID = 33;
-const BREAKER_RESET_TIMEOUT_MS = 30000; // resetTimeout configured in backend/src/services/stellar.js
-const BREAKER_RECOVERY_WAIT_MS = BREAKER_RESET_TIMEOUT_MS + 15000;
 
 async function run() {
   const { rpc } = require("@stellar/stellar-sdk");
@@ -40,6 +38,11 @@ async function run() {
   const stellar = require("/backend/src/services/stellar");
   const recurringKeeper = require("/backend/src/services/recurringKeeper");
   const { withRetry, rpcBreaker, sorobanRpcRetriesTotal } = stellar;
+
+  // Pull the breaker's real reset timeout from the app config so the test
+  // never drifts from backend/src/services/stellar.js if it changes.
+  const BREAKER_RESET_TIMEOUT_MS = rpcBreaker.resetTimeout;
+  const BREAKER_RECOVERY_WAIT_MS = BREAKER_RESET_TIMEOUT_MS + 15000;
 
   // A stub-bound Soroban RPC client (the app's own rpcServer stays https).
   // `withRetry` from the app routes every attempt through the SHARED
