@@ -148,7 +148,7 @@ jobs:
       - name: Run chaos harness
         run: |
           CHAOS_TEST=1 npx jest \
-            --testPathPattern="test/chaos/workerChaos" \
+            --testPathPatterns="test/chaos/workerChaos" \
             --forceExit \
             --ci \
             --verbose

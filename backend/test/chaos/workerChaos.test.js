@@ -39,11 +39,10 @@
  */
 
 // Skip the entire file when not running in chaos mode to keep the normal test
-// run fast and unaffected.
-if (!process.env.CHAOS_TEST) {
-  test.skip("chaos harness skipped (set CHAOS_TEST=1 to run)", () => {});
-  return;  // short-circuit module evaluation
-}
+// run fast and unaffected. The jest.config.js testPathIgnorePatterns already
+// excludes this directory when CHAOS_TEST is unset; this guard is defence-in-
+// depth for editors/tooling that invoke Jest directly on the file.
+const CHAOS_ENABLED = Boolean(process.env.CHAOS_TEST);
 
 const { GenericContainer, Wait } = require("testcontainers");
 const { Pool } = require("pg");
@@ -360,7 +359,9 @@ async function replayFromDLQ(pool, jobId, consumer) {
 
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
-describe("Worker chaos harness — crash-safety and partial-failure recovery", () => {
+(CHAOS_ENABLED ? describe : describe.skip)(
+  "Worker chaos harness — crash-safety and partial-failure recovery",
+  () => {
   jest.setTimeout(60_000);
 
   /** @type {import('testcontainers').StartedTestContainer | null} */
@@ -438,9 +439,10 @@ describe("Worker chaos harness — crash-safety and partial-failure recovery", (
     const jobId = await enqueueWithOutbox(pool);
 
     // Arm fault: throw after the UPDATE that sets status = 'claimed'.
+    // Use a pattern that matches within a single line of the multi-line SQL.
     const injector = new FaultInjector(pool);
     injector.armAt(CrashPoint.AFTER_CLAIM, {
-      afterQuery: /UPDATE chaos_jobs.*SET status = 'claimed'/,
+      afterQuery: /SET status = 'claimed'/,
     });
 
     // W1 attempts to claim — fault fires after the DB write, simulating
@@ -755,10 +757,11 @@ describe("Worker chaos harness — crash-safety and partial-failure recovery", (
 
     // Arm fault: throw after the INSERT into chaos_processed (the DB write
     // for idempotency happened but the UPDATE on chaos_jobs to 'done' did not).
+    // We match on the INSERT pattern alone — it only appears once in the
+    // replayFromDLQ flow so fireOnNth is not needed.
     const injector = new FaultInjector(pool);
     injector.armAt(CrashPoint.MID_COMMIT, {
       afterQuery: /INSERT INTO chaos_processed/,
-      fireOnNth: 1, // only fire once
     });
 
     // First replay attempt — fault fires mid-replay after idempotency record written.
@@ -922,4 +925,5 @@ describe("Worker chaos harness — crash-safety and partial-failure recovery", (
     assertSingleProcessing(consumer, jobId);
     assertNoDuplicates(consumer);
   });
-});
+},
+);
