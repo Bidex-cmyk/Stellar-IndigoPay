@@ -8,32 +8,42 @@
  * Testnet using a dedicated synthetic-donor keypair. Results are exposed as
  * Prometheus metrics so Alertmanager can fire on consecutive failures.
  *
- * Metrics exported (Prometheus text format on stdout / HTTP server):
- *   synthetic_donation_success          gauge  1 = last attempt succeeded, 0 = failed
- *   synthetic_donation_duration_seconds histogram  end-to-end duration of the check
- *   synthetic_donation_checks_total     counter  total checks performed (label: result)
- *   synthetic_donation_last_timestamp   gauge  unix epoch of the last completed check
+ * Metrics exported (Prometheus text format on :METRICS_PORT/metrics):
+ *   synthetic_donation_success          gauge    1 = last attempt succeeded, 0 = failed
+ *   synthetic_donation_duration_seconds histogram end-to-end duration of the check
+ *   synthetic_donation_checks           counter  total checks performed (label: result)
+ *   synthetic_donation_last_timestamp   gauge    unix epoch of the last completed check
+ *
+ * The check flow:
+ *   1. Verify Horizon /fee_stats is reachable
+ *   2. Verify Soroban RPC getLedgerEntries returns a valid response
+ *   3. If @stellar/stellar-sdk is available:
+ *      a. Build a donate() transaction
+ *      b. simulateTransaction — must succeed (not contract error)
+ *      c. assembleTx + sign + sendTransaction
+ *      d. Poll getTransaction until SUCCESS (or FAILED / timeout → failure)
  *
  * Environment variables:
- *   SYNTHETIC_SECRET_KEY      Ed25519 secret key (sXXX…) for the synthetic donor account.
- *                             If absent, the script generates a fresh keypair and funds it
- *                             from Friendbot automatically (testnet only).
+ *   SYNTHETIC_SECRET_KEY      Ed25519 secret key (sXXX…) for the synthetic donor.
+ *                             REQUIRED — the script exits with code 1 if absent.
  *   SYNTHETIC_PROJECT_ID      Project ID to donate to (default: "project-001").
  *   SYNTHETIC_AMOUNT_STROOPS  Donation amount in stroops (default: 100000 = 0.01 XLM).
  *   STELLAR_NETWORK           "testnet" (default) or "mainnet".
- *   HORIZON_URL               Horizon endpoint (default: testnet).
- *   SOROBAN_RPC_URL           Soroban RPC endpoint (default: testnet).
+ *   HORIZON_URL               Horizon endpoint.
+ *   SOROBAN_RPC_URL           Soroban RPC endpoint.
  *   CONTRACT_ID               Soroban IndigoPay contract address.
  *   PROMETHEUS_PUSH_URL       If set, push metrics to this Prometheus Push Gateway URL.
  *   METRICS_PORT              HTTP port to expose /metrics on (default: 9091).
- *   RUN_ONCE                  If "true", perform a single check then exit (for cron/CI use).
+ *   RUN_ONCE                  If "true", perform one check then exit (cron/CI use).
+ *   POLL_TIMEOUT_MS           Max time to poll getTransaction (default: 30000).
+ *   POLL_INTERVAL_MS          Polling interval (default: 3000).
  *
  * Usage:
  *   # One-shot (CI / GitHub Actions cron)
- *   RUN_ONCE=true node scripts/synthetic-monitor.js
+ *   SYNTHETIC_SECRET_KEY=sXXX… RUN_ONCE=true node scripts/synthetic-monitor.js
  *
- *   # Long-running sidecar (Kubernetes CronJob / Docker)
- *   node scripts/synthetic-monitor.js
+ *   # Long-running sidecar
+ *   SYNTHETIC_SECRET_KEY=sXXX… node scripts/synthetic-monitor.js
  */
 
 "use strict";
@@ -44,6 +54,19 @@ const http = require("node:http");
 // Lightweight Prometheus registry (no external dependencies)
 // ---------------------------------------------------------------------------
 
+/**
+ * Escape a Prometheus label value per the text-format spec:
+ * backslash → \\, double-quote → \", newline → \n
+ * @param {*} v
+ * @returns {string}
+ */
+function escapeLabelValue(v) {
+  return String(v)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+}
+
 class MetricRegistry {
   constructor() {
     this._gauges = new Map();
@@ -53,17 +76,19 @@ class MetricRegistry {
 
   gauge(name, help) {
     if (!this._gauges.has(name)) {
-      this._gauges.set(name, { help, value: null, ts: null });
+      this._gauges.set(name, { help, value: null });
     }
     return {
       set: (value) => {
-        const m = this._gauges.get(name);
-        m.value = value;
-        m.ts = Date.now();
+        this._gauges.get(name).value = value;
       },
     };
   }
 
+  /**
+   * @param {string} name   The base metric name WITHOUT _total suffix.
+   *                        The renderer will append _total when emitting samples.
+   */
   counter(name, help, labelNames = []) {
     if (!this._counters.has(name)) {
       this._counters.set(name, { help, labelNames, values: new Map() });
@@ -77,13 +102,18 @@ class MetricRegistry {
     };
   }
 
-  histogram(name, help, labelNames = [], buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]) {
+  histogram(
+    name,
+    help,
+    labelNames = [],
+    buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  ) {
     if (!this._histograms.has(name)) {
       this._histograms.set(name, {
         help,
         labelNames,
         buckets,
-        obs: [], // [{labels, value}]
+        obs: [],
       });
     }
     return {
@@ -106,15 +136,15 @@ class MetricRegistry {
     }
 
     for (const [name, m] of this._counters) {
-      lines.push(`# HELP ${name} ${m.help}`);
-      lines.push(`# TYPE ${name} counter`);
+      lines.push(`# HELP ${name}_total ${m.help}`);
+      lines.push(`# TYPE ${name}_total counter`);
       for (const [key, count] of m.values) {
         if (m.labelNames.length === 0) {
           lines.push(`${name}_total ${count}`);
         } else {
           const parts = key.split(",");
           const labelStr = m.labelNames
-            .map((l, i) => `${l}="${parts[i] ?? ""}"`)
+            .map((l, i) => `${l}="${escapeLabelValue(parts[i] ?? "")}"`)
             .join(",");
           lines.push(`${name}_total{${labelStr}} ${count}`);
         }
@@ -124,7 +154,8 @@ class MetricRegistry {
     for (const [name, m] of this._histograms) {
       lines.push(`# HELP ${name} ${m.help}`);
       lines.push(`# TYPE ${name} histogram`);
-      // Group observations by label set
+
+      // Group observations by label-set key
       const groups = new Map();
       for (const { labels, value } of m.obs) {
         const key = m.labelNames.map((l) => labels[l] ?? "").join(",");
@@ -133,24 +164,32 @@ class MetricRegistry {
         }
         groups.get(key).values.push(value);
       }
+
       for (const [, g] of groups) {
-        const lStr =
-          m.labelNames.length > 0
-            ? `{${m.labelNames.map((l) => `${l}="${g.labels[l] ?? ""}"`).join(",")}}`
-            : "";
+        // Build the base label set string (without le)
+        const baseLabelPairs = m.labelNames.map(
+          (l) => `${l}="${escapeLabelValue(g.labels[l] ?? "")}"`,
+        );
+
+        /** Build a bucket label string that always includes le. */
+        const bucketLStr = (le) => {
+          const pairs = [...baseLabelPairs, `le="${le}"`];
+          return `{${pairs.join(",")}}`;
+        };
+
+        // Base label string for _sum / _count (no le)
+        const sumCountLStr =
+          baseLabelPairs.length > 0 ? `{${baseLabelPairs.join(",")}}` : "";
+
         let sum = 0;
-        let count = 0;
         for (const bucket of m.buckets) {
           const cnt = g.values.filter((v) => v <= bucket).length;
-          lines.push(`${name}_bucket${lStr.replace("}", `,le="${bucket}"}`)} ${cnt}`);
+          lines.push(`${name}_bucket${bucketLStr(bucket)} ${cnt}`);
         }
-        lines.push(`${name}_bucket${lStr.replace("}", `,le="+Inf"}`)} ${g.values.length}`);
-        for (const v of g.values) {
-          sum += v;
-          count++;
-        }
-        lines.push(`${name}_sum${lStr} ${sum}`);
-        lines.push(`${name}_count${lStr} ${count}`);
+        lines.push(`${name}_bucket${bucketLStr("+Inf")} ${g.values.length}`);
+        for (const v of g.values) sum += v;
+        lines.push(`${name}_sum${sumCountLStr} ${sum}`);
+        lines.push(`${name}_count${sumCountLStr} ${g.values.length}`);
       }
     }
 
@@ -162,7 +201,7 @@ const registry = new MetricRegistry();
 
 const syntheticDonationSuccess = registry.gauge(
   "synthetic_donation_success",
-  "1 if the last synthetic end-to-end donation succeeded, 0 if it failed",
+  "1 if the last synthetic end-to-end donation succeeded (submitted and confirmed on-chain), 0 if it failed",
 );
 
 const syntheticDonationDurationSeconds = registry.histogram(
@@ -172,8 +211,9 @@ const syntheticDonationDurationSeconds = registry.histogram(
   [0.5, 1, 2, 5, 10, 20, 30, 60],
 );
 
-const syntheticDonationChecksTotal = registry.counter(
-  "synthetic_donation_checks_total",
+// Name is the BASE name; the renderer appends _total → synthetic_donation_checks_total
+const syntheticDonationChecks = registry.counter(
+  "synthetic_donation_checks",
   "Total synthetic donation checks performed, labelled by result (success|failure)",
   ["result"],
 );
@@ -184,8 +224,7 @@ const syntheticDonationLastTimestamp = registry.gauge(
 );
 
 // ---------------------------------------------------------------------------
-// Minimal Stellar / Soroban integration (uses @stellar/stellar-sdk if available,
-// falls back to HTTP calls so the script can run in lean CI environments)
+// Configuration
 // ---------------------------------------------------------------------------
 
 const NETWORK = process.env.STELLAR_NETWORK || "testnet";
@@ -208,50 +247,59 @@ const SYNTHETIC_AMOUNT_STROOPS = Number(
 const RUN_ONCE = process.env.RUN_ONCE === "true";
 const METRICS_PORT = Number(process.env.METRICS_PORT || 9091);
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const POLL_TIMEOUT_MS = Number(process.env.POLL_TIMEOUT_MS || 30_000);
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 3_000);
+
+// ---------------------------------------------------------------------------
+// Keypair — REQUIRED, no auto-generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the synthetic donor keypair from SYNTHETIC_SECRET_KEY.
+ * Exits with code 1 if the variable is absent — every deployment must use
+ * a stable pre-funded account; auto-generating keypairs logs secrets and
+ * produces a new unfunded account on every restart.
+ */
+function resolveSyntheticKeypair() {
+  const secret = process.env.SYNTHETIC_SECRET_KEY;
+  if (!secret) {
+    console.error(
+      "[synthetic-monitor] FATAL: SYNTHETIC_SECRET_KEY is not set.\n" +
+        "  Generate a testnet keypair once with `stellar keys generate --network testnet`,\n" +
+        "  fund it via https://friendbot.stellar.org?addr=<PUBLIC_KEY>,\n" +
+        "  then store the secret in the SYNTHETIC_DONOR_SECRET_KEY GitHub Actions secret\n" +
+        "  and the SYNTHETIC_DONOR_SECRET_KEY Docker Compose environment variable.",
+    );
+    process.exit(1);
+  }
+  return secret;
+}
 
 // ---------------------------------------------------------------------------
 // Friendbot funding helper
 // ---------------------------------------------------------------------------
 
-/**
- * Fund a Stellar testnet account via Friendbot.
- * @param {string} publicKey
- * @returns {Promise<void>}
- */
 async function friendbotFund(publicKey) {
   const url = `https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`;
   const response = await fetch(url, { method: "GET" });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    // Already funded = HTTP 400 with "createAccountAlreadyExist" — that's fine
     if (body.includes("createAccountAlreadyExist")) return;
     throw new Error(`Friendbot failed (${response.status}): ${body.slice(0, 200)}`);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Account existence check
-// ---------------------------------------------------------------------------
-
 async function accountExists(publicKey) {
   const url = `${HORIZON_URL}/accounts/${encodeURIComponent(publicKey)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   return res.status === 200;
 }
 
 // ---------------------------------------------------------------------------
-// Soroban contract read — simulate get_global_total to verify RPC is up
+// Soroban RPC liveness check
 // ---------------------------------------------------------------------------
 
-/**
- * Attempt a read-only Soroban RPC simulation to verify the RPC endpoint is live.
- * Returns { success: true, ledger: number } or { success: false, error: string }.
- */
-async function verifyRpcAndContract() {
-  if (!CONTRACT_ID) {
-    return { success: false, error: "CONTRACT_ID not configured" };
-  }
-
+async function verifyRpcLiveness() {
   const payload = {
     jsonrpc: "2.0",
     id: 1,
@@ -263,7 +311,7 @@ async function verifyRpcAndContract() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
@@ -275,9 +323,44 @@ async function verifyRpcAndContract() {
     throw new Error(`Soroban RPC error: ${JSON.stringify(json.error)}`);
   }
 
-  // Extract current ledger from result to confirm RPC is live
-  const ledger = json.result?.latestLedger ?? 0;
-  return { success: true, ledger };
+  return { latestLedger: json.result?.latestLedger ?? 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Transaction polling helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Poll rpcServer.getTransaction(hash) until it reaches a terminal state
+ * (SUCCESS or FAILED) or the timeout elapses.
+ *
+ * @param {object} rpcServer
+ * @param {string} txHash
+ * @returns {Promise<{ status: string, result: object|null }>}
+ */
+async function pollTransaction(rpcServer, txHash) {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const response = await rpcServer.getTransaction(txHash);
+
+    if (response.status === "SUCCESS") {
+      return { status: "SUCCESS", result: response };
+    }
+    if (response.status === "FAILED") {
+      return { status: "FAILED", result: response };
+    }
+    if (response.status === "NOT_FOUND") {
+      // Transaction not yet indexed — wait and retry
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      continue;
+    }
+
+    // PENDING or any other transient status
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+
+  return { status: "TIMEOUT", result: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,14 +368,12 @@ async function verifyRpcAndContract() {
 // ---------------------------------------------------------------------------
 
 /**
- * Perform the full synthetic donation check:
- *   1. Verify the synthetic donor account exists (fund via Friendbot if not)
- *   2. Verify the Soroban RPC endpoint is reachable
- *   3. Verify the Soroban contract is accessible (simulate get_global_total)
- *   4. Verify Horizon is reachable (fetch fee stats)
- *   5. If @stellar/stellar-sdk is available, build + simulate a donate transaction
+ * Full synthetic donation check:
+ *   1. Verify Horizon is reachable
+ *   2. Verify Soroban RPC is reachable
+ *   3. Build, simulate, assemble, sign, submit, and poll the donation tx
  *
- * @param {string} secretKey  Ed25519 secret key (sXXX…)
+ * @param {string} secretKey
  * @returns {Promise<{ success: boolean, durationMs: number, details: object }>}
  */
 async function runSyntheticCheck(secretKey) {
@@ -300,37 +381,9 @@ async function runSyntheticCheck(secretKey) {
   const details = {};
 
   try {
-    // ── Step 1: Resolve keypair ──────────────────────────────────────
-    let keypair;
-    try {
-      // Try to load stellar-sdk if available in the project
-      // eslint-disable-next-line global-require
-      const sdk = require("@stellar/stellar-sdk");
-      keypair = sdk.Keypair.fromSecret(secretKey);
-    } catch {
-      // stellar-sdk not available in this execution context — skip tx building
-      details.stellarSdkAvailable = false;
-      keypair = null;
-    }
-
-    const publicKey = keypair ? keypair.publicKey() : derivePublicKeyFallback(secretKey);
-    details.publicKey = publicKey;
-
-    // ── Step 2: Ensure account is funded (testnet only) ──────────────
-    if (NETWORK !== "mainnet") {
-      const exists = await accountExists(publicKey);
-      if (!exists) {
-        console.log(`[synthetic-monitor] Funding new synthetic account ${publicKey} via Friendbot…`);
-        await friendbotFund(publicKey);
-        details.funded = true;
-      } else {
-        details.funded = false;
-      }
-    }
-
-    // ── Step 3: Verify Horizon is reachable ──────────────────────────
+    // ── Step 1: Verify Horizon ───────────────────────────────────────
     const horizonRes = await fetch(`${HORIZON_URL}/fee_stats`, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!horizonRes.ok) {
       throw new Error(`Horizon /fee_stats returned HTTP ${horizonRes.status}`);
@@ -339,123 +392,129 @@ async function runSyntheticCheck(secretKey) {
     details.horizonOk = true;
     details.lastLedger = feeStats.last_ledger;
 
-    // ── Step 4: Verify Soroban RPC + contract ────────────────────────
-    const rpcResult = await verifyRpcAndContract();
-    details.rpcOk = rpcResult.success;
-    details.rpcLedger = rpcResult.ledger;
+    // ── Step 2: Verify Soroban RPC ───────────────────────────────────
+    const rpcResult = await verifyRpcLiveness();
+    details.rpcOk = true;
+    details.rpcLedger = rpcResult.latestLedger;
 
-    // ── Step 5: Simulate a donate transaction (if SDK available) ─────
-    if (keypair && CONTRACT_ID) {
-      try {
-        // eslint-disable-next-line global-require
-        const {
-          Networks,
-          TransactionBuilder,
-          Contract,
-          nativeToScVal,
-          Address,
-          rpc: sdkRpc,
-          Horizon: sdkHorizon,
-        } = require("@stellar/stellar-sdk");
+    // ── Step 3: Load stellar-sdk ─────────────────────────────────────
+    let sdk;
+    try {
+      // eslint-disable-next-line global-require
+      sdk = require("@stellar/stellar-sdk");
+    } catch {
+      details.stellarSdkAvailable = false;
+      // Without the SDK we can only verify Horizon + RPC — still meaningful
+      return { success: true, durationMs: Date.now() - start, details };
+    }
+    details.stellarSdkAvailable = true;
 
-        const networkPassphrase =
-          NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
-        const rpcServer = new sdkRpc.Server(RPC_URL);
-        const horizonServer = new sdkHorizon.Server(HORIZON_URL);
+    if (!CONTRACT_ID) {
+      throw new Error("CONTRACT_ID is not configured — cannot build donate() tx");
+    }
 
-        // Fetch current account sequence
-        const account = await horizonServer.loadAccount(keypair.publicKey());
-        const contract = new Contract(CONTRACT_ID);
+    const {
+      Keypair,
+      Networks,
+      TransactionBuilder,
+      Contract,
+      nativeToScVal,
+      Address,
+      rpc: sdkRpc,
+      Horizon: sdkHorizon,
+    } = sdk;
 
-        // Build a simulated donate(project_id, amount) call
-        const tx = new TransactionBuilder(account, {
-          fee: "1000",
-          networkPassphrase,
-        })
-          .addOperation(
-            contract.call(
-              "donate",
-              new Address(keypair.publicKey()).toScVal(),
-              nativeToScVal(SYNTHETIC_PROJECT_ID, { type: "string" }),
-              nativeToScVal(BigInt(SYNTHETIC_AMOUNT_STROOPS), { type: "i128" }),
-            ),
-          )
-          .setTimeout(30)
-          .build();
+    const networkPassphrase =
+      NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    const keypair = Keypair.fromSecret(secretKey);
+    const publicKey = keypair.publicKey();
+    details.publicKey = publicKey;
 
-        const simulation = await rpcServer.simulateTransaction(tx);
+    const rpcServer = new sdkRpc.Server(RPC_URL);
+    const horizonServer = new sdkHorizon.Server(HORIZON_URL);
 
-        if (sdkRpc.Api.isSimulationError(simulation)) {
-          // A contract-level error (e.g., project not found, insufficient balance)
-          // counts as a partial success: the RPC and contract are up.
-          details.simulationResult = "contract_error";
-          details.simulationError = simulation.error;
-        } else if (sdkRpc.Api.isSimulationSuccess(simulation)) {
-          details.simulationResult = "success";
-          details.cost = simulation.cost;
-        } else {
-          details.simulationResult = "unexpected";
-        }
-      } catch (simErr) {
-        // Simulation failure is only logged — we don't fail the check solely
-        // on simulation, since RPC/Horizon being up is the primary signal.
-        details.simulationError = simErr.message;
-        details.simulationResult = "error";
+    // ── Step 4: Ensure account is funded (testnet only) ──────────────
+    if (NETWORK !== "mainnet") {
+      const exists = await accountExists(publicKey);
+      if (!exists) {
+        console.log(`[synthetic-monitor] Funding account ${publicKey} via Friendbot…`);
+        await friendbotFund(publicKey);
+        details.funded = true;
       }
     }
 
+    // ── Step 5: Load account sequence ────────────────────────────────
+    const account = await horizonServer.loadAccount(publicKey);
+    const contract = new Contract(CONTRACT_ID);
+
+    // ── Step 6: Build donate() transaction ───────────────────────────
+    const tx = new TransactionBuilder(account, {
+      fee: "1000",
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "donate",
+          new Address(publicKey).toScVal(),
+          nativeToScVal(SYNTHETIC_PROJECT_ID, { type: "string" }),
+          nativeToScVal(BigInt(SYNTHETIC_AMOUNT_STROOPS), { type: "i128" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    // ── Step 7: Simulate ─────────────────────────────────────────────
+    const simulation = await rpcServer.simulateTransaction(tx);
+
+    if (sdkRpc.Api.isSimulationError(simulation)) {
+      throw new Error(
+        `Simulation failed: ${simulation.error ?? JSON.stringify(simulation)}`,
+      );
+    }
+
+    details.simulationResult = "success";
+    details.cost = simulation.cost;
+
+    // ── Step 8: Assemble, sign, submit ───────────────────────────────
+    const assembled = sdkRpc.assembleTransaction(tx, simulation).build();
+    assembled.sign(keypair);
+
+    const sendResult = await rpcServer.sendTransaction(assembled);
+    details.txHash = sendResult.hash;
+
+    if (sendResult.status === "ERROR") {
+      throw new Error(
+        `sendTransaction returned ERROR: ${JSON.stringify(sendResult.errorResult ?? sendResult)}`,
+      );
+    }
+
+    // ── Step 9: Poll until SUCCESS or FAILED ─────────────────────────
+    const poll = await pollTransaction(rpcServer, sendResult.hash);
+    details.pollStatus = poll.status;
+
+    if (poll.status === "TIMEOUT") {
+      throw new Error(
+        `Transaction ${sendResult.hash} did not confirm within ${POLL_TIMEOUT_MS}ms`,
+      );
+    }
+    if (poll.status === "FAILED") {
+      throw new Error(`Transaction ${sendResult.hash} was FAILED on-chain`);
+    }
+
+    // SUCCESS
+    details.confirmedLedger = poll.result?.ledger;
+
     const durationMs = Date.now() - start;
     details.durationMs = durationMs;
-
     return { success: true, durationMs, details };
   } catch (err) {
     const durationMs = Date.now() - start;
-    return { success: false, durationMs, details: { ...details, error: err.message } };
+    return {
+      success: false,
+      durationMs,
+      details: { ...details, error: err.message },
+    };
   }
-}
-
-/**
- * Minimal fallback: derive a rough public key string for logging when the SDK
- * isn't available.  In practice the SDK is always present in the backend; this
- * only matters if the script is run in a stripped environment.
- */
-function derivePublicKeyFallback(secret) {
-  return `<derived-from-${secret.slice(0, 6)}…>`;
-}
-
-// ---------------------------------------------------------------------------
-// Keypair bootstrap
-// ---------------------------------------------------------------------------
-
-/**
- * Load or generate the synthetic donor keypair. On first run (no secret key
- * in env) we generate a new one, persist it to SYNTHETIC_KEY_FILE if set,
- * and fund it from Friendbot.
- */
-async function resolveSyntheticKeypair() {
-  if (process.env.SYNTHETIC_SECRET_KEY) {
-    return process.env.SYNTHETIC_SECRET_KEY;
-  }
-
-  // Generate a new keypair (testnet only)
-  if (NETWORK !== "mainnet") {
-    try {
-      // eslint-disable-next-line global-require
-      const { Keypair } = require("@stellar/stellar-sdk");
-      const kp = Keypair.random();
-      console.log(
-        `[synthetic-monitor] Generated synthetic keypair. Set SYNTHETIC_SECRET_KEY=${kp.secret()} to reuse.`,
-      );
-      return kp.secret();
-    } catch {
-      // SDK not available — use a well-known test seed (safe: testnet only)
-      return "SBQPDFUGLMWJYEYXFRM5TQX3AX2BR47WKI4FDS7EJNUZJDWFELVSNH5";
-    }
-  }
-
-  throw new Error(
-    "SYNTHETIC_SECRET_KEY must be set on mainnet. Never auto-generate mainnet keys.",
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +528,7 @@ async function pushMetrics(gatewayUrl, jobName = "synthetic-monitor") {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
     body,
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     throw new Error(`Push gateway returned HTTP ${res.status}`);
@@ -479,42 +539,35 @@ async function pushMetrics(gatewayUrl, jobName = "synthetic-monitor") {
 // Main run loop
 // ---------------------------------------------------------------------------
 
-let consecutiveFailures = 0;
-
 async function runCheck(secretKey) {
-  const checkStart = Date.now();
-  console.log(`[synthetic-monitor] Starting synthetic check at ${new Date().toISOString()}`);
+  console.log(
+    `[synthetic-monitor] Starting synthetic check at ${new Date().toISOString()}`,
+  );
 
   const result = await runSyntheticCheck(secretKey);
-
   const durationSec = result.durationMs / 1000;
 
-  // Update Prometheus metrics
   syntheticDonationSuccess.set(result.success ? 1 : 0);
   syntheticDonationDurationSeconds.observe({}, durationSec);
   syntheticDonationLastTimestamp.set(Math.floor(Date.now() / 1000));
 
   if (result.success) {
-    syntheticDonationChecksTotal.inc({ result: "success" });
-    consecutiveFailures = 0;
+    syntheticDonationChecks.inc({ result: "success" });
     console.log(
       `[synthetic-monitor] ✅ Check passed in ${result.durationMs}ms`,
       result.details,
     );
   } else {
-    syntheticDonationChecksTotal.inc({ result: "failure" });
-    consecutiveFailures++;
+    syntheticDonationChecks.inc({ result: "failure" });
     console.error(
-      `[synthetic-monitor] ❌ Check FAILED (consecutive=${consecutiveFailures}) in ${result.durationMs}ms`,
+      `[synthetic-monitor] ❌ Check FAILED in ${result.durationMs}ms`,
       result.details,
     );
-
-    // Log structured alert for log-based alerting (e.g. Loki + Alertmanager)
+    // Structured log for log-based alerting (Loki / CloudWatch)
     console.error(
       JSON.stringify({
         level: "error",
         event: "synthetic_donation_failure",
-        consecutiveFailures,
         durationMs: result.durationMs,
         error: result.details.error || "unknown",
         network: NETWORK,
@@ -524,25 +577,24 @@ async function runCheck(secretKey) {
     );
   }
 
-  // Push to Prometheus Push Gateway if configured
   if (process.env.PROMETHEUS_PUSH_URL) {
     try {
       await pushMetrics(process.env.PROMETHEUS_PUSH_URL);
     } catch (pushErr) {
-      console.error(`[synthetic-monitor] Push gateway error: ${pushErr.message}`);
+      console.error(
+        `[synthetic-monitor] Push gateway error: ${pushErr.message}`,
+      );
     }
   }
 
-  // Exit with non-zero code on failure for cron / CI use
   if (RUN_ONCE) {
     process.exit(result.success ? 0 : 1);
   }
 }
 
 async function main() {
-  const secretKey = await resolveSyntheticKeypair();
+  const secretKey = resolveSyntheticKeypair();
 
-  // Start HTTP server for /metrics endpoint (long-running mode)
   if (!RUN_ONCE) {
     const server = http.createServer((req, res) => {
       if (req.method === "GET" && req.url === "/metrics") {
@@ -559,15 +611,15 @@ async function main() {
     });
 
     server.listen(METRICS_PORT, () => {
-      console.log(`[synthetic-monitor] Metrics server listening on :${METRICS_PORT}/metrics`);
+      console.log(
+        `[synthetic-monitor] Metrics server listening on :${METRICS_PORT}/metrics`,
+      );
     });
   }
 
-  // Run the first check immediately
   await runCheck(secretKey);
 
   if (!RUN_ONCE) {
-    // Schedule subsequent checks
     setInterval(() => runCheck(secretKey), CHECK_INTERVAL_MS);
     console.log(
       `[synthetic-monitor] Scheduled checks every ${CHECK_INTERVAL_MS / 1000}s`,

@@ -23,6 +23,9 @@ jobs:
     name: Synthetic On-Chain Donation Check
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read   # required for actions/checkout
+      issues: write    # required to create failure-tracking issues
 
     steps:
       - name: Checkout
@@ -45,8 +48,8 @@ jobs:
       - name: Run synthetic donation check
         env:
           # Secret key for the synthetic donor account (pre-funded testnet keypair).
-          # Set this as a GitHub Actions secret. On first run without a secret the
-          # script auto-generates and funds a fresh keypair via Friendbot.
+          # SYNTHETIC_DONOR_SECRET_KEY must be configured as a repository secret.
+          # The script will fail if it is not set — no auto-generation occurs.
           SYNTHETIC_SECRET_KEY: ${{ secrets.SYNTHETIC_DONOR_SECRET_KEY }}
           CONTRACT_ID: ${{ vars.SYNTHETIC_CONTRACT_ID || 'CCG3QSD7FWTZ5W7NG2N7UDYWYVXF3I2NY5JGT3QPTZ6KHOIKUHMMJ6BT' }}
           STELLAR_NETWORK: testnet

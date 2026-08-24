@@ -307,29 +307,29 @@ groups:
   - name: stellar-indigopay-synthetic-monitoring
     interval: 30s
     rules:
-      # Fires when the synthetic donation check has failed at least twice in a row.
-      # `synthetic_donation_success` is a gauge (1 = last check passed, 0 = failed)
-      # emitted by scripts/synthetic-monitor.js and scraped from the synthetic-monitor
-      # job. Two consecutive failures correspond to a 10-minute outage window.
+      # Fires when at least 2 fresh failure check completions have been recorded
+      # within the last 15 minutes. Using increase() on the checks counter (rather
+      # than gauge persistence) avoids false positives when a Pushgateway retains
+      # a single stale failure value. The 15m window covers 3 × 5-minute cron runs.
       - alert: SyntheticDonationCheckFailing
         expr: |
-          synthetic_donation_success{job="synthetic-monitor"} == 0
-        for: 10m
+          increase(synthetic_donation_checks_total{job="synthetic-monitor",result="failure"}[15m]) >= 2
+        for: 0m
         labels:
           severity: page
           routing: pagerduty
         annotations:
-          summary: "Synthetic end-to-end donation check has been failing for >10 minutes"
+          summary: "Synthetic end-to-end donation check has failed at least twice in the last 15 minutes"
           description: |
             The synthetic monitor (scripts/synthetic-monitor.js) executed a full
-            donation flow against the Stellar Testnet and found a failure.
-            This indicates a proactive outage: Horizon, the Soroban RPC, or the
-            IndigoPay contract may be unreachable before real donors are affected.
+            donation flow against the Stellar Testnet and recorded 2 or more
+            failures in the last 15 minutes. This indicates a proactive outage:
+            Horizon, the Soroban RPC, or the IndigoPay contract may be unreachable
+            before real donors are affected.
 
             Check:
               • Horizon status: https://status.stellar.org
               • Soroban RPC logs (kubectl logs -n stellar-indigopay -l app=soroban-rpc)
-              • Contract ID: {{ $labels.contract_id }}
               • synthetic_donation_duration_seconds for timing clues
 
             Runbook: docs/runbooks/synthetic-monitor-failure.md

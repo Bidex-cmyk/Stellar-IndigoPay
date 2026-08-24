@@ -11,21 +11,32 @@
 `scripts/synthetic-monitor.js` is an active health probe that executes a
 complete end-to-end donation check every 5 minutes:
 
-1. Verifies the synthetic donor account exists on Stellar Testnet (funds via Friendbot if needed)
-2. Calls `GET /fee_stats` on Horizon to verify the Horizon endpoint is reachable
-3. Calls `getLedgerEntries` on the Soroban RPC to verify the RPC endpoint is up
-4. If `@stellar/stellar-sdk` is available, simulates a `donate()` transaction against the IndigoPay contract
+1. Calls `GET /fee_stats` on Horizon to verify the Horizon endpoint is reachable
+2. Calls `getLedgerEntries` on the Soroban RPC to verify the RPC endpoint is live
+3. If `@stellar/stellar-sdk` is available:
+   - Builds a `donate()` transaction
+   - Calls `simulateTransaction` — failure here is a hard failure
+   - Assembles, signs, and submits the transaction via `sendTransaction`
+   - Polls `getTransaction` until the transaction reaches `SUCCESS` or `FAILED`
+   - `FAILED`, `TIMEOUT`, or any submission error → check fails
 
-Results are exposed as Prometheus metrics (`synthetic_donation_success`,
-`synthetic_donation_duration_seconds`) and scraped by Prometheus every 60 s.
+The probe reports `synthetic_donation_success = 1` only when the donation
+transaction is **confirmed on-chain** (status = `SUCCESS`).
+
+**Alert condition:** `SyntheticDonationCheckFailing` fires when 2 or more
+completed failure check events appear in the counter within a 15-minute window
+(`increase(synthetic_donation_checks_total{result="failure"}[15m]) >= 2`).
+A single transient failure does **not** alert.
 
 ---
 
 ## SyntheticDonationCheckFailing
 
-**Condition:** `synthetic_donation_success{job="synthetic-monitor"} == 0` for 10 consecutive minutes.
+**Condition:** `increase(synthetic_donation_checks_total{job="synthetic-monitor",result="failure"}[15m]) >= 2`
+(at least 2 completed failure check events in 15 minutes — covers 2 × 5-minute cron runs).
 
-**This means:** The last several synthetic checks have failed. Real donors may already be affected.
+**This means:** Two or more synthetic checks have completed and failed within the last 15 minutes.
+A single transient failure does not alert. Real donors may already be affected.
 
 ### Step 1 — Check Stellar infrastructure status
 
@@ -133,8 +144,10 @@ Horizon/RPC degradation under load, not a full outage.
 1. Check `synthetic_donation_duration_seconds` histogram in the Business Overview dashboard.
 2. Compare against Horizon and Soroban RPC p99 latency trends.
 3. Check for scheduled Stellar network maintenance at https://status.stellar.org.
-4. If p99 approaches the 60s scrape interval, consider increasing `SYNTHETIC_AMOUNT_STROOPS`
-   timeout or filing a Stellar infrastructure issue.
+4. If p99 approaches the 60s scrape interval, consider increasing the `POLL_TIMEOUT_MS`
+   environment variable or investigating Horizon/RPC latency. Do not adjust
+   `SYNTHETIC_AMOUNT_STROOPS` to fix duration issues — it controls the donation amount,
+   not any request timeout.
 
 ---
 

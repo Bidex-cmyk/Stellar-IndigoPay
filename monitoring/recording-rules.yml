@@ -86,7 +86,6 @@ groups:
 # evaluated on the same Prometheus instance and only aggregate already-aggregated
 # gauges — no individual donor data is stored in Prometheus.
 
-groups:
   - name: indigopay-business-recording
     interval: 60s
     rules:

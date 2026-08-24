@@ -59,6 +59,18 @@ const STATEMENT_TIMEOUT_MS = 5000; // never stall the exporter > 5s per query
 // Simple Prometheus registry (mirrors the structure in metrics.js)
 // ---------------------------------------------------------------------------
 
+/**
+ * Escape a Prometheus label value: backslash → \\, double-quote → \", newline → \n
+ * @param {*} v
+ * @returns {string}
+ */
+function escapeLabelValue(v) {
+  return String(v)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+}
+
 class SimpleGauge {
   constructor(name, help, labelNames = []) {
     this.name = name;
@@ -75,6 +87,11 @@ class SimpleGauge {
     this._values.set(key, { labels, value });
   }
 
+  /** Clear all labeled series — call before re-populating top-N results. */
+  reset() {
+    this._values.clear();
+  }
+
   render() {
     const lines = [
       `# HELP ${this.name} ${this.help}`,
@@ -85,7 +102,7 @@ class SimpleGauge {
         lines.push(`${this.name} ${value}`);
       } else {
         const lStr = this.labelNames
-          .map((l) => `${l}="${labels[l] ?? ""}"`)
+          .map((l) => `${l}="${escapeLabelValue(labels[l] ?? "")}"`)
           .join(",");
         lines.push(`${this.name}{${lStr}} ${value}`);
       }
@@ -194,6 +211,9 @@ function getPool() {
       max: 2,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
+      // statement_timeout is applied at connection level so every query
+      // is bounded without needing SET LOCAL inside a transaction.
+      statement_timeout: STATEMENT_TIMEOUT_MS,
     });
     pool.on("error", (err) => {
       console.error("[business-metrics] Pool error:", err.message);
@@ -203,19 +223,14 @@ function getPool() {
 }
 
 /**
- * Run a single bounded query with an explicit statement_timeout.
+ * Run a bounded query using the pool directly. statement_timeout is
+ * configured on the Pool constructor so it applies to every connection.
  * @param {string} sql
  * @param {Array} [params]
  * @returns {Promise<import('pg').QueryResult>}
  */
 async function runQuery(sql, params = []) {
-  const client = await getPool().connect();
-  try {
-    await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-    return await client.query(sql, params);
-  } finally {
-    client.release();
-  }
+  return getPool().query(sql, params);
 }
 
 /**
@@ -314,6 +329,7 @@ async function refreshMetrics() {
        ORDER BY SUM(amount_stroops) DESC NULLS LAST
        LIMIT 5`,
     ).then((rows) => {
+      metrics.topProjectXlm.reset();
       for (const row of rows) {
         metrics.topProjectXlm.set({ project_id: row.project_id }, Number(row.total_xlm));
       }
