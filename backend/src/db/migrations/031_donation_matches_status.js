@@ -77,8 +77,12 @@ async function columnExists(client, column) {
 }
 
 async function constraintExists(client, name) {
+  // Restrict to constraints ON the donation_matches relation: conname alone
+  // is only unique per schema, so a same-named constraint on another
+  // relation could otherwise false-positive and skip the CREATE.
   const result = await client.query(
-    "SELECT 1 FROM pg_constraint WHERE conname = $1",
+    `SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'donation_matches'::regclass AND conname = $1`,
     [name],
   );
   return result.rows.length > 0;
