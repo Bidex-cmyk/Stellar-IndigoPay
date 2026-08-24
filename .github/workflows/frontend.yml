@@ -5,6 +5,11 @@ on:
     branches: [main, develop]
   pull_request:
 
+# All frontend jobs only read the repo (and upload artifacts, which needs no
+# write scopes) — the token never needs more than read access.
+permissions:
+  contents: read
+
 # Pin every devDependency additively here so floating semver never lands a
 # different jest-axe on a system where we cannot pin via overrides.
 # Comments by hand: nexus of jest+axe versions that play together.
@@ -63,10 +68,6 @@ jobs:
     name: Frontend Locale Parity + Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # The check only reads the repo and uploads an artifact — the token
-    # needs no write scopes.
-    permissions:
-      contents: read
     steps:
       - name: Start Timer
         run: echo "START_TIME=$(date +%s)" >> "$GITHUB_ENV"

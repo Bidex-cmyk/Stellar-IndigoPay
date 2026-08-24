@@ -38,6 +38,7 @@ async function ensureStateTable(client) {
   `);
 }
 
+/** Record which objects `up()` created so `down()` can drop them precisely. */
 async function recordCreated(client, objects) {
   if (objects.length === 0) return;
   await ensureStateTable(client);
@@ -51,6 +52,7 @@ async function recordCreated(client, objects) {
   }
 }
 
+/** Return the set of objects this migration recorded as created by it. */
 async function getCreated(client) {
   await ensureStateTable(client);
   const result = await client.query(
@@ -60,6 +62,7 @@ async function getCreated(client) {
   return new Set(result.rows.map((row) => row.object));
 }
 
+/** Forget this migration's creation records (called at the end of `down()`). */
 async function clearCreated(client) {
   await client.query(
     "DELETE FROM migration_created_objects WHERE migration = $1",
@@ -67,6 +70,7 @@ async function clearCreated(client) {
   );
 }
 
+/** True when `donation_matches` already has a column named `column`. */
 async function columnExists(client, column) {
   const result = await client.query(
     `SELECT 1 FROM information_schema.columns
@@ -76,10 +80,14 @@ async function columnExists(client, column) {
   return result.rows.length > 0;
 }
 
+/**
+ * True when `donation_matches` already has a constraint named `name`.
+ *
+ * Restricted to the donation_matches relation (conrelid): conname alone is
+ * only unique per schema, so a same-named constraint on another relation
+ * could otherwise false-positive and skip the CREATE.
+ */
 async function constraintExists(client, name) {
-  // Restrict to constraints ON the donation_matches relation: conname alone
-  // is only unique per schema, so a same-named constraint on another
-  // relation could otherwise false-positive and skip the CREATE.
   const result = await client.query(
     `SELECT 1 FROM pg_constraint
      WHERE conrelid = 'donation_matches'::regclass AND conname = $1`,
@@ -88,6 +96,7 @@ async function constraintExists(client, name) {
   return result.rows.length > 0;
 }
 
+/** True when `donation_matches` already has an index named `name`. */
 async function indexExists(client, name) {
   const result = await client.query(
     `SELECT 1 FROM pg_indexes
