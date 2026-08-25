@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom';
 import 'whatwg-fetch';
 import { TextEncoder, TextDecoder } from 'util';
+import React from 'react';
 global.TextEncoder = TextEncoder as any;
 global.TextDecoder = TextDecoder as any;
 
@@ -12,7 +13,7 @@ jest.mock('next/image', () => ({
   __esModule: true,
   default: (props: any) => {
     // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
-    return <img {...props} />;
+    return React.createElement('img', props);
   },
 }));
 
@@ -22,3 +23,10 @@ Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
     return this.parentNode;
   },
 });
+
+// Polyfill ResizeObserver
+global.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};

@@ -10,10 +10,10 @@ export const albedoAdapter: StellarWalletAdapter = {
     return true; // Albedo is a web wallet, always "installed"
   },
   async connect(): Promise<void> {
-    await albedo.publicKey();
+    await albedo.publicKey({});
   },
   async getPublicKey(): Promise<string> {
-    const res = await albedo.publicKey();
+    const res = await albedo.publicKey({});
     return res.pubkey;
   },
   async signTransaction(
