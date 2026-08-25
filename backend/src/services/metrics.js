@@ -337,6 +337,13 @@ const projectionRebuildLastEvents = new client.Gauge({
   registers: [registry],
 });
 
+const projectionAutoCatchupRuns = new client.Counter({
+  name: "indigopay_projection_auto_catchup_runs_total",
+  help: "Total number of automatic projection catch-up runs, labelled by outcome (success|skipped|error).",
+  labelNames: ["outcome"],
+  registers: [registry],
+});
+
 const projectionRebuildInProgress = new client.Gauge({
   name: "indigopay_projection_rebuild_in_progress",
   help: "1 while a projection rebuild is running, 0 otherwise.",
@@ -587,6 +594,7 @@ const metrics = {
   projectionRebuildDurationSeconds,
   projectionRebuildLastEvents,
   projectionRebuildInProgress,
+  projectionAutoCatchupRuns,
 };
 
 module.exports = {
