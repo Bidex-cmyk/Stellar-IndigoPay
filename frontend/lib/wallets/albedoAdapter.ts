@@ -1,5 +1,4 @@
 import type { StellarWalletAdapter } from "./types";
-import albedo from "@albedo-link/intent";
 
 export const albedoAdapter: StellarWalletAdapter = {
   id: "albedo",
@@ -7,12 +6,14 @@ export const albedoAdapter: StellarWalletAdapter = {
   description: "Albedo Wallet",
   installUrl: "https://albedo.link",
   async isInstalled(): Promise<boolean> {
-    return true; // Albedo is a web wallet, always "installed"
+    return typeof window !== "undefined" && !!(window as any).albedo;
   },
   async connect(): Promise<void> {
+    const albedo = (await import("@albedo-link/intent")).default;
     await albedo.publicKey({});
   },
   async getPublicKey(): Promise<string> {
+    const albedo = (await import("@albedo-link/intent")).default;
     const res = await albedo.publicKey({});
     return res.pubkey;
   },
@@ -20,6 +21,7 @@ export const albedoAdapter: StellarWalletAdapter = {
     xdr: string,
     opts: { networkPassphrase: string; network: "TESTNET" | "MAINNET" }
   ): Promise<string> {
+    const albedo = (await import("@albedo-link/intent")).default;
     const res = await albedo.tx({
       xdr: xdr,
       network: opts.network === "TESTNET" ? "testnet" : "public"

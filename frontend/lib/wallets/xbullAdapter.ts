@@ -7,7 +7,7 @@ export const xbullAdapter: StellarWalletAdapter = {
   description: "xBull Wallet",
   installUrl: "https://xbull.app",
   async isInstalled(): Promise<boolean> {
-    return true;
+    return !!((window as any).xBullSDK || (window as any)?.webkit?.messageHandlers?.cordova_iab);
   },
   async connect(): Promise<void> {
     const bridge = new xBullWalletConnect();
