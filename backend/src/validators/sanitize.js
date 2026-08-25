@@ -16,6 +16,8 @@
  *   4. Truncate at the schema-defined max length rather than rejecting.
  */
 
+const { z } = require("zod");
+
 const BIDI_RE =
   /[\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u061C]/g;
 
@@ -58,4 +60,54 @@ function sanitizeTransform(maxLength) {
   return (value) => sanitize(value, maxLength);
 }
 
-module.exports = { sanitize, sanitizeTransform, BIDI_RE, HTML_TAG_RE };
+/**
+ * Build a Zod schema that sanitizes a string field and then validates it.
+ *
+ * Zod v4's `.transform()` returns a `ZodPipe` which does not expose the
+ * string validators (`.min()`, `.max()`, `.regex()`, `.trim()`), so the
+ * sanitization transform must be applied via `.pipe()` and the length/format
+ * checks run on the sanitized value inside the piped schema.
+ *
+ * @param {number} maxLength - truncation + max-length limit
+ * @param {object} [options]
+ * @param {number} [options.minLength] - minimum length (checked after sanitize)
+ * @param {RegExp} [options.regex] - format check applied after sanitize
+ * @param {string} [options.regexMessage] - message for the regex check
+ * @param {boolean} [options.trim] - trim surrounding whitespace before length checks
+ * @param {boolean} [options.truncate] - truncate at maxLength instead of rejecting
+ *   (default true). Set to false for fields that must reject over-length input.
+ * @param {string} [options.minMessage] - message for the min-length check
+ * @param {string} [options.maxMessage] - message for the max-length check
+ * @returns {import("zod").ZodPipe}
+ */
+function sanitizedString(maxLength, options = {}) {
+  const {
+    minLength,
+    regex,
+    regexMessage,
+    trim,
+    truncate = true,
+    minMessage,
+    maxMessage,
+  } = options;
+
+  let inner = z.string();
+  if (trim) inner = inner.trim();
+  if (minLength != null) inner = inner.min(minLength, minMessage);
+  inner = inner.max(maxLength, maxMessage);
+  if (regex) inner = inner.regex(regex, regexMessage);
+
+  const transform = truncate
+    ? sanitizeTransform(maxLength)
+    : (value) => sanitize(value);
+
+  return z.string().transform(transform).pipe(inner);
+}
+
+module.exports = {
+  sanitize,
+  sanitizeTransform,
+  sanitizedString,
+  BIDI_RE,
+  HTML_TAG_RE,
+};

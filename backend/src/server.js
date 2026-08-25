@@ -283,7 +283,7 @@ app.use((req, res, next) => {
 // the helper on every request that flows through it (even GETs, via
 // ignoreMethods), so the order matters: middleware first, then handler.
 function csrfTokenHandler(req, res) {
-  res.json({ success: true, csrfToken: csurfTokenFor(req) });
+  res.json({ success: true, csrfToken: req.csrfToken() });
 }
 app.get("/api/csrf-token", csrfTokenHandler);
 app.get("/api/v1/csrf-token", csrfTokenHandler);
