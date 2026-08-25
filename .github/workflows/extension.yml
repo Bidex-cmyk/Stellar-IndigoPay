@@ -68,8 +68,12 @@ jobs:
               console.error(f + ' allows inline scripts');
               process.exit(1);
             }
-            if (!policy.includes('script-src \\'self\\'')) {
+            if (!policy.match(/(?:^|;)\s*script-src\s+\\'self\\'\s*(?:;|$)/)) {
               console.error(f + ' must restrict script-src to self');
+              process.exit(1);
+            }
+            if (!policy.match(/(?:^|;)\s*object-src\s+\\'none\\'\s*(?:;|$)/)) {
+              console.error(f + ' must restrict object-src to none');
               process.exit(1);
             }
           });

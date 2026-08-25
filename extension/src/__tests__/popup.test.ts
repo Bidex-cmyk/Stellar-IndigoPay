@@ -1,3 +1,23 @@
+
+jest.mock('@stellar/stellar-sdk', () => ({
+  Horizon: { Server: class { constructor() {} } },
+  Networks: { TESTNET: 'testnet' },
+  Asset: {},
+  TransactionBuilder: {},
+  Keypair: {}
+}));
+
+jest.mock('../settings', () => ({
+  loadSettings: jest.fn().mockResolvedValue({
+    presets: ["10", "50", "100", "500"],
+    defaultDonationAmount: "10",
+    backendUrl: "http://test",
+    network: "testnet"
+  }),
+  applySettings: jest.fn()
+}));
+
+import "../popup";
 /**
  * Tests for popup.ts pure functions and logic.
  *
@@ -160,50 +180,95 @@ describe("Stellar address validation", () => {
     expect("A".repeat(29).length <= 28).toBe(false);
   });
 
-  test("E2E keyboard shortcut behavior for presets and Enter", () => {
-    // Simulate setting up DOM
+  test("E2E keyboard shortcut behavior for presets and Enter", async () => {
+    // Setup DOM
     document.body.innerHTML = `
       <div id="preset-amounts-container"></div>
       <input type="number" id="custom-amount-input" />
       <button id="donate-submit" disabled></button>
       <input type="hidden" id="destination" value="GDX..." />
+      <div id="custom-donate-container" style="display: none;"></div>
+      <input id="search-input" />
+      <div id="project-list-container"></div>
+      <span id="wallet-address"></span>
+      <div id="wallet-info" class="hidden"></div>
+      <button id="connect-btn"></button>
+      <div id="api-status"></div>
+      
+      <!-- Dummy elements for settings.ts -->
+      <input id="backend-url" />
+      <input id="default-amount" />
+      <input id="preset-1" />
+      <input id="preset-2" />
+      <input id="preset-3" />
+      <input id="preset-4" />
+      <form id="settings-form"></form>
+      <div id="wallet-display"></div>
+      <span id="wallet-dot"></span>
+      <span id="wallet-address-text"></span>
+      <button id="wallet-action-btn"></button>
     `;
-    
-    // Setup presets from settings
-    const presets = ["10", "50", "100", "500"];
-    const container = document.getElementById('preset-amounts-container');
-    presets.forEach((preset, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'preset-btn';
-      btn.dataset.amount = preset;
-      container!.appendChild(btn);
-    });
 
-    const setAmount = (amount: string) => {
-      const input = document.getElementById('custom-amount-input');
-      if (input) (input as HTMLInputElement).value = amount;
-      document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
-      const presetBtn = document.querySelector(`.preset-btn[data-amount="${amount}"]`);
-      if (presetBtn) presetBtn.classList.add('active');
+    // Mock settings
+    const mockStorage = {
+      get: jest.fn((keys, cb) => cb({
+        presets: ["10", "50", "100", "500"], 
+        defaultDonationAmount: "10", 
+        backendUrl: "http://test",
+        network: "testnet"
+      })),
+      set: jest.fn(),
+      remove: jest.fn()
+    };
+    (globalThis as any).chrome = {
+      storage: {
+        local: {
+          get: jest.fn((keys, cb) => cb({
+            presets: ["10", "50", "100", "500"],
+            defaultDonationAmount: "10",
+            backendUrl: "http://test",
+            network: "testnet"
+          })),
+          set: jest.fn(),
+          remove: jest.fn()
+        },
+        sync: {
+          get: jest.fn(), set: jest.fn()
+        }
+      },
+      runtime: {
+        sendMessage: jest.fn(),
+        onMessage: {
+          addListener: jest.fn()
+        },
+        lastError: null
+      }
     };
 
-    document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.key >= '1' && e.key <= '4') {
-        const idx = parseInt(e.key) - 1;
-        if (idx < presets.length) {
-          setAmount(presets[idx]);
-        }
-      }
-    });
+    // Trigger initialization
+    document.dispatchEvent(new Event("DOMContentLoaded"));
+    
+    // Wait for async initialization
+    await new Promise(r => setTimeout(r, 0));
 
     // Simulate Ctrl+2
     const evt = new KeyboardEvent('keydown', { key: '2', ctrlKey: true });
     document.dispatchEvent(evt);
 
-    const input = document.getElementById('custom-amount-input');
-    expect((input as HTMLInputElement).value).toBe("50");
-    const activeBtn = document.querySelector('.preset-btn.active');
+    const input = document.getElementById('custom-amount-input') as HTMLInputElement;
+    expect(input.value).toBe("50");
+    const activeBtn = document.querySelector('.preset-btn.active') as HTMLElement;
     expect(activeBtn).not.toBeNull();
-    expect((activeBtn as HTMLElement).dataset.amount).toBe("50");
+    expect(activeBtn.dataset.amount).toBe("50");
+
+    // Test Enter
+    let clicked = false;
+    const donateBtn = document.getElementById('donate-submit') as HTMLButtonElement;
+    donateBtn.addEventListener('click', () => clicked = true);
+    donateBtn.disabled = false; // Make sure it's enabled to click
+
+    const enterEvt = new KeyboardEvent('keydown', { key: 'Enter' });
+    document.dispatchEvent(enterEvt);
+    expect(clicked).toBe(true);
   });
 });
