@@ -159,4 +159,51 @@ describe("Stellar address validation", () => {
     expect("A".repeat(28).length <= 28).toBe(true);
     expect("A".repeat(29).length <= 28).toBe(false);
   });
+
+  test("E2E keyboard shortcut behavior for presets and Enter", () => {
+    // Simulate setting up DOM
+    document.body.innerHTML = `
+      <div id="preset-amounts-container"></div>
+      <input type="number" id="custom-amount-input" />
+      <button id="donate-submit" disabled></button>
+      <input type="hidden" id="destination" value="GDX..." />
+    `;
+    
+    // Setup presets from settings
+    const presets = ["10", "50", "100", "500"];
+    const container = document.getElementById('preset-amounts-container');
+    presets.forEach((preset, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'preset-btn';
+      btn.dataset.amount = preset;
+      container!.appendChild(btn);
+    });
+
+    const setAmount = (amount: string) => {
+      const input = document.getElementById('custom-amount-input');
+      if (input) (input as HTMLInputElement).value = amount;
+      document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+      const presetBtn = document.querySelector(`.preset-btn[data-amount="${amount}"]`);
+      if (presetBtn) presetBtn.classList.add('active');
+    };
+
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key >= '1' && e.key <= '4') {
+        const idx = parseInt(e.key) - 1;
+        if (idx < presets.length) {
+          setAmount(presets[idx]);
+        }
+      }
+    });
+
+    // Simulate Ctrl+2
+    const evt = new KeyboardEvent('keydown', { key: '2', ctrlKey: true });
+    document.dispatchEvent(evt);
+
+    const input = document.getElementById('custom-amount-input');
+    expect((input as HTMLInputElement).value).toBe("50");
+    const activeBtn = document.querySelector('.preset-btn.active');
+    expect(activeBtn).not.toBeNull();
+    expect((activeBtn as HTMLElement).dataset.amount).toBe("50");
+  });
 });

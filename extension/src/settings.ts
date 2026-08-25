@@ -2,19 +2,22 @@ export interface ExtensionSettings {
   backendUrl: string;
   network: "testnet" | "mainnet";
   defaultDonationAmount: string;
+  presets: string[];
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   backendUrl: "https://api.stellar-indigopay.app",
   network: "testnet",
-  defaultDonationAmount: "5",
+  defaultDonationAmount: "10",
+  presets: ["10", "50", "100", "500"]
 };
 
 export function loadSettings(): Promise<ExtensionSettings> {
   return new Promise((resolve) => {
     const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof ExtensionSettings>;
     chrome.storage.sync.get(keys, (items: { [key: string]: unknown }) => {
-      resolve(items as unknown as ExtensionSettings);
+      const merged = { ...DEFAULT_SETTINGS, ...items } as ExtensionSettings;
+      resolve(merged);
     });
   });
 }
@@ -85,6 +88,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnMainnet = document.getElementById(
     "btn-mainnet",
   ) as HTMLButtonElement;
+  const presetInputs = [
+    document.getElementById("preset-1") as HTMLInputElement,
+    document.getElementById("preset-2") as HTMLInputElement,
+    document.getElementById("preset-3") as HTMLInputElement,
+    document.getElementById("preset-4") as HTMLInputElement,
+  ];
   const mainnetWarning = document.getElementById(
     "mainnet-warning",
   ) as HTMLSpanElement;
@@ -124,6 +133,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const settings = await loadSettings();
   urlInput.value = settings.backendUrl;
   amountInput.value = settings.defaultDonationAmount;
+  presetInputs.forEach((input, i) => {
+    if (input) input.value = settings.presets[i] || "";
+  });
   setActiveNetwork(settings.network);
 
   // Check wallet connection
@@ -170,13 +182,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const defaultAmount = amountInput.value.trim();
     const amount =
-      defaultAmount && parseFloat(defaultAmount) > 0 ? defaultAmount : "5";
+      defaultAmount && parseFloat(defaultAmount) > 0 ? defaultAmount : "10";
+
+    const newPresets = presetInputs.map(input => {
+      const val = input.value.trim();
+      return val && parseFloat(val) > 0 ? val : "";
+    }).map((val, i) => val || DEFAULT_SETTINGS.presets[i]);
 
     try {
       await saveSettings({
         backendUrl: rawUrl,
         network: selectedNetwork,
         defaultDonationAmount: amount,
+        presets: newPresets,
       });
       saveStatus.textContent = "Settings saved.";
       saveStatus.classList.add("success");

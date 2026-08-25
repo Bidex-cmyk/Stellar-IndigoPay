@@ -63,6 +63,7 @@
         </div>
 
         <!-- Project Search -->
+        <input type="hidden" id="destination" />
         <div class="search-wrapper" id="search-wrapper">
           <span class="search-icon">🔍</span>
           <input
@@ -90,12 +91,10 @@
         <section class="glass-panel donate-section">
           <h3>Quick Donate</h3>
           <p class="subtitle">Support your active project directly.</p>
-          <div class="preset-amounts">
-            <button class="btn preset-btn" data-amount="1">1 XLM</button>
-            <button class="btn preset-btn" data-amount="5">5 XLM</button>
-            <button class="btn preset-btn" data-amount="10">10 XLM</button>
+          <div class="preset-amounts" id="preset-amounts-container">
+            <!-- Rendered by JS -->
           </div>
-          <div class="custom-donate">
+          <div class="custom-donate" id="custom-donate-container" style="display: none;">
             <div class="input-wrapper">
               <input
                 type="number"

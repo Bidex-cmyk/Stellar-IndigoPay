@@ -53,6 +53,28 @@ jobs:
           node-version: "22"
           working-directory: extension
 
+      - name: Lint CSP
+        run: |
+          node -e "
+          ['manifest.json', 'manifest.firefox.json'].forEach(f => {
+            const m = require('./' + f);
+            const csp = m.content_security_policy;
+            const policy = typeof csp === 'object' ? csp.extension_pages : csp;
+            if (!policy) {
+              console.error(f + ' missing CSP');
+              process.exit(1);
+            }
+            if (policy.includes('unsafe-inline')) {
+              console.error(f + ' allows inline scripts');
+              process.exit(1);
+            }
+            if (!policy.includes('script-src \\'self\\'')) {
+              console.error(f + ' must restrict script-src to self');
+              process.exit(1);
+            }
+          });
+          "
+
       - name: Lint
         run: npm run lint
 
