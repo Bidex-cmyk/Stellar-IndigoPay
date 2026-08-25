@@ -196,6 +196,23 @@ async function simulateTransactionWithRetry(tx) {
 // Existing read helpers (now wrapped with retry / circuit breaker)
 // ---------------------------------------------------------------------------
 
+/**
+ * Fetch a single transaction by hash from Horizon.
+ *
+ * The v12 Horizon.Server removed the `getTransaction` convenience method
+ * (it existed in v11). Callers (routes/donations.js, routes/projects.js)
+ * use this standalone helper instead, which expresses the same query through
+ * the supported transactions() call-builder. Without it, on-chain
+ * transaction verification always failed and every donation recording
+ * returned TX_NOT_FOUND.
+ *
+ * @param {string} hash  Transaction hash (hex string).
+ * @returns {Promise<object>} The Horizon transaction record.
+ */
+async function getTransaction(hash) {
+  return server.transactions().transaction(hash).call();
+}
+
 async function getOnChainProject(projectId) {
   if (!CONTRACT_ID) return null;
 
@@ -413,6 +430,7 @@ module.exports = {
   rpcServer,
   CONTRACT_ID,
   NETWORK_PASSPHRASE,
+  getTransaction,
   // Retry / circuit breaker helpers (exported for readiness probe + tests)
   withRetry,
   isRetryable,
