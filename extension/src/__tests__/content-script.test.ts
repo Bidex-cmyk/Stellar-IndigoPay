@@ -557,6 +557,7 @@ describe("buildBodyContent", () => {
       null,
       false,
       "",
+      ["10", "50", "100", "500"],
     );
     expect(result.renderDirectDonateViewStr).toContain("igp-direct-section");
     expect(result.renderDirectDonateViewStr).toContain("doesn't match a registered");
@@ -576,6 +577,7 @@ describe("buildBodyContent", () => {
       },
       false,
       "",
+      ["10", "50", "100", "500"],
     );
     expect(result.renderProjectViewStr).toContain("Amazon Reforestation");
     expect(result.renderProjectViewStr).toContain("Brazil");
@@ -589,6 +591,7 @@ describe("buildBodyContent", () => {
       null,
       true,
       "GDFJEGWQOEPLIRVHKVNGCFQBZQNBDWUYOSRYLKKBOPFEBFHIYNDMKKHG",
+      ["10", "50", "100", "500"],
     );
     expect(result.renderDirectDonateViewStr).toContain("igp-freighter-connected");
   });

@@ -248,48 +248,53 @@ export function handleDonateClick(address: string): void {
 
   const freighterAvailable = typeof (window as any).freighter !== "undefined";
 
-  // Mount overlay immediately with a loading spinner
-  const cleanup = mountDonateOverlay({
-    address,
-    project: null,
-    isLoading: true,
-    onClose: () => {
-      setOverlayCleanup(null);
-    },
-    onDonate: async (amount: string, memo?: string) => {
-      return handleDonateSubmit(address, parseFloat(amount), memo);
-    },
-    freighterAvailable,
-    freighterPublicKey: "",
-    onConnectFreighter: async () => {
-      return connectFreighter();
-    },
+  chrome.storage.sync.get(["presets"], (settingsRes) => {
+    const presets = (settingsRes.presets as string[]) || ["10", "50", "100", "500"];
+
+    // Mount overlay immediately with a loading spinner
+    const cleanup = mountDonateOverlay({
+      address,
+      project: null,
+      isLoading: true,
+      presets,
+      onClose: () => {
+        setOverlayCleanup(null);
+      },
+      onDonate: async (amount: string, memo?: string) => {
+        return handleDonateSubmit(address, parseFloat(amount), memo);
+      },
+      freighterAvailable,
+      freighterPublicKey: "",
+      onConnectFreighter: async () => {
+        return connectFreighter();
+      },
+    });
+    setOverlayCleanup(cleanup);
+
+    // Fetch project info from background (async — updates overlay in-place)
+    chrome.runtime.sendMessage(
+      { type: "LOOKUP_PROJECT", address },
+      (response: { project?: ProjectInfo | null }) => {
+        const project = response?.project || null;
+        const overlay = document.getElementById("indigopay-overlay");
+        if (!overlay) return;
+
+        const bodyEl = overlay.querySelector(".igp-body") as HTMLElement;
+        if (!bodyEl) return;
+
+        // Replace the body content with the project/direct-donate view
+        const { renderProjectViewStr, renderDirectDonateViewStr } =
+          buildBodyContent(address, project, freighterAvailable, "", presets);
+
+        bodyEl.innerHTML = project
+          ? renderProjectViewStr
+          : renderDirectDonateViewStr;
+
+        // Wire up the new form elements inside the updated body
+        wireBodyEvents(overlay, address, project, "");
+      },
+    );
   });
-  setOverlayCleanup(cleanup);
-
-  // Fetch project info from background (async — updates overlay in-place)
-  chrome.runtime.sendMessage(
-    { type: "LOOKUP_PROJECT", address },
-    (response: { project?: ProjectInfo | null }) => {
-      const project = response?.project || null;
-      const overlay = document.getElementById("indigopay-overlay");
-      if (!overlay) return;
-
-      const bodyEl = overlay.querySelector(".igp-body") as HTMLElement;
-      if (!bodyEl) return;
-
-      // Replace the body content with the project/direct-donate view
-      const { renderProjectViewStr, renderDirectDonateViewStr } =
-        buildBodyContent(address, project, freighterAvailable, "");
-
-      bodyEl.innerHTML = project
-        ? renderProjectViewStr
-        : renderDirectDonateViewStr;
-
-      // Wire up the new form elements inside the updated body
-      wireBodyEvents(overlay, address, project, "");
-    },
-  );
 }
 
 /**
@@ -393,6 +398,7 @@ export function buildBodyContent(
   project: ProjectInfo | null,
   freighterAvailable: boolean,
   freighterPublicKey: string,
+  presets: string[],
 ): { renderProjectViewStr: string; renderDirectDonateViewStr: string } {
   const directView = `
     <div class="igp-direct-section">
@@ -414,11 +420,8 @@ export function buildBodyContent(
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-        <div class="igp-presets">
-          <button class="igp-preset-btn" data-amount="1">1</button>
-          <button class="igp-preset-btn" data-amount="5">5</button>
-          <button class="igp-preset-btn" data-amount="10">10</button>
-          <button class="igp-preset-btn" data-amount="50">50</button>
+                <div class="igp-presets">
+          ${presets.map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
         </div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"
@@ -463,11 +466,8 @@ export function buildBodyContent(
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-        <div class="igp-presets">
-          <button class="igp-preset-btn" data-amount="1">1</button>
-          <button class="igp-preset-btn" data-amount="5">5</button>
-          <button class="igp-preset-btn" data-amount="10">10</button>
-          <button class="igp-preset-btn" data-amount="50">50</button>
+                <div class="igp-presets">
+          ${presets.map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
         </div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"

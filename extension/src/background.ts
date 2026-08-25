@@ -158,6 +158,24 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
+
+// ── global keyboard shortcuts ────────────────────────────────────────
+
+if (chrome.commands) {
+  chrome.commands.onCommand.addListener(async (command) => {
+    const match = command.match(/^preset-(\d+)$/);
+    if (match) {
+      const idx = parseInt(match[1], 10) - 1;
+      const settings = await loadSettings();
+      if (idx >= 0 && idx < settings.presets.length) {
+        chrome.storage.local.set({ pendingDonationPreset: settings.presets[idx] }, () => {
+          openPopup();
+        });
+      }
+    }
+  });
+}
+
 // ── project lookup ───────────────────────────────────────────────────
 
 interface ProjectResult {
