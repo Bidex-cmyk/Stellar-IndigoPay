@@ -567,6 +567,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     amountInput.addEventListener('input', updateDonateButtonState);
   }
 
+
+  // Global commands from manifest.json
+  if (chrome.commands) {
+    chrome.commands.onCommand.addListener((command) => {
+      const match = command.match(/^preset-(\d+)$/);
+      if (match) {
+        const idx = parseInt(match[1], 10) - 1;
+        if (idx >= 0 && idx < settings.presets.length) {
+          setAmount(settings.presets[idx]);
+        }
+      }
+    });
+  }
+
   // Keyboard shortcuts for presets and Enter
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key >= '1' && e.key <= '4') {
