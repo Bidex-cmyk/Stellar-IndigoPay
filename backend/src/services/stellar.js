@@ -468,7 +468,7 @@ async function submitWithFeeBump(transaction, keypair, options = {}) {
       try {
         const res = await server.transactions().transaction(hash).call();
         if (res.successful) {
-            return res;
+          return res;
         }
       } catch (err) {
         // 404 means keep polling
@@ -482,10 +482,10 @@ async function submitWithFeeBump(transaction, keypair, options = {}) {
       if (isNaN(currentFee)) currentFee = 200000;
       
       const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
-          keypair.publicKey(),
-          currentFee.toString(),
-          innerTx,
-          NETWORK_PASSPHRASE
+        keypair.publicKey(),
+        currentFee.toString(),
+        innerTx,
+        NETWORK_PASSPHRASE
       );
       feeBumpTx.sign(keypair);
       currentTx = feeBumpTx;

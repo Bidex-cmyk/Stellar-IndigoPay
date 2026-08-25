@@ -62,15 +62,20 @@ jest.mock("@stellar/stellar-sdk", () => {
 });
 
 // Mock stellar service
-jest.mock("../../src/services/stellar", () => ({
-  CONTRACT_ID: "test-contract-id",
-  NETWORK_PASSPHRASE: "test-passphrase",
-  submitTransaction: jest.fn(),
-  simulateTransactionWithRetry: jest.fn(),
-  server: {
-    loadAccount: jest.fn(),
-  },
-}));
+jest.mock("../../src/services/stellar", () => {
+  const original = jest.requireActual("../../src/services/stellar");
+  return {
+    ...original,
+    CONTRACT_ID: "test-contract-id",
+    NETWORK_PASSPHRASE: "test-passphrase",
+    submitTransaction: jest.fn(),
+    submitWithFeeBump: jest.fn().mockResolvedValue({ hash: "mock-hash", successful: true }),
+    simulateTransactionWithRetry: jest.fn(),
+    server: {
+      loadAccount: jest.fn(),
+    },
+  };
+});
 
 const pool = require("../../src/db/pool");
 const { submitTransaction, simulateTransactionWithRetry, server } = require("../../src/services/stellar");
