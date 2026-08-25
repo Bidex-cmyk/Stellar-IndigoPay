@@ -237,6 +237,20 @@ const webhookAttemptDurationSeconds = new client.Histogram({
   registers: [registry],
 });
 
+const webhookRetryCount = new client.Counter({
+  name: "webhook_retry_count",
+  help: "Number of webhook retries scheduled, labelled by event_type.",
+  labelNames: ["event_type"],
+  registers: [registry],
+});
+
+const webhookJitterSeconds = new client.Histogram({
+  name: "webhook_jitter_seconds",
+  help: "Jittered backoff delay in seconds applied to webhook retries.",
+  buckets: [30, 60, 120, 300, 600, 1800, 3600, 7200, 21600],
+  registers: [registry],
+});
+
 const aiSummaryTokensTotal = new client.Counter({
   name: "ai_summary_tokens_total",
   help: "Anthropic tokens consumed by the AI summary feature, labelled by model and direction (input|output|cache_read|cache_write).",
@@ -568,6 +582,8 @@ const metrics = {
   webhookDeliveriesTotal,
   webhookAttemptsTotal,
   webhookAttemptDurationSeconds,
+  webhookRetryCount,
+  webhookJitterSeconds,
   aiSummaryTokensTotal,
   aiSummaryCostUsdTotal,
   aiSummaryLatencySeconds,
