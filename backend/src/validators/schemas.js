@@ -112,6 +112,7 @@ const profileSchema = z.object({
     maxMessage: "Display name must be between 2 and 30 characters",
     regex: /^[a-zA-Z0-9_ ]+$/,
     regexMessage: "Only letters, numbers, underscores, and spaces allowed",
+    rejectHtml: true,
   })
     .optional()
     .or(z.literal("")),

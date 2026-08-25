@@ -21,7 +21,11 @@ const { z } = require("zod");
 const BIDI_RE =
   /[\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u061C]/g;
 
-const HTML_TAG_RE = /<[^>]*>/g;
+// Strip complete script/style blocks (including their content) plus any
+// remaining standalone HTML tags. This neutralises stored-XSS vectors where
+// an attacker embeds executable markup in a plain-text field.
+const HTML_TAG_RE =
+  /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>|<[^>]*>/gi;
 
 /**
  * Sanitize a plain-text string.
@@ -89,9 +93,21 @@ function sanitizedString(maxLength, options = {}) {
     truncate = true,
     minMessage,
     maxMessage,
+    rejectHtml = false,
   } = options;
 
-  let inner = z.string();
+  let base = z.string();
+  // Some strict fields (e.g. profile display names) must reject HTML outright
+  // rather than silently strip it, so the raw value is checked before the
+  // sanitization transform runs.
+  if (rejectHtml) {
+    base = base.refine(
+      (val) => !/<[^>]*>/.test(val),
+      { message: "HTML tags are not allowed" },
+    );
+  }
+
+  let inner = base;
   if (trim) inner = inner.trim();
   if (minLength != null) inner = inner.min(minLength, minMessage);
   inner = inner.max(maxLength, maxMessage);
@@ -101,7 +117,7 @@ function sanitizedString(maxLength, options = {}) {
     ? sanitizeTransform(maxLength)
     : (value) => sanitize(value);
 
-  return z.string().transform(transform).pipe(inner);
+  return base.transform(transform).pipe(inner);
 }
 
 module.exports = {
