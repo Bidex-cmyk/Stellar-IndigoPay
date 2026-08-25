@@ -541,6 +541,26 @@ function updateSecretRotationMetrics(status) {
   }
 }
 
+const donationBatcherDropTotal = new client.Counter({
+  name: "donation_batcher_drop_total",
+  help: "Total number of donations dropped due to backpressure overflow.",
+  registers: [registry],
+});
+
+const donationBatchSize = new client.Histogram({
+  name: "donation_batch_size",
+  help: "Distribution of donation batch sizes emitted by the donation batcher.",
+  buckets: [1, 5, 10, 25, 50, 100, 250, 500],
+  registers: [registry],
+});
+
+const donationBatchFlushDurationSeconds = new client.Histogram({
+  name: "donation_batch_flush_duration_seconds",
+  help: "Duration in seconds of donation batch flush operations.",
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1],
+  registers: [registry],
+});
+
 const metrics = {
   httpRequestsTotal,
   httpRequestDurationSeconds,
@@ -587,6 +607,9 @@ const metrics = {
   projectionRebuildDurationSeconds,
   projectionRebuildLastEvents,
   projectionRebuildInProgress,
+  donationBatcherDropTotal,
+  donationBatchSize,
+  donationBatchFlushDurationSeconds,
 };
 
 module.exports = {
@@ -599,4 +622,7 @@ module.exports = {
   refreshDbPoolMetrics,
   refreshQueueMetrics,
   updateSecretRotationMetrics,
+  donationBatcherDropTotal,
+  donationBatchSize,
+  donationBatchFlushDurationSeconds,
 };
