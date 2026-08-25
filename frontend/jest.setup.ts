@@ -3,5 +3,22 @@ import 'whatwg-fetch';
 import { TextEncoder, TextDecoder } from 'util';
 global.TextEncoder = TextEncoder as any;
 global.TextDecoder = TextDecoder as any;
+
 import { toHaveNoViolations } from 'jest-axe';
-expect.extend(toHaveNoViolations);
+expect.extend(toHaveNoViolations as any);
+
+// Mock next/image
+jest.mock('next/image', () => ({
+  __esModule: true,
+  default: (props: any) => {
+    // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
+    return <img {...props} />;
+  },
+}));
+
+// Polyfill offsetParent
+Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+  get() {
+    return this.parentNode;
+  },
+});

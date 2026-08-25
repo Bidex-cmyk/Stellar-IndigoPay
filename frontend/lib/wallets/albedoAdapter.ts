@@ -16,7 +16,10 @@ export const albedoAdapter: StellarWalletAdapter = {
     const res = await albedo.publicKey();
     return res.pubkey;
   },
-  async signTransaction(xdr: string, opts: any): Promise<string> {
+  async signTransaction(
+    xdr: string,
+    opts: { networkPassphrase: string; network: "TESTNET" | "MAINNET" }
+  ): Promise<string> {
     const res = await albedo.tx({
       xdr: xdr,
       network: opts.network === "TESTNET" ? "testnet" : "public"

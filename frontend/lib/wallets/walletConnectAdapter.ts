@@ -1,6 +1,6 @@
 import type { StellarWalletAdapter } from "./types";
 
-const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "33df051012ab6ce7e155bc2973f08f1b"; // Default mock projectId if undefined
+const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "33df051012ab6ce7e155bc2973f08f1b";
 
 let provider: any = null;
 let modal: any = null;
@@ -49,7 +49,7 @@ export const walletConnectAdapter: StellarWalletAdapter = {
         namespaces: {
           stellar: {
             methods: ["stellar_signXDR"],
-            chains: ["stellar:pubnet"], // or testnet depending on opts
+            chains: ["stellar:pubnet"],
             events: []
           }
         }
@@ -61,13 +61,12 @@ export const walletConnectAdapter: StellarWalletAdapter = {
   
   async getPublicKey(): Promise<string> {
     const prov = await getProvider();
-    // Reconnect if session already exists
     if (!currentSession && prov.session) {
         currentSession = prov.session;
     }
     
     if (!currentSession) {
-      await this.connect();
+      await walletConnectAdapter.connect();
     }
     
     const accounts = currentSession.namespaces.stellar.accounts;
@@ -75,22 +74,20 @@ export const walletConnectAdapter: StellarWalletAdapter = {
     return address;
   },
   
-  async signTransaction(xdr: string, opts: any): Promise<string> {
+  async signTransaction(
+    xdr: string,
+    opts: { networkPassphrase: string; network: "TESTNET" | "MAINNET" }
+  ): Promise<string> {
     const prov = await getProvider();
     if (!currentSession) {
         throw new Error("Not connected");
     }
     
-    const accounts = currentSession.namespaces.stellar.accounts;
-    
     const result = await prov.request({
       method: "stellar_signXDR",
-      params: {
-        xdr
-      }
+      params: { xdr }
     }, "stellar:pubnet");
     
-    // Result is usually the signed XDR or object containing it
     return (result as any).signedXDR || (result as any).xdr || (result as any);
   }
 };

@@ -19,7 +19,10 @@ export const xbullAdapter: StellarWalletAdapter = {
     bridge.closeConnections();
     return pubKey;
   },
-  async signTransaction(xdr: string, opts: any): Promise<string> {
+  async signTransaction(
+    xdr: string,
+    opts: { networkPassphrase: string; network: "TESTNET" | "MAINNET" }
+  ): Promise<string> {
     const bridge = new xBullWalletConnect();
     const signed = await bridge.sign({
       xdr,
