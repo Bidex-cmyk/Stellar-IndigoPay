@@ -32,7 +32,16 @@ export function formatApproximateFiat(
   xlmAmount: unknown,
   xlmUsdPrice: number | null,
 ): string | null {
-  const amount = Number(xlmAmount);
+  const normalizedAmount =
+    typeof xlmAmount === "string" ? xlmAmount.trim() : xlmAmount;
+  if (
+    (typeof normalizedAmount !== "string" && typeof normalizedAmount !== "number") ||
+    normalizedAmount === ""
+  ) {
+    return null;
+  }
+
+  const amount = Number(normalizedAmount);
   if (!Number.isFinite(amount) || xlmUsdPrice === null || !Number.isFinite(xlmUsdPrice)) {
     return null;
   }

@@ -19,7 +19,12 @@ describe("XLM/USD oracle helper", () => {
 
   test("formats approximate fiat values", () => {
     expect(formatApproximateFiat("10", 0.125)).toBe("≈ $1.25 USD");
+    expect(formatApproximateFiat(" 10 ", 0.125)).toBe("≈ $1.25 USD");
+    expect(formatApproximateFiat(10, 0.125)).toBe("≈ $1.25 USD");
+    expect(formatApproximateFiat("", 0.125)).toBeNull();
+    expect(formatApproximateFiat("   ", 0.125)).toBeNull();
     expect(formatApproximateFiat("bad", 0.125)).toBeNull();
+    expect(formatApproximateFiat(true, 0.125)).toBeNull();
   });
 
   test("fails gracefully for unavailable or malformed prices", async () => {

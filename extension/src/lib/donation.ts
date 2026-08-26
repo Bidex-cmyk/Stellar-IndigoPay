@@ -1,15 +1,18 @@
 /** Shared donation request and validation boundary. */
 
+import { StrKey } from "@stellar/stellar-sdk";
 import {
   isValidDonationAmount,
   MIN_DONATION_XLM,
 } from "./donationPresets";
 
-export const STELLAR_DESTINATION_RE = /^G[A-Z2-7]{55}$/;
 export const MAX_MEMO_LENGTH = 28;
 
 export function isValidStellarDestination(value: unknown): value is string {
-  return typeof value === "string" && STELLAR_DESTINATION_RE.test(value.trim());
+  return (
+    typeof value === "string" &&
+    StrKey.isValidEd25519PublicKey(value.trim())
+  );
 }
 
 /** Keep these messages aligned with the existing background validation. */
@@ -24,8 +27,11 @@ export function validateDonationRequest(
   if (!isValidDonationAmount(amount)) {
     return `Minimum donation is ${MIN_DONATION_XLM} XLM`;
   }
-  if (typeof memo === "string" && memo.length > MAX_MEMO_LENGTH) {
-    return "Memo must be 28 characters or fewer";
+  if (typeof memo !== "string") {
+    return "Memo must be 28 bytes or fewer";
+  }
+  if (new TextEncoder().encode(memo).length > MAX_MEMO_LENGTH) {
+    return "Memo must be 28 bytes or fewer";
   }
   return null;
 }
