@@ -270,7 +270,7 @@ describe("mountDonateOverlay", () => {
     expect(presetBtns.length).toBeGreaterThanOrEqual(4);
 
     const fiveBtn = Array.from(presetBtns).find(
-      (b) => b.getAttribute("data-amount") === "5",
+      (b) => b.getAttribute("data-amount") === "50",
     ) as HTMLButtonElement;
     expect(fiveBtn).not.toBeNull();
     fiveBtn.click();
@@ -278,7 +278,7 @@ describe("mountDonateOverlay", () => {
     const amountInput = document.getElementById(
       "igp-amount-input",
     ) as HTMLInputElement;
-    expect(amountInput.value).toBe("5");
+    expect(amountInput.value).toBe("50");
 
     cleanup();
   });
@@ -748,7 +748,7 @@ describe("mountDonateOverlay", () => {
     // First click a preset to make it active
     const presetBtns = document.querySelectorAll(".igp-preset-btn");
     const fiveBtn = Array.from(presetBtns).find(
-      (b) => b.getAttribute("data-amount") === "5",
+      (b) => b.getAttribute("data-amount") === "50",
     ) as HTMLButtonElement;
     fiveBtn.click();
     expect(fiveBtn.classList.contains("active")).toBe(true);

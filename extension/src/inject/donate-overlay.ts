@@ -42,6 +42,7 @@ export interface DonateOverlayOptions {
    * before the API response arrives.
    */
   isLoading?: boolean;
+  presets?: string[];
 }
 
 // ── overlay rendering ─────────────────────────────────────────────────
@@ -146,11 +147,8 @@ function renderProjectView(opts: DonateOverlayOptions): string {
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-        <div class="igp-presets">
-          <button class="igp-preset-btn" data-amount="1">1</button>
-          <button class="igp-preset-btn" data-amount="5">5</button>
-          <button class="igp-preset-btn" data-amount="10">10</button>
-          <button class="igp-preset-btn" data-amount="50">50</button>
+                <div class="igp-presets">
+          ${(opts.presets || ["10", "50", "100", "500"]).map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
         </div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"
@@ -192,11 +190,8 @@ function renderDirectDonateView(opts: DonateOverlayOptions): string {
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-        <div class="igp-presets">
-          <button class="igp-preset-btn" data-amount="1">1</button>
-          <button class="igp-preset-btn" data-amount="5">5</button>
-          <button class="igp-preset-btn" data-amount="10">10</button>
-          <button class="igp-preset-btn" data-amount="50">50</button>
+                <div class="igp-presets">
+          ${(opts.presets || ["10", "50", "100", "500"]).map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
         </div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"
