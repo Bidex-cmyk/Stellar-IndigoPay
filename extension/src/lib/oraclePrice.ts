@@ -1,0 +1,40 @@
+/** Small extension-local adapter for the existing XLM/USD oracle endpoint. */
+
+export type PriceFetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export async function fetchXlmUsdPrice(
+  backendUrl: string,
+  fetcher: PriceFetcher = fetch,
+): Promise<number | null> {
+  try {
+    const baseUrl = backendUrl.replace(/\/+$/, "");
+    const response = await fetcher(`${baseUrl}/api/oracle/price`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+
+    const body = (await response.json()) as {
+      data?: { price?: unknown };
+    };
+    const price = body?.data?.price;
+    return typeof price === "number" && Number.isFinite(price) && price > 0
+      ? price
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function formatApproximateFiat(
+  xlmAmount: unknown,
+  xlmUsdPrice: number | null,
+): string | null {
+  const amount = Number(xlmAmount);
+  if (!Number.isFinite(amount) || xlmUsdPrice === null || !Number.isFinite(xlmUsdPrice)) {
+    return null;
+  }
+  return `≈ $${(amount * xlmUsdPrice).toFixed(2)} USD`;
+}

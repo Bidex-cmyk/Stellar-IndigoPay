@@ -10,6 +10,11 @@
 
 import { mountDonateOverlay, type ProjectInfo } from "./inject/donate-overlay";
 import { escapeHtml, truncateAddress, truncateText } from "./overlay-helpers";
+import {
+  DEFAULT_DONATION_PRESETS,
+  loadDonationPresets,
+  type DonationPresets,
+} from "./lib/donationPresets";
 
 // Re-export for backwards compatibility
 export { escapeHtml, truncateAddress };
@@ -252,38 +257,35 @@ export function handleDonateClick(address: string): void {
 
   const freighterAvailable = typeof (window as any).freighter !== "undefined";
 
-  chrome.storage.sync.get(["presets"], (settingsRes) => {
-    if (token !== currentDonateRequestToken) return;
+  // Mount the loading shell immediately while loading the shared presets and
+  // project details. The request token prevents stale lookups from replacing
+  // a newer overlay.
+  const cleanup = mountDonateOverlay({
+    address,
+    project: null,
+    isLoading: true,
+    onClose: () => {
+      if (token === currentDonateRequestToken) {
+        currentDonateRequestToken = 0;
+      }
+      setOverlayCleanup(null);
+    },
+    onDonate: async (amount: string, memo?: string) => {
+      return handleDonateSubmit(address, parseFloat(amount), memo);
+    },
+    freighterAvailable,
+    freighterPublicKey: "",
+    onConnectFreighter: async () => {
+      return connectFreighter();
+    },
+  });
+  setOverlayCleanup(cleanup);
 
-    const presets = (settingsRes.presets as string[]) || ["10", "50", "100", "500"];
-
-    // Mount overlay immediately with a loading spinner
-    const cleanup = mountDonateOverlay({
-      address,
-      project: null,
-      isLoading: true,
-      presets,
-      onClose: () => {
-        if (token === currentDonateRequestToken) {
-          currentDonateRequestToken = 0;
-        }
-        setOverlayCleanup(null);
-      },
-      onDonate: async (amount: string, memo?: string) => {
-        return handleDonateSubmit(address, parseFloat(amount), memo);
-      },
-      freighterAvailable,
-      freighterPublicKey: "",
-      onConnectFreighter: async () => {
-        return connectFreighter();
-      },
-    });
-    setOverlayCleanup(cleanup);
-
-    // Fetch project info from background (async — updates overlay in-place)
-    chrome.runtime.sendMessage(
-      { type: "LOOKUP_PROJECT", address },
-      (response: { project?: ProjectInfo | null }) => {
+  const presetsPromise = loadDonationPresets();
+  chrome.runtime.sendMessage(
+    { type: "LOOKUP_PROJECT", address },
+    (response: { project?: ProjectInfo | null }) => {
+      presetsPromise.then((presetAmounts) => {
         if (token !== currentDonateRequestToken) return;
 
         const project = response?.project || null;
@@ -293,19 +295,16 @@ export function handleDonateClick(address: string): void {
         const bodyEl = overlay.querySelector(".igp-body") as HTMLElement;
         if (!bodyEl) return;
 
-        // Replace the body content with the project/direct-donate view
         const { renderProjectViewStr, renderDirectDonateViewStr } =
-          buildBodyContent(address, project, freighterAvailable, "", presets);
+          buildBodyContent(address, project, freighterAvailable, "", presetAmounts);
 
         bodyEl.innerHTML = project
           ? renderProjectViewStr
           : renderDirectDonateViewStr;
-
-        // Wire up the new form elements inside the updated body
         wireBodyEvents(overlay, address, project, "");
-      },
-    );
-  });
+      });
+    },
+  );
 }
 
 /**
@@ -400,6 +399,17 @@ export function scanAndInject(): void {
 
 // ── build body content ───────────────────────────────────────────────
 
+function presetButtonsHtml(
+  presets: DonationPresets = DEFAULT_DONATION_PRESETS,
+): string {
+  return presets
+    .map(
+      (amount) =>
+        `<button type="button" class="igp-preset-btn" data-amount="${escapeHtml(amount)}">${escapeHtml(amount)}</button>`,
+    )
+    .join("");
+}
+
 /**
  * Build the HTML strings for the overlay body content.
  * Returns both views so the caller can pick which to render.
@@ -409,7 +419,7 @@ export function buildBodyContent(
   project: ProjectInfo | null,
   freighterAvailable: boolean,
   freighterPublicKey: string,
-  presets: string[],
+  presetAmounts: DonationPresets = DEFAULT_DONATION_PRESETS,
 ): { renderProjectViewStr: string; renderDirectDonateViewStr: string } {
   const directView = `
     <div class="igp-direct-section">
@@ -431,9 +441,7 @@ export function buildBodyContent(
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-                <div class="igp-presets">
-          ${presets.map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
-        </div>
+        <div class="igp-presets">${presetButtonsHtml(presetAmounts)}</div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"
                  min="0.1" step="0.1" placeholder="Custom" autocomplete="off" />
@@ -477,9 +485,7 @@ export function buildBodyContent(
     <div class="igp-donate-form">
       <label class="igp-field-label" for="igp-amount-input">Amount (XLM)</label>
       <div class="igp-amount-row">
-                <div class="igp-presets">
-          ${presets.map(p => `<button class="igp-preset-btn" data-amount="${p}">${p}</button>`).join('')}
-        </div>
+        <div class="igp-presets">${presetButtonsHtml(presetAmounts)}</div>
         <div class="igp-input-wrapper">
           <input type="number" id="igp-amount-input" class="igp-amount-input"
                  min="0.1" step="0.1" placeholder="Custom" autocomplete="off" />
@@ -605,10 +611,10 @@ export function wireBodyEvents(
       try {
         await handleDonateSubmit(address, parseFloat(amountInput.value), memoInput?.value || "");
         if (statusEl) {
-          statusEl.textContent = "✅ Donation submitted successfully!";
-          statusEl.className = "igp-donate-status igp-status-success";
+          statusEl.textContent = "✅ Donation request submitted; awaiting transaction confirmation.";
+          statusEl.className = "igp-donate-status igp-status-pending";
         }
-        submitBtn.textContent = "✅ Done";
+        submitBtn.textContent = "✅ Request sent";
       } catch (err: any) {
         if (statusEl) {
           statusEl.textContent = `❌ ${err.message || "Transaction failed"}`;
@@ -682,4 +688,3 @@ export function getCategoryEmoji(category: string): string {
   };
   return map[category] ?? "🌿";
 }
-

@@ -14,6 +14,9 @@
   "background": {
     "service_worker": "dist/background.js"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
   "host_permissions": [
     "https://api.stellar-indigopay.app/*"
   ],

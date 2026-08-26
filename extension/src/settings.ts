@@ -1,23 +1,46 @@
+import {
+  DEFAULT_DONATION_PRESETS,
+  isValidDonationAmount,
+  normalizeDonationPresets,
+  type DonationPresets,
+} from "./lib/donationPresets";
+
 export interface ExtensionSettings {
   backendUrl: string;
   network: "testnet" | "mainnet";
   defaultDonationAmount: string;
-  presets: string[];
+  donationPresets: DonationPresets;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   backendUrl: "https://api.stellar-indigopay.app",
   network: "testnet",
-  defaultDonationAmount: "10",
-  presets: ["10", "50", "100", "500"]
+  defaultDonationAmount: "5",
+  donationPresets: DEFAULT_DONATION_PRESETS,
 };
 
 export function loadSettings(): Promise<ExtensionSettings> {
   return new Promise((resolve) => {
-    const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof ExtensionSettings>;
+    // Read the upstream `presets` key as a one-time compatibility fallback.
+    const keys = [...Object.keys(DEFAULT_SETTINGS), "presets"];
     chrome.storage.sync.get(keys, (items: { [key: string]: unknown }) => {
-      const merged = { ...DEFAULT_SETTINGS, ...items } as ExtensionSettings;
-      resolve(merged);
+      const stored = items ?? {};
+      const backendUrl =
+        typeof stored.backendUrl === "string" && stored.backendUrl.trim()
+          ? stored.backendUrl
+          : DEFAULT_SETTINGS.backendUrl;
+      const network = stored.network === "mainnet" ? "mainnet" : "testnet";
+      const defaultDonationAmount = isValidDonationAmount(stored.defaultDonationAmount)
+        ? String(stored.defaultDonationAmount).trim()
+        : DEFAULT_SETTINGS.defaultDonationAmount;
+      const storedPresets = stored.donationPresets ?? stored.presets;
+
+      resolve({
+        backendUrl,
+        network,
+        defaultDonationAmount,
+        donationPresets: normalizeDonationPresets(storedPresets),
+      });
     });
   });
 }
@@ -82,18 +105,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   const amountInput = document.getElementById(
     "default-amount",
   ) as HTMLInputElement;
+  const presetInputs = [1, 2, 3, 4].map(
+    (index) => document.getElementById(`preset-${index}`) as HTMLInputElement,
+  );
+  const presetsError = document.getElementById(
+    "presets-error",
+  ) as HTMLSpanElement;
   const btnTestnet = document.getElementById(
     "btn-testnet",
   ) as HTMLButtonElement;
   const btnMainnet = document.getElementById(
     "btn-mainnet",
   ) as HTMLButtonElement;
-  const presetInputs = [
-    document.getElementById("preset-1") as HTMLInputElement,
-    document.getElementById("preset-2") as HTMLInputElement,
-    document.getElementById("preset-3") as HTMLInputElement,
-    document.getElementById("preset-4") as HTMLInputElement,
-  ];
   const mainnetWarning = document.getElementById(
     "mainnet-warning",
   ) as HTMLSpanElement;
@@ -133,8 +156,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const settings = await loadSettings();
   urlInput.value = settings.backendUrl;
   amountInput.value = settings.defaultDonationAmount;
-  presetInputs.forEach((input, i) => {
-    if (input) input.value = settings.presets[i] || "";
+  settings.donationPresets.forEach((preset, index) => {
+    presetInputs[index].value = preset;
   });
   setActiveNetwork(settings.network);
 
@@ -182,19 +205,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const defaultAmount = amountInput.value.trim();
     const amount =
-      defaultAmount && parseFloat(defaultAmount) > 0 ? defaultAmount : "10";
+      isValidDonationAmount(defaultAmount) ? defaultAmount : "5";
+    const rawPresets = presetInputs.map((input) => input.value.trim());
 
-    const newPresets = presetInputs.map(input => {
-      const val = input.value.trim();
-      return val && parseFloat(val) > 0 ? val : "";
-    }).map((val, i) => val || DEFAULT_SETTINGS.presets[i]);
+    if (rawPresets.some((preset) => !isValidDonationAmount(preset))) {
+      presetsError.classList.remove("hidden");
+      return;
+    }
+    presetsError.classList.add("hidden");
 
     try {
       await saveSettings({
         backendUrl: rawUrl,
         network: selectedNetwork,
         defaultDonationAmount: amount,
-        presets: newPresets,
+        donationPresets: rawPresets as DonationPresets,
       });
       saveStatus.textContent = "Settings saved.";
       saveStatus.classList.add("success");

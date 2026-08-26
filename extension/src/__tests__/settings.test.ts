@@ -19,7 +19,8 @@ describe("DEFAULT_SETTINGS", () => {
   test("has expected default values", () => {
     expect(DEFAULT_SETTINGS.backendUrl).toBe("https://api.stellar-indigopay.app");
     expect(DEFAULT_SETTINGS.network).toBe("testnet");
-    expect(DEFAULT_SETTINGS.defaultDonationAmount).toBe("10");
+    expect(DEFAULT_SETTINGS.defaultDonationAmount).toBe("5");
+    expect(DEFAULT_SETTINGS.donationPresets).toEqual(["1", "5", "10", "50"]);
   });
 
   test("all keys are defined", () => {
@@ -27,7 +28,7 @@ describe("DEFAULT_SETTINGS", () => {
       "backendUrl",
       "network",
       "defaultDonationAmount",
-      "presets",
+      "donationPresets",
     ];
     for (const key of keys) {
       expect(DEFAULT_SETTINGS[key]).toBeDefined();
@@ -39,12 +40,12 @@ describe("DEFAULT_SETTINGS", () => {
       backendUrl: "https://example.com",
       network: "mainnet",
       defaultDonationAmount: "10",
-      presets: ["10", "50", "100", "500"]
+      donationPresets: ["1", "5", "10", "50"],
     };
     expect(s.backendUrl).toBe("https://example.com");
     expect(s.network).toBe("mainnet");
     expect(s.defaultDonationAmount).toBe("10");
-    expect(s.presets).toEqual(["10", "50", "100", "500"]);
+    expect(s.donationPresets).toEqual(["1", "5", "10", "50"]);
   });
 });
 
@@ -56,6 +57,7 @@ describe("loadSettings", () => {
       backendUrl: "https://custom-api.example.com",
       network: "mainnet",
       defaultDonationAmount: "10",
+      donationPresets: ["2", "6", "12", "60"],
     };
 
     (chrome.storage.sync.get as jest.Mock).mockImplementation(
@@ -67,7 +69,7 @@ describe("loadSettings", () => {
     const result = await loadSettings();
     expect(result).toEqual({ ...DEFAULT_SETTINGS, ...mockSettings });
     expect(chrome.storage.sync.get).toHaveBeenCalledWith(
-      ["backendUrl", "network", "defaultDonationAmount", "presets"],
+      ["backendUrl", "network", "defaultDonationAmount", "donationPresets", "presets"],
       expect.any(Function),
     );
   });
@@ -80,7 +82,12 @@ describe("loadSettings", () => {
     );
 
     const result = await loadSettings();
-    expect(result).toEqual(DEFAULT_SETTINGS);
+    expect(result).toEqual({
+      backendUrl: DEFAULT_SETTINGS.backendUrl,
+      network: DEFAULT_SETTINGS.network,
+      defaultDonationAmount: DEFAULT_SETTINGS.defaultDonationAmount,
+      donationPresets: DEFAULT_SETTINGS.donationPresets,
+    });
   });
 
   test("returns partial settings when storage returns partial", async () => {
@@ -91,7 +98,12 @@ describe("loadSettings", () => {
     );
 
     const result = await loadSettings();
-    expect(result).toEqual({ ...DEFAULT_SETTINGS, backendUrl: "https://partial.example.com" });
+    expect(result).toEqual({
+      backendUrl: "https://partial.example.com",
+      network: DEFAULT_SETTINGS.network,
+      defaultDonationAmount: DEFAULT_SETTINGS.defaultDonationAmount,
+      donationPresets: DEFAULT_SETTINGS.donationPresets,
+    });
   });
 
   test("handles undefined values from storage", async () => {
@@ -103,10 +115,10 @@ describe("loadSettings", () => {
 
     const result = await loadSettings();
     expect(result).toEqual({
-      backendUrl: undefined,
-      network: undefined,
-      defaultDonationAmount: undefined,
-      presets: DEFAULT_SETTINGS.presets,
+      backendUrl: DEFAULT_SETTINGS.backendUrl,
+      network: DEFAULT_SETTINGS.network,
+      defaultDonationAmount: DEFAULT_SETTINGS.defaultDonationAmount,
+      donationPresets: DEFAULT_SETTINGS.donationPresets,
     });
   });
 });
@@ -125,8 +137,8 @@ describe("saveSettings", () => {
       backendUrl: "https://new-api.example.com",
       network: "mainnet",
       defaultDonationAmount: "20",
-      presets: ["10", "50", "100", "500"],
-      };
+      donationPresets: ["2", "6", "12", "60"],
+    };
 
     await expect(saveSettings(settings)).resolves.toBeUndefined();
     expect(chrome.storage.sync.set).toHaveBeenCalledWith(settings, expect.any(Function));
@@ -144,8 +156,8 @@ describe("saveSettings", () => {
       backendUrl: "https://new-api.example.com",
       network: "testnet",
       defaultDonationAmount: "5",
-      presets: ["10", "50", "100", "500"],
-      };
+      donationPresets: ["1", "5", "10", "50"],
+    };
 
     await expect(saveSettings(settings)).rejects.toThrow("Storage full");
     (globalThis as any).chrome.runtime.lastError = null;
@@ -163,8 +175,8 @@ describe("saveSettings", () => {
       backendUrl: "https://new-api.example.com",
       network: "testnet",
       defaultDonationAmount: "5",
-      presets: ["10", "50", "100", "500"],
-      };
+      donationPresets: ["1", "5", "10", "50"],
+    };
 
     await expect(saveSettings(settings)).rejects.toThrow();
     (globalThis as any).chrome.runtime.lastError = null;
@@ -182,8 +194,8 @@ describe("saveSettings", () => {
       backendUrl: "https://api.example.com",
       network: "testnet",
       defaultDonationAmount: "5",
-      presets: ["10", "50", "100", "500"],
-      };
+      donationPresets: ["1", "5", "10", "50"],
+    };
 
     await expect(saveSettings(settings)).rejects.toThrow("Quota exceeded");
     (globalThis as any).chrome.runtime.lastError = null;
