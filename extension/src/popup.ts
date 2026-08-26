@@ -339,10 +339,21 @@ function initQuickDonate(settings: ExtensionSettings): void {
 
   document.addEventListener('keydown', (event) => {
     const index = presetIndexForShortcut(event);
-    if (index < 0) return;
-    event.preventDefault();
-    const presetButton = document.querySelectorAll<HTMLButtonElement>('.preset-btn')[index];
-    presetButton?.click();
+    if (index >= 0) {
+      event.preventDefault();
+      const presetButton = document.querySelectorAll<HTMLButtonElement>('.preset-btn')[index];
+      presetButton?.click();
+      return;
+    }
+
+    if (
+      event.key === 'Enter' &&
+      event.target !== amountInput &&
+      !(event.target instanceof Element && event.target.closest('#project-list'))
+    ) {
+      event.preventDefault();
+      if (!submitButton.disabled) submitButton.click();
+    }
   });
 }
 

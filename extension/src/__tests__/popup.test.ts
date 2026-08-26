@@ -9,8 +9,8 @@ jest.mock('@stellar/stellar-sdk', () => ({
 
 jest.mock('../settings', () => ({
   loadSettings: jest.fn().mockResolvedValue({
-    presets: ["10", "50", "100", "500"],
-    defaultDonationAmount: "10",
+    donationPresets: ["1", "5", "10", "50"],
+    defaultDonationAmount: "5",
     backendUrl: "http://test",
     network: "testnet"
   }),
@@ -183,7 +183,8 @@ describe("Stellar address validation", () => {
   test("E2E keyboard shortcut behavior for presets and Enter", async () => {
     // Setup DOM
     document.body.innerHTML = `
-      <div id="preset-amounts-container"></div>
+      <div id="preset-amounts"></div>
+      <div id="active-project"></div>
       <input type="number" id="custom-amount-input" />
       <button id="donate-submit" disabled></button>
       <input type="hidden" id="destination" value="GDX..." />
@@ -256,10 +257,10 @@ describe("Stellar address validation", () => {
     document.dispatchEvent(evt);
 
     const input = document.getElementById('custom-amount-input') as HTMLInputElement;
-    expect(input.value).toBe("50");
+    expect(input.value).toBe("5");
     const activeBtn = document.querySelector('.preset-btn.active') as HTMLElement;
     expect(activeBtn).not.toBeNull();
-    expect(activeBtn.dataset.amount).toBe("50");
+    expect(activeBtn.dataset.amount).toBe("5");
 
     // Test Enter
     let clicked = false;

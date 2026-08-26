@@ -7,11 +7,16 @@ export type PriceFetcher = (
 
 export async function fetchXlmUsdPrice(
   backendUrl: string,
-  fetcher: PriceFetcher = fetch,
+  fetcher?: PriceFetcher,
 ): Promise<number | null> {
   try {
+    const request =
+      fetcher ??
+      (typeof fetch === "function" ? fetch.bind(globalThis) : undefined);
+    if (!request) return null;
+
     const baseUrl = backendUrl.replace(/\/+$/, "");
-    const response = await fetcher(`${baseUrl}/api/oracle/price`, {
+    const response = await request(`${baseUrl}/api/oracle/price`, {
       headers: { Accept: "application/json" },
     });
     if (!response.ok) return null;
