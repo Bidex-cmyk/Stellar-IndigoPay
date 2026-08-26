@@ -24,6 +24,9 @@ jobs:
       - name: Start Timer
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
 
+      - name: Start Timer
+        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+
       - name: Derive version
         id: version
         run: |
