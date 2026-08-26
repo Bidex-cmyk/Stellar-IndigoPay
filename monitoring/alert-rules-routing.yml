@@ -70,6 +70,21 @@ groups:
             Check failover Job logs: kubectl logs -n stellar-indigopay -l app=postgres-failover
           runbook: docs/runbooks/postgres-failover.md
 
+      - alert: RedisSentinelFailover
+        # Fires when the Redis client reconnects after a master loss — the
+        # observable signal that Sentinel promoted a replica to master.
+        expr: increase(indigopay_redis_sentinel_failover_total{outcome="reconnecting"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Redis Sentinel failover / reconnection detected"
+          description: |
+            The backend Redis client reconnected after a master loss.
+            Verify the current Redis master and check for data loss on the
+            promoted replica: kubectl get pods -n stellar-indigopay -l app=redis
+          runbook: docs/runbooks/postgres-failover.md
+
       - alert: RestoreDrillFailed
         expr: restore_drill_failed == 1
         for: 1m
