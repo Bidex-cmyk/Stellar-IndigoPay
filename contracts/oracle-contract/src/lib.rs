@@ -1,8 +1,8 @@
 #![no_std]
 #![allow(deprecated)]
-
-use soroban_sdk::xdr::ContractEventBody;
-use soroban_sdk::xdr::ScVal;
+#[allow(unused_imports)]
+//use soroban_sdk::xdr::ContractEventBody;
+//use soroban_sdk::xdr::ScVal;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
     Address, Env, InvokeError, String, Symbol, Vec,
@@ -280,6 +280,7 @@ fn default_token(env: &Env) -> Address {
 
 /// Legacy helpers to read from global storage if per-token is absent.
 /// Used only for backward compatibility in tests.
+#[cfg(test)]
 #[allow(deprecated)]
 fn read_observation_count_legacy(env: &Env) -> u32 {
     env.storage()
@@ -288,6 +289,7 @@ fn read_observation_count_legacy(env: &Env) -> u32 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 #[allow(deprecated)]
 fn read_observation_index_legacy(env: &Env) -> u32 {
     env.storage()
@@ -296,6 +298,7 @@ fn read_observation_index_legacy(env: &Env) -> u32 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 #[allow(deprecated)]
 fn read_observation_legacy(env: &Env, index: u32) -> PriceObservation {
     env.storage()
@@ -1106,24 +1109,6 @@ impl SimpleOracle {
     }
 }
 
-fn event_with_topic_exists(env: &Env, topic_symbol: &str) -> bool {
-    use soroban_sdk::testutils::Events;
-    use soroban_sdk::xdr::{ContractEventBody, ScVal};
-
-    for event in env.events().all().events() {
-        if let ContractEventBody::V0(body) = &event.body {
-            for topic in body.topics.iter() {
-                if let ScVal::Symbol(sym) = topic {
-                    if sym.0.as_slice() == topic_symbol.as_bytes() {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -1140,6 +1125,24 @@ mod tests {
     };
 
     const TEST_PRICE_KEY: Symbol = symbol_short!("price");
+
+    fn event_with_topic_exists(env: &Env, topic_symbol: &str) -> bool {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::xdr::{ContractEventBody, ScVal};
+
+        for event in env.events().all().events() {
+            if let ContractEventBody::V0(body) = &event.body {
+                for topic in body.topics.iter() {
+                    if let ScVal::Symbol(sym) = topic {
+                        if sym.0.as_slice() == topic_symbol.as_bytes() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
 
     // Generate a deterministic "default" token for tests.
     fn default_test_token(env: &Env) -> Address {
