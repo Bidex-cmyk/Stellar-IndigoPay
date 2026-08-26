@@ -361,6 +361,42 @@ describe("Overlay lifecycle", () => {
       done();
     }, 50);
   });
+
+  test("does not overwrite overlay if older request completes after newer request", () => {
+    // Simulate B-then-A callback ordering
+    let cbA: Function | undefined;
+    let cbB: Function | undefined;
+
+    (chrome.runtime.sendMessage as jest.Mock).mockImplementation(
+      (_msg: any, callback?: Function) => {
+        if (_msg.address === "GA_ADDRESS") cbA = callback;
+        if (_msg.address === "GB_ADDRESS") cbB = callback;
+      }
+    );
+
+    document.body.innerHTML = `
+      <div id="indigopay-overlay"><div class="igp-body"></div></div>
+    `;
+
+    // Fire request A
+    handleDonateClick("GA_ADDRESS");
+    // Fire request B immediately after
+    handleDonateClick("GB_ADDRESS");
+
+    // Resolve B first
+    if (cbB) {
+      cbB({ project: { name: "Project B" } });
+    }
+    
+    // Resolve A later
+    if (cbA) {
+      cbA({ project: { name: "Project A" } });
+    }
+
+    // The body should have Project B's content (not Project A)
+    const bodyEl = document.querySelector(".igp-body");
+    expect(bodyEl?.innerHTML).not.toContain("Project A");
+  });
 });
 
 // ── 7. SPA navigation resilience ────────────────────────────────────

@@ -232,6 +232,8 @@ export function createDonateButton(address: string): HTMLButtonElement {
 
 // ── overlay handling ─────────────────────────────────────────────────
 
+export let currentDonateRequestToken = 0;
+
 /**
  * Open the donate overlay for a given Stellar address.
  *
@@ -246,9 +248,13 @@ export function handleDonateClick(address: string): void {
     setOverlayCleanup(null);
   }
 
+  const token = ++currentDonateRequestToken;
+
   const freighterAvailable = typeof (window as any).freighter !== "undefined";
 
   chrome.storage.sync.get(["presets"], (settingsRes) => {
+    if (token !== currentDonateRequestToken) return;
+
     const presets = (settingsRes.presets as string[]) || ["10", "50", "100", "500"];
 
     // Mount overlay immediately with a loading spinner
@@ -258,6 +264,9 @@ export function handleDonateClick(address: string): void {
       isLoading: true,
       presets,
       onClose: () => {
+        if (token === currentDonateRequestToken) {
+          currentDonateRequestToken = 0;
+        }
         setOverlayCleanup(null);
       },
       onDonate: async (amount: string, memo?: string) => {
@@ -275,6 +284,8 @@ export function handleDonateClick(address: string): void {
     chrome.runtime.sendMessage(
       { type: "LOOKUP_PROJECT", address },
       (response: { project?: ProjectInfo | null }) => {
+        if (token !== currentDonateRequestToken) return;
+
         const project = response?.project || null;
         const overlay = document.getElementById("indigopay-overlay");
         if (!overlay) return;
