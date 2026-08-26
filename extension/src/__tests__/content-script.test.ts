@@ -33,6 +33,7 @@ import {
   freighterSectionHTML,
   updateSubmitBtn,
   buildBodyContent,
+  handleDonateClick,
 } from "../content-script-logic";
 
 // Mock the overlay module
@@ -385,12 +386,12 @@ describe("Overlay lifecycle", () => {
 
     // Resolve B first
     if (cbB) {
-      cbB({ project: { name: "Project B" } });
+      cbB({ project: { name: "Project B", category: "test" } });
     }
     
     // Resolve A later
     if (cbA) {
-      cbA({ project: { name: "Project A" } });
+      cbA({ project: { name: "Project A", category: "test" } });
     }
 
     // The body should have Project B's content (not Project A)
