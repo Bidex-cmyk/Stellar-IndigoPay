@@ -9,7 +9,7 @@
  * - Preset amount buttons + active class
  * - Copy address button (clipboard and fallback)
  * - Freighter connect/disconnect
- * - Submit donation (success, error, minimum validation)
+ * - Submit donation (pending acknowledgement, error, minimum validation)
  * - Custom amount input
  * - Project with description renders
  * - Unverified project badge
@@ -689,7 +689,7 @@ describe("mountDonateOverlay", () => {
     cleanup();
   });
 
-  test("shows success message after donation", async () => {
+  test("shows pending request message after acknowledgement", async () => {
     const onDonate = jest.fn().mockResolvedValue(undefined);
     const opts = createOptions({
       project: {
@@ -721,8 +721,11 @@ describe("mountDonateOverlay", () => {
     await jest.runAllTimersAsync();
 
     const statusEl = document.getElementById("igp-donate-status");
-    expect(statusEl!.textContent).toContain("Donation submitted successfully");
-    expect(submitBtn.textContent).toBe("✅ Done");
+    expect(statusEl!.textContent).toContain(
+      "Donation request submitted; awaiting transaction confirmation",
+    );
+    expect(statusEl!.className).toContain("igp-status-pending");
+    expect(submitBtn.textContent).toBe("✅ Request sent");
 
     cleanup();
   });

@@ -79,6 +79,9 @@ jobs:
           });
           "
 
+      - name: Validate Manifest V3 CSP
+        run: npm run check:csp
+
       - name: Lint
         run: npm run lint
 
