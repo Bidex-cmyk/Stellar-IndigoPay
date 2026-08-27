@@ -18,6 +18,8 @@ jobs:
         working-directory: contracts
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -33,6 +35,36 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Check DataKey compatibility
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          baseline=""
+          if [ -n "$BASE_SHA" ]; then
+            baseline=$(git show "$BASE_SHA:contracts/indigopay-contract/DataKey.discriminants.txt" 2>/dev/null || true)
+            if [ -z "$baseline" ]; then
+              baseline_dir=$(mktemp -d)
+              trap 'rm -rf -- "$baseline_dir"' EXIT
+              (cd "$(git rev-parse --show-toplevel)" && git archive "$BASE_SHA") | \
+                tar -x -C "$baseline_dir"
+              mkdir -p "$baseline_dir/contracts/indigopay-contract/tests"
+              cp indigopay-contract/tests/data_key_compatibility.rs \
+                "$baseline_dir/contracts/indigopay-contract/tests/"
+              : > "$baseline_dir/contracts/indigopay-contract/DataKey.discriminants.txt"
+              baseline=$(cd "$baseline_dir/contracts" && \
+                DATA_KEY_PRINT_REPRESENTATION=1 cargo test -p indigopay-contract \
+                  --test data_key_compatibility \
+                  data_key_generated_representation_is_append_only_compatible -- --nocapture | \
+                awk '/^DATA_KEY_BASELINE_BEGIN$/{capture=1; next} \
+                     /^DATA_KEY_BASELINE_END$/{capture=0} capture')
+            fi
+          fi
+          if [ -n "$baseline" ]; then
+            DATA_KEY_GOLDEN_BASELINE="$baseline" cargo test -p indigopay-contract --test data_key_compatibility
+          else
+            cargo test -p indigopay-contract --test data_key_compatibility
+          fi
 
       - name: Run Clippy
         run: cargo clippy --workspace -- -D ([D]):
