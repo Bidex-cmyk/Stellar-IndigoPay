@@ -41,7 +41,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           baseline=""
-          if [ -n "$BASE_SHA" ]; then
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             baseline=$(git show "$BASE_SHA:contracts/indigopay-contract/DataKey.discriminants.txt" 2>/dev/null || true)
             if [ -z "$baseline" ]; then
               baseline_dir=$(mktemp -d)
