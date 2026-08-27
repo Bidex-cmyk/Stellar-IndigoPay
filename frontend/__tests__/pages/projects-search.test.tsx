@@ -8,6 +8,8 @@
  * @jest-environment jsdom
  */
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProjectsPage from "@/pages/projects/index";
 import type { ClimateProject } from "@/utils/types";
 import type { ProjectFacets } from "@/lib/api";
@@ -59,6 +61,19 @@ const MOCK_FACETS: ProjectFacets = {
 };
 
 describe("ProjectsPage search and filters", () => {
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+  }
+
+  function renderPage() {
+    return render(<ProjectsPage />, { wrapper: Wrapper });
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
@@ -74,7 +89,7 @@ describe("ProjectsPage search and filters", () => {
   test("initializes filters from the URL on load and fetches accordingly", async () => {
     mockQuery = { category: "Reforestation", verified: "true", status: "active" };
 
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -91,7 +106,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("debounces search input so the API is called once after 300ms", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -119,7 +134,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("rapid keystrokes within the window collapse into a single fetch with the final value", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -152,7 +167,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("clicking a category filter updates the URL search params", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -172,7 +187,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("shows facet counts next to category filters", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -183,7 +198,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("filters by location and CO2 range via the sidebar inputs", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -213,7 +228,7 @@ describe("ProjectsPage search and filters", () => {
   test('"Clear all filters" removes all query params', async () => {
     mockQuery = { category: "Reforestation", location: "Kenya", verified: "true" };
 
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -232,7 +247,7 @@ describe("ProjectsPage search and filters", () => {
     mockQuery = { category: "Reforestation" };
     mockFetchProjects.mockResolvedValue([]);
 
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -246,7 +261,7 @@ describe("ProjectsPage search and filters", () => {
   test('renders "No projects available yet" empty state without filters', async () => {
     mockFetchProjects.mockResolvedValue([]);
 
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -265,7 +280,7 @@ describe("ProjectsPage search and filters", () => {
       }),
     );
 
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });
@@ -279,7 +294,7 @@ describe("ProjectsPage search and filters", () => {
   });
 
   test("announces the results count via an aria-live region", async () => {
-    render(<ProjectsPage />);
+    renderPage();
     await act(async () => {
       jest.advanceTimersByTime(300);
     });

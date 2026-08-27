@@ -83,7 +83,8 @@ export default function LeaderboardTable({
 
   if (isLoading) return <LeaderboardTableSkeleton />;
 
-  if (isError || isRefetching)
+  // Keep cached rows visible during background refetches and offline errors.
+  if (isError && !entries)
     return (
       <QueryErrorFallback
         error={error}
