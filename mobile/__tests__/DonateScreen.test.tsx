@@ -110,7 +110,7 @@ jest.mock("../app/theme", () => ({
 
 jest.mock("expo-router", () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  useLocalSearchParams: () => ({ id: "proj-1" }),
+  useLocalSearchParams: () => ({ projectId: "proj-1" }),
 }));
 
 jest.mock("expo-linking", () => ({
@@ -141,11 +141,13 @@ jest.mock("@stellar/stellar-sdk", () => ({
 
 const MOCK_PROJECT = project({
   id: "proj-1",
+const MOCK_PROJECT = {
+  projectId: "proj-1",
   name: "Amazon Reforestation",
   walletAddress: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
 });
 
-import DonateScreen from "../app/donate/[id]";
+import DonateScreen from "../app/donate/[projectId]";
 
 beforeEach(() => {
   jest.clearAllMocks();

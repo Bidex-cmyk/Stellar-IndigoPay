@@ -8,6 +8,7 @@ const createJestConfig = nextJest({
 /** @type {import('jest').Config} */
 const customJestConfig = {
   testEnvironment: "jest-environment-jsdom",
+  setupFiles: ["<rootDir>/jest.env.js"],
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
     "^@stellar-indigopay/fixtures$": "<rootDir>/../packages/fixtures/dist/index",
