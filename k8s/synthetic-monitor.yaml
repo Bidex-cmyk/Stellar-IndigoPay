@@ -5,8 +5,14 @@
 # Optional CronJob that runs the end-to-end synthetic donation every 5 minutes,
 # mirroring .github/workflows/synthetic-monitor.yml for environments WITHOUT
 # GitHub Actions access. It reads the synthetic sender secret from
-# k8s/secret.yaml / external-secret.yaml and writes Prometheus metrics to an
-# emptyDir that a node-exporter textfile collector (or sidecar) can scrape.
+# k8s/secret.yaml / external-secret.yaml and PUSHES Prometheus metrics to the
+# durable in-cluster Prometheus Pushgateway before the pod exits (see
+# PROMETHEUS_PUSH_URL in scripts/synthetic-monitor.js). Prometheus then scrapes
+# the Pushgateway, so metric delivery survives the ephemeral CronJob pod.
+#
+# PREREQUISITE: a Prometheus Pushgateway must be deployed and reachable at
+# http://prometheus-pushgateway.monitoring.svc:9091 (adjust PROMETHEUS_PUSH_URL
+# below to match your deployment).
 #
 # Deploy with:
 #   kubectl apply -f k8s/synthetic-monitor.yaml -n stellar-indigopay
@@ -49,8 +55,11 @@ spec:
                     https://github.com/Stellar-IndigoPay/Stellar-IndigoPay.git repo >/dev/null 2>&1
                   cd repo/scripts
                   npm install @stellar/stellar-sdk@12 prom-client@15 --no-audit --no-fund >/dev/null 2>&1
-                  SYNTHETIC_METRICS_FILE=/metrics/synthetic_monitor_metrics.prom \
-                    node synthetic-monitor.js --run-once
+                  # Run once and PUSH metrics to the durable Prometheus Pushgateway
+                  # (PROMETHEUS_PUSH_URL). A CronJob's pod is ephemeral and the job
+                  # volume disappears on exit, so the metrics must reach a persisted
+                  # endpoint for Prometheus to scrape (see synthetic-monitor.js).
+                  node synthetic-monitor.js --run-once
                   exit_code=$?
                   echo "synthetic monitor exit_code=$exit_code"
                   exit $exit_code
@@ -83,9 +92,10 @@ spec:
                   value: "https://soroban-testnet.stellar.org"
                 - name: BACKEND_URL
                   value: "http://backend-svc:4000"
-              volumeMounts:
-                - name: metrics
-                  mountPath: /metrics
+                # Durable endpoint arrayed by the in-cluster Prometheus Pushgateway.
+                # Without this the CronJob's metrics would be lost when the pod exits.
+                - name: PROMETHEUS_PUSH_URL
+                  value: "http://prometheus-pushgateway.monitoring.svc:9091"
               resources:
                 requests:
                   cpu: "50m"
@@ -93,6 +103,3 @@ spec:
                 limits:
                   cpu: "200m"
                   memory: "256Mi"
-          volumes:
-            - name: metrics
-              emptyDir: {}

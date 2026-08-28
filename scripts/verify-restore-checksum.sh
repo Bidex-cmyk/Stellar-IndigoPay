@@ -79,6 +79,13 @@ fi
 if [[ -n "$ROW_CHECKSUMS" && -n "$DB_URL" ]]; then
   command -v psql >/dev/null 2>&1 || { echo "psql is required for row-checksum verification"; exit 2; }
   [[ -f "$ROW_CHECKSUMS" ]] || { echo "Row-checksum file not found: $ROW_CHECKSUMS"; exit 2; }
+  # jq is REQUIRED and the checksum JSON must parse. Masking a jq failure would
+  # silently skip every table and let a broken sidecar report success.
+  command -v jq >/dev/null 2>&1 || { echo "jq is required for row-checksum verification"; exit 2; }
+  if ! jq -e . "$ROW_CHECKSUMS" >/dev/null 2>&1; then
+    echo "::error::Invalid or unparseable row-checksum JSON: $ROW_CHECKSUMS"
+    exit 2
+  fi
 
   parse_url() {
     local u="$1"
@@ -98,9 +105,12 @@ if [[ -n "$ROW_CHECKSUMS" && -n "$DB_URL" ]]; then
   parse_url "$DB_URL"
   export PGPASSWORD="$DATABASE_URL_PASS"
 
-  # Verify server-side objects are intact on the restore (WS4 acceptance).
-  # Indices, constraints and sequences are surfaced here because a restore
-  # that drops them is corrupt even though row counts are unchanged.
+  # ── 2a. Object-count integrity (WS4 acceptance) ───────────────────────────
+  # Compare restored indices/constraints/triggers/sequences against the expected
+  # values recorded in the .rowchecksums.json sidecar (entry `__objects__`). A
+  # restore that loses schema objects fails the drill even though row counts and
+  # row-level checksums may still match.
+  OBJECT_EXPECTED=$(jq -r '.[] | select(.table=="__objects__")' "$ROW_CHECKSUMS" 2>/dev/null || echo "")
   OBJECT_CHECKS_OK=$(psql -h "${DATABASE_URL_HOSTPORT%%:*}" -p "${DATABASE_URL_HOSTPORT##*:}" \
     -U "$DATABASE_URL_USER" -d "$DATABASE_URL_DB" -tAc \
     "SELECT count(*) FROM pg_indexes WHERE schemaname='public';" 2>/dev/null | tr -d ' \n')
@@ -110,10 +120,29 @@ if [[ -n "$ROW_CHECKSUMS" && -n "$DB_URL" ]]; then
   TRIGGERS_OK=$(psql -h "${DATABASE_URL_HOSTPORT%%:*}" -p "${DATABASE_URL_HOSTPORT##*:}" \
     -U "$DATABASE_URL_USER" -d "$DATABASE_URL_DB" -tAc \
     "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal;" 2>/dev/null | tr -d ' \n')
-  log "Restored object integrity — indices=$OBJECT_CHECKS_OK constraints=$CONSTRAINTS_OK triggers=$TRIGGERS_OK"
+  SEQUENCES_OK=$(psql -h "${DATABASE_URL_HOSTPORT%%:*}" -p "${DATABASE_URL_HOSTPORT##*:}" \
+    -U "$DATABASE_URL_USER" -d "$DATABASE_URL_DB" -tAc \
+    "SELECT count(*) FROM pg_class WHERE relkind='S' AND relnamespace=(SELECT oid FROM pg_namespace WHERE nspname='public');" 2>/dev/null | tr -d ' \n')
+  log "Restored object integrity — indices=$OBJECT_CHECKS_OK constraints=$CONSTRAINTS_OK triggers=$TRIGGERS_OK sequences=$SEQUENCES_OK"
 
+  if [[ -n "$OBJECT_EXPECTED" ]]; then
+    for pair in "indices:$OBJECT_CHECKS_OK" "constraints:$CONSTRAINTS_OK" "triggers:$TRIGGERS_OK" "sequences:$SEQUENCES_OK"; do
+      key=${pair%%:*}
+      actual=${pair#*:}
+      expected_obj=$(jq -r --arg k "$key" '.[$k]' <<< "$OBJECT_EXPECTED" 2>/dev/null)
+      if [[ -n "$expected_obj" && "$expected_obj" != "null" && "$actual" != "$expected_obj" ]]; then
+        log "❌ Object-count MISMATCH for $key: expected $expected_obj, got $actual"
+        MISMATCH=true
+      fi
+    done
+  else
+    log "ℹ️  No expected object counts (__objects__) in sidecar — cannot compare schema objects."
+  fi
+
+  # ── 2b. Row-level checksum comparison ────────────────────────────────────
+  # jq presence and JSON validity are enforced at the top of this block.
   for table in $TABLES_RAW; do
-    expected=$(jq -r --arg t "$table" '.[] | select(.table==$t) | .md5' "$ROW_CHECKSUMS" 2>/dev/null || echo "")
+    expected=$(jq -r --arg t "$table" '.[] | select(.table==$t) | .md5' "$ROW_CHECKSUMS" 2>/dev/null)
     if [[ -z "$expected" || "$expected" == "unavailable" ]]; then
       log "ℹ️  No stored checksum for table $table — skipping."
       continue
@@ -131,13 +160,36 @@ if [[ -n "$ROW_CHECKSUMS" && -n "$DB_URL" ]]; then
 fi
 
 # ── 3. Emit Prometheus-style summary metrics for the drill ────────────────
+# These are STATUS gauges (last-run 0/1) plus a last-run timestamp, NOT
+# monotonic counters: the textfile is overwritten every run, so `increase()`
+# over an overwritten value is meaningless. Alert rules MUST query the status
+# gauge directly (see monitoring/alert-rules.yml), never `increase()`.
+LAST_RUN_TS=$(date +%s)
 if [[ "$MISMATCH" == "true" ]]; then
-  echo "restore_drill_checksum_mismatch_total 1" > /tmp/restore_drill_metrics.prom
-  echo "restore_drill_success_total 0" >> /tmp/restore_drill_metrics.prom
+  cat > /tmp/restore_drill_metrics.prom <<EOF
+# HELP restore_drill_last_result 1 if the most recent restore drill failed.
+# TYPE restore_drill_last_result gauge
+restore_drill_last_result 1
+# HELP restore_drill_checksum_mismatch_last 1 if the most recent drill found a checksum mismatch.
+# TYPE restore_drill_checksum_mismatch_last gauge
+restore_drill_checksum_mismatch_last 1
+# HELP restore_drill_last_timestamp Unix epoch of the last restore drill run.
+# TYPE restore_drill_last_timestamp gauge
+restore_drill_last_timestamp ${LAST_RUN_TS}
+EOF
   echo "❌ Restore verification FAILED. See output above."
   exit 1
 else
-  echo "restore_drill_success_total 1" > /tmp/restore_drill_metrics.prom
-  echo "restore_drill_checksum_mismatch_total 0" >> /tmp/restore_drill_metrics.prom
+  cat > /tmp/restore_drill_metrics.prom <<EOF
+# HELP restore_drill_last_result 1 if the most recent restore drill failed.
+# TYPE restore_drill_last_result gauge
+restore_drill_last_result 0
+# HELP restore_drill_checksum_mismatch_last 1 if the most recent drill found a checksum mismatch.
+# TYPE restore_drill_checksum_mismatch_last gauge
+restore_drill_checksum_mismatch_last 0
+# HELP restore_drill_last_timestamp Unix epoch of the last restore drill run.
+# TYPE restore_drill_last_timestamp gauge
+restore_drill_last_timestamp ${LAST_RUN_TS}
+EOF
   log "✅ Restore verification passed."
 fi

@@ -21,11 +21,13 @@ The unifying property: **the production platform can survive any single-componen
 
 ## Workstream 2 — Argo CD canary with real Prometheus AnalysisTemplate
 
-- **`gitops/analysis-template.yaml`** (new) — Prometheus-backed `AnalysisTemplate` evaluating every 30 s for a 10-minute window: canary error rate ≤ 1.5× stable, and canary p95 latency ≤ 1.2× stable. On failure → automatic rollback; on success → promote to the next canary step.
-- **`gitops/argo-rollouts-canary.yaml`** — the Rollout now references the new `backend-canary-analysis` template (error-rate + p95 latency metrics).
-- **`monitoring/recording-rules.yml`** — canary recording rules (`canary_error_rate`, `stable_error_rate`, `canary_p95_latency`, `stable_p95_latency`).
+- **`gitops/analysis-template.yaml`** (new) — Prometheus-backed `AnalysisTemplate` evaluating every 30 s for a 10-minute window. Each metric's provider `query` computes a self-contained decision value (canary error rate − 1.5× stable rate; canary p95 − 1.2× stable p95) and `successCondition` evaluates that result vector (`result[0] <= 0`), so the template does not depend on non-existent recording rules. On failure → automatic rollback; on success → promote to the next canary step.
+- **`gitops/argo-rollouts-canary.yaml`** — the Rollout now references the `backend-canary-analysis` template (error-rate + p95 latency metrics). The Rollout runs Argo Rollouts' default basic (pod-replacement) canary with a single `backend-svc` for both `canaryService` and `stableService` — the correct, supported config for basic canary. Distinct Services are only required when adding a `trafficRouting` block (Istio/NGINX/ALB/Ambassador), which is documented in the manifest header.
+- **`monitoring/recording-rules.yml`** — SLO + business recording rules (the canary analysis does NOT rely on `canary_error_rate`/`stable_error_rate` recording rules; the queries consume `http_requests_total`/`http_request_duration_seconds_bucket` directly via the `version` and `status_code` labels).
 - **`monitoring/grafana/dashboards/canary-analysis.json`** (new) — canary-vs-stable error-rate / latency / traffic dashboard for live rollouts.
 - **`docs/runbooks/canary-analysis.md`** (new) — runbook covering analysis inspection, failed-metric diagnosis, and healthy promotion.
+
+> **Metric contract:** the backend exports `method`, `route`, `status_code` on `http_requests_total` and `http_request_duration_seconds_bucket`. To discriminate canary from stable, the backend's HTTP metrics must also carry a `version` label (`"canary"` / `"stable"`), set by the Rollout; prior to that, a Prometheus relabel/recording rule must derive `version` before the analysis can compare revisions (documented in `gitops/analysis-template.yaml`).
 
 ## Workstream 3 — Zero-downtime secret rotation with dual-version support
 

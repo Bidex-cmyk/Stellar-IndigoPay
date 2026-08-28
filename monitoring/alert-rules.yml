@@ -137,23 +137,26 @@ groups:
       # Restore drill integrity (WS4 / #1100): a mismatched row-level checksum
       # or failed drill means the production backup is not provably recoverable,
       # even though row counts may look healthy.
+      #
+      # The drill emits STATUS gauges (restore_drill_last_result) that are
+      # overwritten on every run — NOT monotonic counters — so we query the
+      # last-run status directly rather than `increase()`, which is meaningless
+      # for an overwritten value.
       - alert: RestoreDrillFailed
         expr: |
-          increase(restore_drill_success_total[2h]) == 0
-            AND on() increase(restore_drill_checksum_mismatch_total[2h]) > 0
+          restore_drill_last_result == 1
         for: 0m
         labels:
           severity: critical
           routing: pagerduty
         annotations:
-          summary: "Monthly restore drill failed — backup may be unrecoverable"
+          summary: "Restore drill failed — backup may be unrecoverable"
           description: |
-            The scheduled restore drill detected a mismatch (checksum, row-level
-            checksum, or missing DB object). See the drill workflow logs and the
-            restore-drill runbook immediately.
+            The most recent restore drill reported a failure (restore_drill_last_result == 1).
+            See the drill workflow logs and the restore-drill runbook immediately.
 
       - alert: RestoreDrillChecksumMismatch
-        expr: increase(restore_drill_checksum_mismatch_total[2h]) > 0
+        expr: restore_drill_checksum_mismatch_last == 1
         for: 0m
         labels:
           severity: critical
@@ -165,17 +168,25 @@ groups:
             drill. Silent data corruption is suspected. Investigate backup_verifications
             and the affected table immediately.
 
-      # Backup throughput observability (no alert; gauges for dashboards)
+      # Backup liveness: age of the last successful backup. Uses
+      # backup_last_success_timestamp_seconds (emitted by backup-db.sh) so two
+      # consecutive same-duration backups never false-positive, and an explicit
+      # absent() clause so a backup that stops emitting metrics entirely still
+      # alerts (an absent series would otherwise never fire the rule).
       - alert: BackupStalled
-        expr: changes(backup_backup_duration_seconds[48h]) == 0
-        for: 24h
+        expr: |
+          (time() - backup_last_success_timestamp_seconds > 48 * 3600)
+            or
+          (absent(backup_last_success_timestamp_seconds))
+        for: 2h
         labels:
           severity: warn
         annotations:
-          summary: "No database backup reported in the last 48h"
+          summary: "No successful database backup in the last 48h"
           description: |
-            The backup_backup_duration_seconds gauge has not changed in 48 hours.
-            The nightly backup workflow may be failing before it emits metrics.
+            The most recent successful backup (backup_last_success_timestamp_seconds)
+            is older than 48 hours, or the metric is entirely absent. The nightly
+            backup workflow may be failing before it emits metrics.
 
   - name: stellar-indigopay-postgres-failover-info
     interval: 30s

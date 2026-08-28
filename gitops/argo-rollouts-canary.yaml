@@ -5,12 +5,16 @@
 # stepped rollout via pod replacement (20% → 50% → 100% of new-revision
 # pods, with 5-min analysis pauses between steps).
 #
-# IMPORTANT — this is Argo Rollouts' DEFAULT mode. Both `canaryService`
-# and `stableService` point at the same `backend-svc`, so the Rollout
-# does NOT split live HTTP traffic between two Service revisions. It
-# replaces pods in-place at each `setWeight` step. For real traffic-
-# split canary (e.g. 5% of user traffic to the new revision), add a
-# `trafficRouting` block — Istio, NGINX, ALB, or Ambassador. The
+# IMPORTANT — this is Argo Rollouts' BASIC canary mode (no trafficRouting).
+# Both `canaryService` and `stableService` point at the same `backend-svc`,
+# which is the correct and supported configuration for pod-replacement
+# canaries: Argo Rollouts only REQUIRES two distinct Services when a
+# `trafficRouting` block is present (Istio/NGINX/ALB/Ambassador traffic split).
+# The controller flips pod weights between the stable and canary ReplicaSets,
+# and the analysis (backend-canary-analysis) compares the two revisions via
+# the backend `version` metric label. For real traffic-split canary (e.g. 5%
+# of user traffic to the new revision), add a `trafficRouting` block AND two
+# distinct canary/stable Services — Istio, NGINX, ALB, or Ambassador. The
 # bottom of this file has an Istio example commented out.
 #
 # Each new release:
@@ -146,27 +150,32 @@ spec:
       value: http://prometheus-operated.monitoring.svc:9090
   metrics:
     # Canary error rate must not exceed 1.5× the stable baseline (WS2 / #1100).
+    # The query returns (canary rate) − (1.5 × stable rate); result[0] > 0 means
+    # the canary is regressing beyond the allowed factor. successCondition
+    # evaluates the provider's result vector (that is, `result[0]`), not a
+    # separate recording-rule name.
     - name: canary-error-rate
       interval: 30s
       count: 20
-      successCondition: |
-        (scalar(canary_error_rate{version="canary"}) or 0)
-          <= ((scalar(stable_error_rate{version="stable"}) or 0) * 1.5)
+      successCondition: "result[0] <= 0"
       failureLimit: 3
       provider:
         prometheus:
           address: http://prometheus-operated.monitoring.svc:9090
           query: |
-            sum(rate(http_requests_total{version="canary",status=~"5.."}[5m]))
+            sum(rate(http_requests_total{version="canary",status_code=~"5.."}[5m]))
               /
             clamp_min(sum(rate(http_requests_total{version="canary"}[5m])), 0.001)
+            -
+            sum(rate(http_requests_total{version="stable",status_code=~"5.."}[5m]))
+              /
+            clamp_min(sum(rate(http_requests_total{version="stable"}[5m])), 0.001) * 1.5
     # Canary p95 latency must not increase by >20% over stable (WS2 / #1100).
+    # Provider query returns (canary p95) − (1.2 × stable p95).
     - name: canary-p95-latency
       interval: 30s
       count: 20
-      successCondition: |
-        (scalar(canary_p95_latency{version="canary"}) or 0)
-          <= ((scalar(stable_p95_latency{version="stable"}) or 0) * 1.2)
+      successCondition: "result[0] <= 0"
       failureLimit: 3
       provider:
         prometheus:
@@ -175,3 +184,7 @@ spec:
             histogram_quantile(0.95,
               sum by (le) (rate(http_request_duration_seconds_bucket{version="canary"}[5m]))
             )
+              -
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{version="stable"}[5m]))
+            ) * 1.2

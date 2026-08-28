@@ -230,7 +230,14 @@ function initRedis() {
     client.on("error", (err) => {
       // On an AUTH error, transparently retry the connection with the previous
       // password (rotation grace window). Other errors remain non-fatal.
-      if (authCandidates.length > 1 && err && /NOAUTH|ERR.*auth/i.test(String(err.message || ""))) {
+      // Redis 7 returns `WRONGPASS invalid username-password pair or user is
+      // disabled` for bad credentials (older 5.x used `ERR invalid password`);
+      // match both so the previous-password fallback never gets skipped (#1100).
+      if (
+        authCandidates.length > 1 &&
+        err &&
+        /NOAUTH|WRONGPASS|ERR.*auth/i.test(String(err.message || ""))
+      ) {
         const fallback = new Redis(url, {
           lazyConnect: true,
           enableOfflineQueue: false,

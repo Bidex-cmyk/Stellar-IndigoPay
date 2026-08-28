@@ -102,12 +102,28 @@ jobs:
           path: /tmp/base-${{ matrix.service }}
           output-file: /tmp/sbom-base-${{ matrix.service }}.cdx.json
 
-      - name: Run SBOM diff
+      - name: Scan head SBOM with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: sbom
+          scan-ref: /tmp/sbom-head-${{ matrix.service }}.cdx.json
+          format: json
+          output: /tmp/trivy-${{ matrix.service }}.json
+          exit-code: "0"  # Scan results drive the gate in sbom-diff; always produce findings.
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Run SBOM diff (enforce CRITICAL/HIGH CVE gate on new deps)
         id: diff
         run: |
+          # --trivy feeds the head findings to sbom-diff so a NEW dependency
+          # carrying a CRITICAL/HIGH CVE exits 1 (--exit-on-critical) and fails
+          # CI. New deps are not suppressible via .trivyignore (WS5 / #1100).
           node scripts/sbom-diff.js \
             --base /tmp/sbom-base-${{ matrix.service }}.cdx.json \
             --head /tmp/sbom-head-${{ matrix.service }}.cdx.json \
+            --trivy '/tmp/trivy-${{ matrix.service }}.json' \
+            --exit-on-critical \
             --format table > /tmp/sbom-diff-report.txt
           cat /tmp/sbom-diff-report.txt
 

@@ -48,13 +48,6 @@ spec:
           env:
             - name: NAMESPACE
               value: stellar-indigopay
-            - name: PROMOTION_LOCK_HELD
-              # The postgres-healthcheck daemon holds the `postgres-primary-lock`
-              # Lease before it creates this Job, so the split-brain guard in
-              # postgres-failover-script.yaml short-circuits safely. Set to true
-              # on the manually-applied template so kubectl-driven failovers also
-              # pass the guard after operator confirmation.
-              value: "true"
             - name: STANDBY_POD
               value: postgres-standby-0
             - name: BACKEND_METRICS_URL

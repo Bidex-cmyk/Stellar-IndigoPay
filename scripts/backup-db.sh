@@ -62,16 +62,39 @@ compute_row_checksums() {
             if [ "$first" = 1 ]; then first=0; else printf ', '; fi
             printf '{"table":"%s","md5":"%s"}' "$table" "$checksum"
         done
+        # Record the expected server-side object counts (WS4 acceptance). A
+        # restore drill compares the restored database against these so a schema
+        # loss (indices/constraints/triggers/sequences) fails the drill even when
+        # row counts look healthy. Kept inside the same array so existing jq
+        # (`select(.table==$t)`) consumers are unaffected.
+        local idx cnt trg seq_q
+        idx=$(PGPASSWORD="$DB_PASSWORD" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -tAc \
+            "SELECT count(*) FROM pg_indexes WHERE schemaname='public';" 2>/dev/null | tr -d ' \n')
+        cnt=$(PGPASSWORD="$DB_PASSWORD" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -tAc \
+            "SELECT count(*) FROM pg_constraint WHERE contype IN ('f','p','u');" 2>/dev/null | tr -d ' \n')
+        trg=$(PGPASSWORD="$DB_PASSWORD" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -tAc \
+            "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal;" 2>/dev/null | tr -d ' \n')
+        seq_q=$(PGPASSWORD="$DB_PASSWORD" psql -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" -tAc \
+            "SELECT count(*) FROM pg_class WHERE relkind='S' AND relnamespace=(SELECT oid FROM pg_namespace WHERE nspname='public');" 2>/dev/null | tr -d ' \n')
+        idx="${idx:-0}"; cnt="${cnt:-0}"; trg="${trg:-0}"; seq_q="${seq_q:-0}"
+        printf ', {"table":"__objects__","md5":"","indices":"%s","constraints":"%s","triggers":"%s","sequences":"%s"}' "$idx" "$cnt" "$trg" "$seq_q"
         printf ' ]'
     } > "$out_file"
-    log_info "Computed row-level checksums for ${CRITICAL_TABLES}"
+    log_info "Computed row-level checksums + object-count expectations"
 }
 
 # Emit a Prometheus text-format metric line (WS4 observability).
+# Includes backup_last_success_timestamp_seconds (unix epoch) so alerting can
+# detect stalled backups by liveness/age instead of relying on the duration
+# gauge not *changing* (identical durations across two backups would otherwise
+# false-positive BackupStalled).
 backup_metrics() {
     local size_bytes="$1" duration_seconds="$2"
+    local last_success_ts
+    last_success_ts=$(date +%s)
     echo "backup_backup_size_bytes ${size_bytes}"
     echo "backup_backup_duration_seconds ${duration_seconds}"
+    echo "backup_last_success_timestamp_seconds ${last_success_ts}"
 }
 
 # Download the uploaded artifact and re-hash it, comparing against the local

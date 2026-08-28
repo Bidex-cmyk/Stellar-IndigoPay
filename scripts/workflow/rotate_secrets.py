@@ -13,8 +13,10 @@ staging" — without touching any live secret manager. The script:
        a. Demotes the current value to `PREVIOUS`.
        b. Generates a cryptographically random replacement.
        c. Stages the replacement as `NEXT`.
-  3. Prints the staged versions to stdout as a JSON object suitable for the
-     caller to hand to `update_secrets.py` and later `restore_secrets.py`.
+  3. Writes the staged versions (current/previous/next raw values) to the
+     PROTECTED output file given by `--out`, created with mode 0o600. Raw secret
+     values are NEVER printed to stdout — console output is limited to status
+     lines and SHA-256 fingerprints for the audit trail.
 
 Nothing is written to the external secret manager here; `update_secrets.py`
 applies the staged values and `restore_secrets.py` can roll back to the
@@ -39,6 +41,7 @@ Usage examples:
 import argparse
 import hashlib
 import json
+import os
 import secrets
 import string
 
@@ -111,7 +114,10 @@ def main():
                         help="Path to a JSON file with current secret values")
     parser.add_argument("--secrets-manager-path", default="",
                         help="AWS Secrets Manager secret id (with --provider aws)")
-    parser.add_argument("--out", default="", help="Write staged JSON to this file instead of stdout")
+    # --out is required: the staged payload contains raw CURRENT/PREVIOUS/NEXT
+    # secret values and must never be dumped to stdout (logs/CI would leak it).
+    parser.add_argument("--out", required=True,
+                        help="Protected output path for the staged JSON payload (written with mode 0o600)")
     args = parser.parse_args()
 
     secrets_list = [s.strip() for s in args.secrets.split(",") if s.strip()]
@@ -128,14 +134,38 @@ def main():
         "step": "staged-next",
         "secrets": staged,
     }
-    rendered = json.dumps(payload, indent=2)
+    rendered = json.dumps(payload, indent=2) + "\n"
 
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
-            fh.write(rendered)
-        print(f"[rotate_secrets] staged {len(secrets_list)} secret(s) -> {args.out}")
-    else:
-        print(rendered)
+    # Write the secret-bearing payload with restrictive permissions (0o600) so
+    # it is only readable by the owning user, never world/group readable.
+    _write_protected(args.out, rendered)
+
+    # Console output is limited to NON-SENSITIVE status lines + fingerprints
+    # (SHA-256 hashes) for the audit trail — never raw secret values.
+    print(f"[rotate_secrets] staged {len(secrets_list)} secret(s) -> {args.out}")
+    for name in secrets_list:
+        entry = staged.get(name, {})
+        print(
+            f"  {name}: current={entry.get('current_hash', '?')} "
+            f"next={entry.get('next_hash', '?')}"
+        )
+
+
+def _write_protected(path: str, content: str) -> None:
+    """Write `content` to `path` with mode 0o600 (owner read/write only)."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    fh = None
+    try:
+        os.fchmod(fd, 0o600)
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+        fh.write(content)
+        fh.flush()
+    finally:
+        if fh is not None:
+            fh.close()
+        else:
+            os.close(fd)
 
 
 if __name__ == "__main__":

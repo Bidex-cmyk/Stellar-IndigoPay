@@ -131,6 +131,14 @@ function log(level, msg, extra = {}) {
 }
 
 // ── Low-level K8s HTTP helpers using only the service-account token ────────
+// Requests are bounded by KUBE_REQUEST_TIMEOUT_MS so a stalled K8s API does not
+// leave `kubeRequest` pending forever (which would stall acquireLease and stop
+// the health-check loop from probing PostgreSQL, missing a later failover).
+const KUBE_REQUEST_TIMEOUT_MS = Number.parseInt(
+  process.env.KUBE_REQUEST_TIMEOUT_MS || "10000",
+  10,
+);
+
 function kubeRequest(method, urlPath, body) {
   return new Promise((resolve, reject) => {
     const https = require("https");
@@ -164,7 +172,10 @@ function kubeRequest(method, urlPath, body) {
         });
       },
     );
-    req.on("error", reject);
+    req.setTimeout(KUBE_REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`kubeRequest timed out after ${KUBE_REQUEST_TIMEOUT_MS}ms`));
+    });
+    req.on("error", (err) => reject(err));
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
@@ -183,50 +194,81 @@ async function getLease() {
  * replicas can't both take ownership at the same instant.
  */
 async function acquireLease(holder) {
-  const res = await getLease();
-  const body = res.body;
-  const holderIdentity = body?.spec?.holderIdentity;
-  if (
-    holderIdentity &&
-    holderIdentity !== "" &&
-    holderIdentity !== holder &&
-    isFresh(body?.spec?.renewTime, body?.spec?.leaseDurationSeconds)
-  ) {
-    // Owned by someone else and still fresh → deny.
-    return { acquired: false, reason: `${holderIdentity} holds a live lease` };
-  }
   const now = new Date().toISOString();
-  const patch = {
-    metadata: {
-      name: CONFIG.leaseName,
-      namespace: NAMESPACE,
-    },
-    spec: {
-      holderIdentity: holder,
-      leaseDurationSeconds: CONFIG.leaseTtlSeconds,
-      acquireTime: body?.spec?.acquireTime || now,
-      renewTime: now,
-      leaseTransitions: (body?.spec?.leaseTransitions || 0) + 1,
-    },
-  };
-  if (res.statusCode === 404) {
-    const created = await kubeRequest(
-      "POST",
-      `/apis/coordination.k8s.io/v1/namespaces/${NAMESPACE}/leases`,
+
+  // Optimistic-concurrency acquire with a small bounded retry. Kubernetes
+  // requires `metadata.resourceVersion` on a PUT; if we omit it (or it races),
+  // the API returns 409 Conflict. We treat a 409 as a lost lease and retry from
+  // a fresh GET so ownership is never reported as acquired spuriously.
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const res = await getLease();
+    const body = res.body;
+    const bodyMap = (body && typeof body === "object") ? body : {};
+    const holderIdentity = bodyMap.spec?.holderIdentity;
+    if (
+      holderIdentity &&
+      holderIdentity !== "" &&
+      holderIdentity !== holder &&
+      isFresh(bodyMap.spec?.renewTime, bodyMap.spec?.leaseDurationSeconds)
+    ) {
+      // Owned by someone else and still fresh → deny.
+      return { acquired: false, reason: `${holderIdentity} holds a live lease` };
+    }
+
+    const patch = {
+      metadata: {
+        name: CONFIG.leaseName,
+        namespace: NAMESPACE,
+        // Include the current resourceVersion (from the GET) so the PUT is a
+        // valid optimistic update; omitted on a brand-new (404) create.
+        ...((res.statusCode === 200 || res.statusCode === 409) && bodyMap.metadata?.resourceVersion
+          ? { resourceVersion: bodyMap.metadata.resourceVersion }
+          : {}),
+      },
+      spec: {
+        holderIdentity: holder,
+        leaseDurationSeconds: CONFIG.leaseTtlSeconds,
+        acquireTime: bodyMap.spec?.acquireTime || now,
+        renewTime: now,
+        leaseTransitions: (bodyMap.spec?.leaseTransitions || 0) + 1,
+      },
+    };
+
+    // Fresh (404) or somehow-emptied lease → create it.
+    if (res.statusCode === 404) {
+      const created = await kubeRequest(
+        "POST",
+        `/apis/coordination.k8s.io/v1/namespaces/${NAMESPACE}/leases`,
+        patch,
+      );
+      if (created.statusCode === 201) {
+        return { acquired: true, lease: created.body };
+      }
+      // A 409 means another process created it between our GET and POST;
+      // loop to re-GET and take the PUT path.
+      if (created.statusCode === 409 && attempt + 1 < MAX_ATTEMPTS) continue;
+      return { acquired: false, reason: `create returned ${created.statusCode}` };
+    }
+
+    const updated = await kubeRequest(
+      "PUT",
+      `/apis/coordination.k8s.io/v1/namespaces/${NAMESPACE}/leases/${CONFIG.leaseName}`,
       patch,
     );
-    return created.statusCode === 201
-      ? { acquired: true, lease: created.body }
-      : { acquired: false, reason: `create returned ${created.statusCode}` };
+    if (updated.statusCode < 300) {
+      return { acquired: true, lease: updated.body };
+    }
+    // 409 = optimistic-concurrency conflict (someone else wrote first).
+    // Re-GET and retry once with the fresh resourceVersion.
+    if (updated.statusCode === 409 && attempt + 1 < MAX_ATTEMPTS) continue;
+    return {
+      acquired: false,
+      reason: `update returned ${updated.statusCode}`,
+      ...(updated.statusCode === 409 ? { conflict: true } : {}),
+    };
   }
-  const updated = await kubeRequest(
-    "PUT",
-    `/apis/coordination.k8s.io/v1/namespaces/${NAMESPACE}/leases/${CONFIG.leaseName}`,
-    patch,
-  );
-  return updated.statusCode < 300
-    ? { acquired: true, lease: updated.body }
-    : { acquired: false, reason: `update returned ${updated.statusCode}` };
+  return { acquired: false, reason: "lease retry attempts exhausted" };
 }
 
 function isFresh(renewTime, leaseDurationSeconds) {
@@ -238,15 +280,31 @@ function isFresh(renewTime, leaseDurationSeconds) {
 }
 
 async function renewLease(holder) {
+  // Renew must also carry the current resourceVersion, otherwise Kubernetes
+  // rejects the optimistic update (409) and the lease goes stale.
+  let res = await getLease();
+  const bodyMap = res.body && typeof res.body === "object" ? res.body : {};
+  if (res.statusCode === 404) {
+    const acquired = await acquireLease(holder);
+    return acquired.acquired;
+  }
   const patch = {
-    metadata: { name: CONFIG.leaseName, namespace: NAMESPACE },
+    metadata: {
+      name: CONFIG.leaseName,
+      namespace: NAMESPACE,
+      resourceVersion: bodyMap.metadata?.resourceVersion,
+    },
     spec: { holderIdentity: holder, renewTime: new Date().toISOString() },
   };
-  const res = await kubeRequest(
+  res = await kubeRequest(
     "PUT",
     `/apis/coordination.k8s.io/v1/namespaces/${NAMESPACE}/leases/${CONFIG.leaseName}`,
     patch,
   );
+  if (res.statusCode === 409) {
+    // Lost the optimistic-concurrency race — re-fetch and retry once.
+    return renewLease(holder);
+  }
   return res.statusCode < 300;
 }
 
@@ -281,7 +339,6 @@ async function createFailoverJob() {
                   name: "STANDBY_POD",
                   value: process.env.STANDBY_POD || "postgres-standby-0",
                 },
-                { name: "PROMOTION_LOCK_HELD", value: "true" },
                 {
                   name: "BACKEND_METRICS_URL",
                   value: CONFIG.metricsUrl,
@@ -414,47 +471,77 @@ async function main() {
   let failCount = 0;
   let leaseHolder = `healthcheck-${CONFIG.podName}`;
   let holdingLease = false;
+  // Set once a failover has been initiated so we do not create a *second*
+  // uniquely-named failover Job every time the primary stays down beyond the
+  // threshold. Only an explicit recovery (healthy probe) resets this flag.
+  let failoverInitiated = false;
 
   try {
     while (true) {
-      const healthy = pgIsReady();
+      try {
+        const healthy = pgIsReady();
 
-      if (healthy) {
-        if (failCount > 0) {
-          log("info", "primary recovered; resetting failure counter", {
-            was: failCount,
-          });
-        }
-        failCount = 0;
-
-        // A healthy primary keeps the Lease warm so a standby's check loses the
-        // CAS above and never double-promotes.
-        const acquired = await acquireLease(leaseHolder);
-        holdingLease = acquired.acquired;
-        if (!holdingLease) {
-          // Another node currently holds the lease first; adopt it on the next healthy tick.
-          leaseHolder = "second-choice-holder";
-          log("warn", "could not hold lease while healthy", {
-            reason: acquired.reason,
-          });
-        } else {
-          leaseHolder = `healthcheck-${CONFIG.podName}`;
-        }
-      } else {
-        failCount += 1;
-        log("warn", "health check failed", {
-          consecutive: failCount,
-          threshold: CONFIG.threshold,
-        });
-        if (failCount >= CONFIG.threshold) {
-          const triggered = await maybeTriggerFailover(failCount);
+        if (healthy) {
+          // Explicit recovery: the primary is healthy again, so re-arm failover
+          // for a future outage.
+          if (failoverInitiated) {
+            log("info", "primary recovered after failover; failover re-armed");
+            failoverInitiated = false;
+          }
+          if (failCount > 0) {
+            log("info", "primary recovered; resetting failure counter", {
+              was: failCount,
+            });
+          }
           failCount = 0;
-          if (triggered) {
-            // Wait a full interval before re-checking to let the failover Job
-            // settle and avoid creating duplicate Jobs.
-            await sleep(CONFIG.intervalMs);
+
+          // A healthy primary keeps the Lease warm so a standby's check loses the
+          // CAS above and never double-promotes.
+          const acquired = await acquireLease(leaseHolder);
+          holdingLease = acquired.acquired;
+          if (!holdingLease) {
+            // Another node currently holds the lease first; adopt it on the next healthy tick.
+            leaseHolder = "second-choice-holder";
+            log("warn", "could not hold lease while healthy", {
+              reason: acquired.reason,
+            });
+          } else {
+            leaseHolder = `healthcheck-${CONFIG.podName}`;
+          }
+        } else {
+          failCount += 1;
+          log("warn", "health check failed", {
+            consecutive: failCount,
+            threshold: CONFIG.threshold,
+          });
+          if (failCount >= CONFIG.threshold) {
+            if (failoverInitiated) {
+              // The primary is still down but we have already created a failover
+              // Job for this outage. Do NOT create another uniquely-named Job;
+              // resume triggering only after an explicit recovery.
+              log("warn", "failover already initiated; suppressing duplicate Job creation", {
+                consecutive: failCount,
+              });
+              failCount = 0;
+            } else {
+              const triggered = await maybeTriggerFailover(failCount);
+              failCount = 0;
+              if (triggered) {
+                failoverInitiated = true;
+                // Wait a full interval before re-checking to let the failover Job
+                // settle and avoid creating duplicate Jobs.
+                await sleep(CONFIG.intervalMs);
+              }
+            }
           }
         }
+      } catch (err) {
+        // A transient K8s API error (e.g. a timed-out lease request) must not
+        // terminate the daemon — it would stop probing PostgreSQL and miss a
+        // later failover. Log, reset this round, and keep the loop alive.
+        log("warn", "transient error in health-check round; continuing", {
+          err: err.message,
+        });
       }
 
       await sleep(CONFIG.intervalMs);
