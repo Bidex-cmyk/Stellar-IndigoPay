@@ -25,3 +25,4 @@ resources:
   - postgres-failover-script.yaml
   - postgres-failover-job.yaml
   - postgres-failover-rbac.yaml
+  - postgres-primary-lock.yaml

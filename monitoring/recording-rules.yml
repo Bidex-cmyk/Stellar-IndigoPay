@@ -78,3 +78,37 @@ groups:
       - record: slo:projects:error_budget_remaining_pct
         expr: |
           (1 - (slo:projects:error_ratio / 0.001)) * 100
+
+  # ── Canary analysis recording rules ───────────────────────────────────────
+  # Pre-computed inputs to the Argo Rollouts AnalysisTemplate
+  # (gitops/analysis-template.yaml). The `canary` and `stable` revisions each
+  # export HTTP metrics with a `version` label so error rate and p95 latency
+  # can be compared directly during a rollout (#1100 / WS2).
+  - name: indigopay-canary-analysis
+    interval: 30s
+    rules:
+      # Canary 5xx error rate (per second of failed requests).
+      - record: canary_error_rate
+        expr: |
+          sum(rate(http_requests_total{version="canary",status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total{version="canary"}[5m])), 0.001)
+
+      # Stable 5xx error rate used as the baseline.
+      - record: stable_error_rate
+        expr: |
+          sum(rate(http_requests_total{version="stable",status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total{version="stable"}[5m])), 0.001)
+
+      # Canary p95 request latency (seconds).
+      - record: canary_p95_latency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{version="canary"}[5m]))
+          )
+
+      # Stable p95 request latency (seconds).
+      - record: stable_p95_latency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{version="stable"}[5m]))
+          )

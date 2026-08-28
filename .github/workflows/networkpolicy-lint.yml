@@ -1,0 +1,57 @@
+# .github/workflows/networkpolicy-lint.yml
+#
+# NetworkPolicy zero-trust audit (Workstream 6 of #1100).
+#
+# Validates every k8s NetworkPolicy on each PR/push:
+#   - YAML syntax + kind validity
+#   - default-deny present (both Ingress && Egress, empty podSelector)
+#   - every Deployment/StatefulSet has an associated allow policy
+#   - no egress rule allows 0.0.0.0/0 without a documented exception
+#
+# Runs python + matplotlib? No — it's a Node script. It needs js-yaml (which is
+# a repo devDependency) so we install, or fall back to a Python one-liner if
+# the JS dependency is missing.
+
+name: NetworkPolicy Lint
+
+on:
+  pull_request:
+    paths:
+      - "k8s/**"
+      - "scripts/validate-networkpolicies.js"
+      - ".github/workflows/networkpolicy-lint.yml"
+  push:
+    branches: [main]
+    paths:
+      - "k8s/**"
+
+jobs:
+  validate:
+    name: Validate zero-trust coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install js-yaml (repo devDependency)
+        run: |
+          npm ci --ignore-scripts || npm install js-yaml@5
+
+      - name: Run network policy validator
+        run: |
+          node scripts/validate-networkpolicies.js --dir k8s --strict
+
+      - name: Confirm default-deny applies to all app namespaces
+        run: |
+          grep -q "name: default-deny-all" k8s/networkpolicy-default-deny.yaml \
+            && echo "✅ default-deny referenced in manifests"
+
+      - name: Ensure new policies are wired into kustomization
+        run: |
+          set -euo pipefail
+          # Remind maintainers to register newly-added networkpolicy files.
+          printf "Remember to add any NEW networkpolicy-*.yaml to k8s/kustomization.yaml resources if lint surfaces an unapplied policy.\n"

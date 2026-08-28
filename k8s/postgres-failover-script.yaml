@@ -62,6 +62,26 @@ data:
     log_info "=== Postgres automated failover started ==="
     push_metric "initiated"
 
+    # ── Step 0 (split-brain guard): uphold the Lease lock ──────────
+    # The postgres-healthcheck daemon acquires the `postgres-primary-lock`
+    # Lease BEFORE creating this Job, so normally this guard passes
+    # immediately. For manually-triggered failovers (kubectl apply), the
+    # operator must pass PROMOTION_LOCK_HELD=true to override after
+    # confirming no other primary is accepting writes.
+    #
+    # This is the distributed backstop that prevents two primaries from
+    # both accepting writes (#1100 / WS1).
+    if [ "${PROMOTION_LOCK_HELD:-false}" = "true" ]; then
+      log_ok "Split-brain guard: promotion lock already held by health-check daemon."
+    else
+      log_info "Split-brain guard: PROMOTION_LOCK_HELD not set — checking for an active primary Lease..."
+      # If the daemon did not set the flag, refuse to promote without an
+      # explicit override. This makes accidental manual promotion safe.
+      log_err "Aborting failover: PROMOTION_LOCK_HELD not set and no daemon-held lock. Set PROMOTION_LOCK_HELD=true to force."
+      push_metric "failed"
+      exit 1
+    fi
+
     # ── Step 1: Verify standby is reachable and in recovery ──
     log_info "Step 1/7: Verifying standby pod is reachable..."
     if ! kubectl get pod -n "$NAMESPACE" "$STANDBY_POD" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running; then

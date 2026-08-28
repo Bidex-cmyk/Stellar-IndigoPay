@@ -1,0 +1,91 @@
+# gitops/analysis-template.yaml
+#
+# Argo Rollouts AnalysisTemplate for automated canary promotion / rollback
+# (Workstream 2 of #1100).
+#
+# This template compares the canary revision against the stable revision using
+# real Prometheus metrics and decides, within a 10-minute analysis window,
+# whether to promote (metrics within thresholds) or roll back (any regression):
+#
+#   Condition 1 — canary error rate must not exceed 1.5× the stable baseline.
+#   Condition 2 — canary p95 latency must not increase by more than 20% over stable.
+#
+# Metrics used:
+#   - Error rate  : rate(http_requests_total{version=~"canary",status~"5.."}[5m])
+#                   / rate(http_requests_total{version=~"canary"}[5m])
+#   - p95 latency : histogram_quantile(0.95,
+#                   rate(http_request_duration_seconds_bucket{version=~"canary|stable"}[5m]))
+#
+# The Rollout in gitops/argo-rollouts-canary.yaml references this template,
+# evaluating it every 30 s for 10 minutes. On `Failed` the Rollout aborts and
+# traffic reverts to stable; on `Successful` it promotes to the next canary
+# step (ultimately 100%).
+#
+# NOTE: the queries assume the backend exports the `version` label on its HTTP
+# metrics. That label must equal "canary" or "stable" (see
+# monitoring/recording-rules.yml and backend/src/services/metrics.js). If your
+# rollout does not set a `version` label, substitute the label the Rollout
+# applies (e.g. pod-template-hash) in the queries below.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: backend-canary-analysis
+  namespace: stellar-indigopay
+  labels:
+    app: backend
+    component: canary-analysis
+spec:
+  args:
+    # Resolved from the Argo Rollouts' canaryService / stableService when
+    # referenced by a Rollout. Defaults are safe for local dry-run.
+    - name: service-name
+      value: backend-svc
+    - name: prometheus-address
+      value: http://prometheus-operated.monitoring.svc:9090
+  metrics:
+    # ── Canary error rate vs stable baseline ──────────────────────
+    - name: canary-error-rate
+      interval: 30s
+      count: 20  # 20 × 30 s = 10-minute analysis window
+      # Fail if canary error rate is more than 1.5× the stable error rate,
+      # with a hard floor so a canary that spikes to ANY 5xx beyond baseline
+      # still aborts when stable has ~0 traffic.
+      successCondition: |
+        (scalar(canary_error_rate{version="canary"}) or 0)
+          <=
+        ((scalar(stable_error_rate{version="stable"}) or 0) * 1.5)
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus-operated.monitoring.svc:9090
+          query: |
+            (
+              sum(rate(http_requests_total{version="canary",status=~"5.."}[5m]))
+                / clamp_min(
+                    sum(rate(http_requests_total{version="canary"}[5m])), 0.001)
+            )
+              -
+            (
+              (sum(rate(http_requests_total{version="stable",status=~"5.."}[5m]))
+                / clamp_min(
+                    sum(rate(http_requests_total{version="stable"}[5m])), 0.001)) * 1.5
+            )
+
+    # ── Canary p95 latency regression check ──────────────────────
+    - name: canary-p95-latency
+      interval: 30s
+      count: 20
+      # Fail if canary p95 latency exceeds stable p95 by more than 20%.
+      successCondition: |
+        (scalar(canary_p95_latency{version="canary"}) or 0)
+          <=
+        ((scalar(stable_p95_latency{version="stable"}) or 0) * 1.2)
+      failureLimit: 3
+      provider:
+        prometheus:
+          address: http://prometheus-operated.monitoring.svc:9090
+          query: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{version="canary"}[5m]))
+            )

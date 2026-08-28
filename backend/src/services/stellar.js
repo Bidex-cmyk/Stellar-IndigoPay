@@ -398,11 +398,41 @@ async function getOnChainUsdcToken() {
   return null;
 }
 
+// -------------------------------------------------------------------------
+// Synthetic sender account support (WS7 / #1100)
+// -------------------------------------------------------------------------
+
+/**
+ * Resolve the configured synthetic monitoring sender (public address + balance
+ * floor). The full secret key is intentionally NOT exposed to the rest of the
+ * backend runtime — the synthetic-monitor job keeps it in a GitHub/K8s Secret
+ * and this helper only surfaces the PUBLIC attributes for health/telemetry.
+ *
+ * @returns {{ configured: boolean, address: string|null, minBalanceXlm: number }}
+ */
+function getSyntheticSenderInfo() {
+  const secret = process.env.SYNTHETIC_SENDER_SECRET || "";
+  let address = null;
+  if (secret) {
+    try {
+      address = Horizon.Keypair.fromSecret(secret).publicKey();
+    } catch {
+      address = null;
+    }
+  }
+  return {
+    configured: Boolean(secret),
+    address,
+    minBalanceXlm: Number(process.env.SYNTHETIC_MIN_BALANCE_XLM || 10),
+  };
+}
+
 module.exports = {
   server,
   rpcServer,
   CONTRACT_ID,
   NETWORK_PASSPHRASE,
+  getSyntheticSenderInfo,
   // Retry / circuit breaker helpers (exported for readiness probe + tests)
   withRetry,
   isRetryable,

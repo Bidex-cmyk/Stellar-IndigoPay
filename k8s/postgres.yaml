@@ -32,6 +32,13 @@ data:
     max_replication_slots = 5
     hot_standby = on
 
+    # ── Zero write loss on failover ──────────────────────────────
+    # Guarantee every committed transaction on the primary is durably
+    # applied on the standby before the primary acknowledges a commit,
+    # so a failover never loses acknowledged writes (#1100 / WS1).
+    synchronous_commit = remote_apply
+    synchronous_standby_names = 'standby'
+
     # ── WAL Archiving to S3 (fallback for standby) ─────────────
     archive_mode = on
     archive_command = '/usr/local/bin/archive-wal.sh %p %f'
@@ -168,6 +175,7 @@ spec:
                                 \"env\": [
                                   {\"name\": \"NAMESPACE\", \"value\": \"$NAMESPACE\"},
                                   {\"name\": \"STANDBY_POD\", \"value\": \"postgres-standby-0\"},
+                                  {\"name\": \"PROMOTION_LOCK_HELD\", \"value\": \"true\"},
                                   {\"name\": \"BACKEND_METRICS_URL\", \"value\": \"http://backend-svc:4000/api/admin/failover-metric\"},
                                   {\"name\": \"FAILOVER_TOKEN\", \"valueFrom\": {\"secretKeyRef\": {\"name\": \"stellar-indigopay-secrets\", \"key\": \"FAILOVER_METRICS_TOKEN\", \"optional\": true}}},
                                   {\"name\": \"SLACK_WEBHOOK_URL\", \"valueFrom\": {\"secretKeyRef\": {\"name\": \"stellar-indigopay-secrets\", \"key\": \"SLACK_WEBHOOK_URL\", \"optional\": true}}}

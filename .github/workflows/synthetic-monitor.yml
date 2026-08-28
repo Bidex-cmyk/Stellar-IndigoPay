@@ -1,0 +1,55 @@
+# .github/workflows/synthetic-monitor.yml
+#
+# Synthetic donation monitor (Workstream 7 of #1100).
+#
+# Runs every 5 minutes and executes a full, scripted donation
+# (build → sign → submit → verify on-chain event → verify backend recording)
+# so operators learn about an outage BEFORE a real donor is affected. The
+# script emits Prometheus metrics; the SyntheticDonationFailed alert fires
+# when two consecutive checks fail.
+#
+# Requires a repo secret `SYNTHETIC_SENDER_SECRET` (the funded monitoring
+# account's secret key) plus variables `SYNTHETIC_PROJECT_ID` / `SYNTHETIC_DESTINATION`.
+# For environments without GitHub Actions, deploy scripts/synthetic-monitor.js
+# as an in-cluster CronJob instead.
+
+name: Synthetic Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    name: Run synthetic donation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Stellar SDK + prom-client in place (scripts dir)
+        working-directory: scripts
+        run: |
+          npm init -y >/dev/null 2>&1 || true
+          npm install @stellar/stellar-sdk@12 prom-client@15 --no-audit --no-fund
+
+      - name: Run synthetic donation checks
+        env:
+          SYNTHETIC_SENDER_SECRET: ${{ secrets.SYNTHETIC_SENDER_SECRET }}
+          SYNTHETIC_PROJECT_ID: ${{ vars.SYNTHETIC_PROJECT_ID }}
+          SYNTHETIC_DESTINATION: ${{ vars.SYNTHETIC_DESTINATION }}
+          HORIZON_URL: ${{ vars.HORIZON_URL || 'https://horizon-testnet.stellar.org' }}
+          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' }}
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://api.stellar-indigopay.com' }}
+          STELLAR_NETWORK: testnet
+          SYNTHETIC_METRICS_FILE: /tmp/synthetic_monitor_metrics.prom
+        run: |
+          node scripts/synthetic-monitor.js --run-once
+          cat /tmp/synthetic_monitor_metrics.prom

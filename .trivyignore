@@ -1,6 +1,22 @@
-# Trivy ignore list
-# Only add vulnerabilities here that are in upstream/base images and have no
-# fix available. Re-evaluate each entry periodically.
+# Trivy vulnerability ignore list — STRUCTURED, REVIEWED, TIME-BOXED (WS5 / #1100)
+#
+# Every entry MUST follow this exact 4-field format or it is INVALID and does
+# NOT suppress anything (CI fails on invalid entries):
+#
+#   CVE-YYYY-NNNNN # <reason> # <reviewer> # <expiry-date-YYYY-MM-DD>
+#
+# Rule | Explanation
+# ------|------------------------------------------------------------
+# reason  | Non-empty justification: which dependency/toolchain, why unfixable,
+#          and what tracking issue exists (e.g. "upstream issue #482; rebuild after
+#          next base image release").
+# reviewer| GitHub handle of the human who approved the exception.
+# expiry  | ISO date (YYYY-MM-DD). After this date the entry is EXPIRED and CI
+#          FAILS until it is re-reviewed and re-expired or the CVE is fixed.
+#
+# These exceptions are for UPSTREAM / BASE-IMAGE CVEs with no available fix
+# only. New dependencies introduced by a PR are never suppressible here — a PR
+# that adds a package carrying a CRITICAL or HIGH CVE fails CI regardless.
 
-# Example entries (uncomment if needed):
-# CVE-2024-XXXXX
+# Example of a valid entry (uncomment + fill in real values to use):
+# CVE-2024-47176 # OpenSSH in base image, patched upstream after next release; tracking #000 # reviewer: octocat # 2026-12-31
