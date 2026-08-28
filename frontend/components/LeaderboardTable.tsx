@@ -2,6 +2,7 @@
  * components/LeaderboardTable.tsx
  */
 import { formatXLM, formatUSDEquivalent, shortenAddress, badgeEmoji } from "@/utils/format";
+import { useIsRestoring } from "@tanstack/react-query";
 import { accountUrl } from "@/lib/stellar";
 import { usePriceContext } from "@/lib/priceContext";
 import { PriceStaleIndicator } from "@/components/PriceStaleIndicator";
@@ -80,8 +81,9 @@ export default function LeaderboardTable({
   } = useLeaderboard(limit, period);
 
   const { t } = useI18n();
+  const isRestoring = useIsRestoring();
 
-  if (isLoading) return <LeaderboardTableSkeleton />;
+  if (isRestoring || isLoading) return <LeaderboardTableSkeleton />;
 
   // Keep cached rows visible during background refetches and offline errors.
   if (isError && !entries)

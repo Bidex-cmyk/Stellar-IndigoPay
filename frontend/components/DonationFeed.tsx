@@ -83,6 +83,7 @@ export default function DonationFeed({
         createdAt: payment.createdAt,
       };
 
+      let wasInserted = false;
       queryClient.setQueryData(
         queryKeys.projectDonations(projectId, 10),
         (previous: { pages: ProjectDonationsPage[]; pageParams: unknown[] } | undefined) => {
@@ -94,6 +95,7 @@ export default function DonationFeed({
                 donation.transactionHash === newDonation.transactionHash,
             ),
           )) return previous;
+          wasInserted = true;
           return {
             ...previous,
             pages: previous.pages.map((page, index) =>
@@ -104,6 +106,7 @@ export default function DonationFeed({
           };
         },
       );
+      if (!wasInserted) return;
 
       setNewIds((prev) => new Set(prev).add(payment.id));
       setTimeout(() => {

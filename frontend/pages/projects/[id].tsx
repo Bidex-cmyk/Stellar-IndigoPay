@@ -129,12 +129,8 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
   // The project itself is the page shell. Ancillary data can load or refresh
   // independently without hiding cached project content.
   const loading = projectQuery.isLoading;
-  const loadError =
-    projectQuery.error || updatesQuery.error || matchesQuery.error;
-  const isRetrying =
-    projectQuery.isRefetching ||
-    updatesQuery.isRefetching ||
-    matchesQuery.isRefetching;
+  const loadError = projectQuery.error;
+  const isRetrying = projectQuery.isRefetching;
 
   const { toggleWishlist, isInWishlist } = useWishlist();
   const prefillAmount =
@@ -169,11 +165,7 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
   const handleRetryLoad = () => {
     if (isRetrying || !id) return;
     setRetryCount((c) => c + 1);
-    void Promise.all([
-      projectQuery.refetch(),
-      updatesQuery.refetch(),
-      matchesQuery.refetch(),
-    ]);
+    void projectQuery.refetch();
   };
 
   useEffect(() => {
@@ -917,7 +909,15 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
         </div>
       )}
 
-      {activeMatches.length > 0 && (
+      {matchesQuery.error ? (
+        <QueryErrorFallback
+          error={matchesQuery.error}
+          onRetry={() => void matchesQuery.refetch()}
+          isRetrying={matchesQuery.isRefetching}
+          title="Couldn't load donation matching"
+          className="mb-6"
+        />
+      ) : activeMatches.length > 0 && (
         <div className="card mb-6 border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
           <p className="text-xs uppercase tracking-widest font-bold text-green-700 font-body mb-3">
             Donation Matching Active
@@ -1577,7 +1577,15 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
             <h2 className="font-display text-lg font-semibold text-forest-900 mb-4">
               {t("project.projectUpdates")}
             </h2>
-            {updates.length === 0 ? (
+            {updatesQuery.error ? (
+              <QueryErrorFallback
+                error={updatesQuery.error}
+                onRetry={() => void updatesQuery.refetch()}
+                isRetrying={updatesQuery.isRefetching}
+                title="Couldn't load project updates"
+                className="my-0"
+              />
+            ) : updates.length === 0 ? (
               <p className="text-sm text-[#5a7a5a] dark:text-[#8aaa8a] font-body">
                 {t("project.noUpdatesYet")}
               </p>

@@ -61,16 +61,15 @@ const MOCK_FACETS: ProjectFacets = {
 };
 
 describe("ProjectsPage search and filters", () => {
-  function Wrapper({ children }: { children: React.ReactNode }) {
+  function renderPage() {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-  }
-
-  function renderPage() {
+    function Wrapper({ children }: { children: React.ReactNode }) {
+      return (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      );
+    }
     return render(<ProjectsPage />, { wrapper: Wrapper });
   }
 
@@ -270,6 +269,27 @@ describe("ProjectsPage search and filters", () => {
       expect(screen.getByText("No projects available yet")).toBeTruthy();
     });
     expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+  });
+
+  test("renders an error state with a retry when projects fail to load", async () => {
+    mockFetchProjects
+      .mockRejectedValueOnce(new Error("request failed"))
+      .mockResolvedValueOnce([MOCK_PROJECT]);
+
+    renderPage();
+    await act(async () => {
+      jest.advanceTimersByTime(300);
+    });
+
+    const retryButton = await screen.findByRole("button", { name: "Try Again" });
+    expect(screen.getByTestId("empty-state")).toHaveAttribute(
+      "data-variant",
+      "error",
+    );
+
+    fireEvent.click(retryButton);
+    await waitFor(() => expect(screen.getByText(MOCK_PROJECT.name)).toBeTruthy());
+    expect(mockFetchProjects).toHaveBeenCalledTimes(2);
   });
 
   test("renders loading skeletons before results arrive", async () => {

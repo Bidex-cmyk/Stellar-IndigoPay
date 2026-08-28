@@ -104,6 +104,7 @@ export default function ProjectsPage() {
     data: projects = [],
     isLoading: projectsLoading,
     isError: projectsError,
+    refetch: refetchProjects,
   } = useProjects(filters, searchReady);
   const { data: facets = null } = useProjectFacets(facetFilters, searchReady);
   const loading = !searchReady || projectsLoading;
@@ -594,9 +595,17 @@ export default function ProjectsPage() {
             </div>
           ) : projectsError && projects.length === 0 ? (
             <EmptyState
-              variant="empty"
+              variant="error"
               title="Could not load projects"
               description="Check your connection and try again."
+              action={
+                <button
+                  onClick={() => void refetchProjects()}
+                  className="btn-primary text-sm py-2 px-4"
+                >
+                  Try Again
+                </button>
+              }
             />
           ) : projects.length === 0 ? (
             <EmptyState

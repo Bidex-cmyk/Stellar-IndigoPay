@@ -690,7 +690,10 @@ export default function DonateForm({
           setDonorBadge(badgeNames[stats.badge] || null);
         }
 
-        // Still record in backend for feed/analytics
+        // Still record in backend for feed/analytics. Match the standard
+        // path: a 202 means the on-chain payment may already be recorded, so
+        // do not present a completed donation that could be submitted again.
+        let donationStillProcessing = false;
         await recordDonationMutation.mutateAsync({
           projectId: project.id,
           donorAddress: publicKey,
@@ -700,7 +703,13 @@ export default function DonateForm({
           encrypted: isEncrypted,
           transactionHash: result.hash,
           idempotencyKey,
+        }).catch((error: unknown) => {
+          donationStillProcessing = isDonationProcessingError(error);
         });
+        if (donationStillProcessing) {
+          setStep("unknown");
+          return;
+        }
 
         trackEvent("donation_confirmed", {
           projectId: project.id,

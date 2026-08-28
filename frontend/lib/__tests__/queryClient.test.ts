@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import {
   createQueryClient,
   indexedDbPersister,
+  QUERY_CACHE_MAX_AGE,
   shouldDehydrateMutation,
 } from "@/lib/queryClient";
 
@@ -37,6 +38,7 @@ describe("queryClient", () => {
     ) => number;
 
     expect(queryRetry(0, { code: "ERR_NETWORK" })).toBe(true);
+    expect(options.queries?.gcTime).toBe(QUERY_CACHE_MAX_AGE);
     expect(mutationRetry(3, { response: { status: 503 } })).toBe(false);
     expect(mutationRetryDelay(0, new Error())).toBe(1_000);
     expect(mutationRetryDelay(1, new Error())).toBe(2_000);

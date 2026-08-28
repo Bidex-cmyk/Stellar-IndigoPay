@@ -29,6 +29,7 @@ export function createQueryClient() {
     defaultOptions: {
       queries: {
         staleTime: 30_000,
+        gcTime: QUERY_CACHE_MAX_AGE,
         retry: queryRetryPolicy,
         refetchOnWindowFocus: true,
       },
