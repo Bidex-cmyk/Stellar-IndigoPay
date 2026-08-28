@@ -398,7 +398,7 @@ export default function DonateForm({
    */
   const submitStandardPayment = async (
     tx: Transaction,
-    idempotencyKey?: string,
+    idempotencyKey: string,
   ) => {
     // Transaction.hash() returns a Buffer — hex-encode it so the recovery
     // path polls and persists the required 64-character hexadecimal hash.
@@ -503,10 +503,9 @@ export default function DonateForm({
     setError(null);
     try {
       const freshTx = await buildDonationTransaction(pendingParamsRef.current);
-      await submitStandardPayment(
-        freshTx,
-        pendingIdempotencyRef.current ?? undefined,
-      );
+      const idempotencyKey = pendingIdempotencyRef.current;
+      if (!idempotencyKey) throw new Error("Missing donation idempotency key");
+      await submitStandardPayment(freshTx, idempotencyKey);
     } catch (err: unknown) {
       await handleDonationError(err);
     }
