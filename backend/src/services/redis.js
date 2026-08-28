@@ -136,6 +136,34 @@ function attachSentinelEventHandlers(client) {
 }
 
 /**
+ * Return the list of Redis passwords to attempt, current first.
+ *
+ * Dual-version support (WS3 / #1100): during a rotation the current password
+ * lives in `REDIS_PASSWORD` and the previous one lives in `REDIS_PASSWORD_PREVIOUS`
+ * (or `CLIENTSIDE_REDIS_PASSWORD_PREVIOUS` if the URL carries the credentials).
+ * A consumer that fails AUTH with the current key can retry with the previous
+ * key until the rotation grace period is over.
+ *
+ * @param {object} [opts]
+ * @param {{password?: string, previousPassword?: string}} [opts.urlCreds] - parsed
+ *   credentials from a REDIS_URL (user:pass@host). When provided they take
+ *   precedence over env vars.
+ * @returns {string[]} Non-empty password candidates, current first.
+ */
+function getAuthCandidates(opts = {}) {
+  const urlCreds = opts.urlCreds || {};
+  const candidates = [
+    urlCreds.password || process.env.REDIS_PASSWORD || "",
+    urlCreds.previousPassword ||
+      process.env.REDIS_PASSWORD_PREVIOUS ||
+      process.env.CLIENTSIDE_REDIS_PASSWORD_PREVIOUS ||
+      "",
+  ];
+  // De-duplicate, drop empties, preserve order (current first).
+  return [...new Set(candidates)].filter(Boolean);
+}
+
+/**
  * Initialise Redis connections from environment variables.
  *
  * Priority:
@@ -464,5 +492,6 @@ module.exports = {
   donorNonceIssued,
   donorNonceKey,
   donorConsumedKey,
+  getAuthCandidates,
   _reset,
 };
