@@ -84,6 +84,7 @@ export default function RootLayout() {
     // Initialise offline-first subsystems
     initConnectivity();
     void cache.init();
+    void import("../lib/ota").then(m => m.checkAndApplyUpdates());
   }, []);
 
   return (
@@ -164,6 +165,10 @@ export default function RootLayout() {
             <Stack.Screen
               name="onboarding/import"
               options={{ title: "Import Wallet", headerShown: false }}
+            />
+            <Stack.Screen
+              name="sep0007"
+              options={{ title: "Payment Request" }}
             />
             <Stack.Screen
               name="wallet/sep0007"

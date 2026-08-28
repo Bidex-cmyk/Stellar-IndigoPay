@@ -10,8 +10,11 @@
  * Used by `npm run a11y:scan` and by `.github/workflows/a11y-nightly.yml`.
  *
  * Behaviour:
- *  - Visits each URL with network-idle wait so dynamic content (e.g. SSE
- *    donation tickers, client-rendered stats) has settled before the scan.
+ *  - Visits each URL and waits for the `load` event plus a short settle delay
+ *    so client-rendered content has populated before the scan.  `networkidle`
+ *    is deliberately NOT used because SSE streams (Horizon EventSource)
+ *    keep a persistent connection open and would cause a 30 s timeout on
+ *    every page that streams live donation data.
  *  - Captures every violation but only treats `critical` and `serious`
  *    impacts as build-blocking. `moderate`/`minor` are still recorded so
  *    they can be triaged via the JSON artefact.
@@ -40,8 +43,12 @@ const URLS_TO_SCAN = [
   "/impact",
   "/apply",
   // Auth-required routes (dashboard, donate, admin, freelancer profile) are
-  // skipped in v1 because they require a wallet session. Add them after we
-  // stabilize a fixture wallet cookie.
+  // intentionally NOT in this static crawl — they require a connected wallet
+  // and a mocked backend/Horizon, which this crawler does not provision.  The
+  // donation flow (issue #1096 WS7 #7: wallet picker, amount form with
+  // validation errors, transaction preview, post-donation confirmation) is
+  // covered by the dedicated e2e/a11y.spec.ts, invoked directly from
+  // a11y-nightly.yml alongside this script.
 ];
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
@@ -76,7 +83,9 @@ async function run() {
       const url = `${BASE_URL}${path}`;
       console.log(`\nScanning: ${url}`);
       try {
-        await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+        await page.goto(url, { waitUntil: "load", timeout: 30000 });
+        // Let client-side rendering and async data settle.
+        await page.waitForTimeout(2000);
 
         const results = await new AxeBuilder({ page })
           .withTags(AXE_TAGS)
@@ -118,6 +127,7 @@ async function run() {
         };
       } catch (err) {
         console.error(`Scan failed for ${url}: ${err.message}`);
+        hasBlockingViolations = true;
         report.pages[path] = {
           url,
           scannedAt: new Date().toISOString(),
@@ -133,9 +143,25 @@ async function run() {
     console.log(`\nReport written to ${REPORT_PATH}`);
 
     if (hasBlockingViolations) {
-      console.error(
-        "\nScan failed: at least one page produced a critical or serious violation.",
-      );
+      const errored = Object.entries(report.pages)
+        .filter(([, p]) => p.error)
+        .map(([path]) => path);
+      const blocking = Object.entries(report.pages)
+        .filter(([, p]) => p.blockingViolations > 0);
+
+      if (errored.length > 0) {
+        console.error(
+          `\nScan failed: ${errored.length} page(s) could not be scanned: ${errored.join(", ")}`,
+        );
+      }
+      if (blocking.length > 0) {
+        console.error(
+          `\nScan failed: ${blocking.length} page(s) have critical/serious a11y violations.`,
+        );
+      }
+      if (errored.length === 0 && blocking.length === 0) {
+        console.error("\nScan failed for an unknown reason.");
+      }
       process.exitCode = 1;
     } else {
       console.log("\nScan passed: no critical/serious violations.");

@@ -4,6 +4,8 @@
  */
 "use strict";
 
+const { sanitizeSummary } = require("../lib/summarySanitize");
+
 const now = Date.now();
 
 const seedProjects = [
@@ -168,7 +170,7 @@ function mapProjectRow(row) {
     verified: row.verified,
     onChainVerified: row.on_chain_verified,
     tags: row.tags || [],
-    aiSummary: row.ai_summary || null,
+    aiSummary: row.ai_summary ? sanitizeSummary(row.ai_summary) : null,
     aiSummaryGeneratedAt: row.ai_summary_generated_at
       ? toIso(row.ai_summary_generated_at)
       : null,
@@ -198,6 +200,8 @@ function mapDonationRow(row) {
     message: row.message,
     transactionHash: row.transaction_hash,
     createdAt: toIso(row.created_at),
+    anonymous: Boolean(row.anonymous),
+    receiptGeneratedAt: toIso(row.receipt_generated_at),
   };
 
   if (row.amount_xlm !== null && row.amount_xlm !== undefined) {

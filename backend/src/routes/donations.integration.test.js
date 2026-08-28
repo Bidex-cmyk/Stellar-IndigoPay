@@ -1,7 +1,11 @@
 "use strict";
 
 jest.mock("../services/stellar", () => ({
-  server: { getTransaction: jest.fn().mockResolvedValue({ successful: true }) },
+  getTransaction: jest.fn().mockResolvedValue({ successful: true }),
+}));
+
+jest.mock("../services/oracleService", () => ({
+  getCurrentPrice: jest.fn(() => null),
 }));
 
 jest.mock("../services/profileQueue", () => ({

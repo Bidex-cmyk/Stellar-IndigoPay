@@ -71,6 +71,7 @@
 
 const pool = require("../db/pool");
 const logger = require("../logger");
+const { withAdvisoryLock, LOCK_KEYS } = require("./advisoryLock");
 
 // ── Prometheus metric (lazy-loaded to avoid circular deps) ──────────────
 
@@ -257,6 +258,15 @@ function verifyCO2Rate(category, co2PerXLM) {
 /**
  * Run verifyCO2Rate() for an approved verification request and stamp the
  * verdict onto the matching projects row(s).
+ *
+ * @param {object} args - Approved CO2 verification request details.
+ * @param {string} args.walletAddress - Project owner wallet address.
+ * @param {string} args.projectName - Project name to match in the database.
+ * @param {string} args.category - Project category used for benchmark lookup.
+ * @param {number|string} args.co2PerXLM - Claimed kg CO2 offset per XLM.
+ * @param {string|number} [args.requestId] - Optional verification request id for logs.
+ * @returns {Promise<{projectIds: Array<string|number>, verification: object}>}
+ *   Updated project ids and the computed verification result.
  */
 async function applyCO2VerificationToProject({
   walletAddress,
@@ -978,11 +988,27 @@ const DEFAULT_CRON = "0 3 * * 0"; // Every Sunday at 03:00 UTC
 let boss = null;
 
 /**
+ * One scheduled verification run, guarded by a per-worker Postgres advisory
+ * lock so only one replica verifies projects at a time (issue #677).
+ *
+ * pg-boss already deduplicates the cron schedule across replicas, but the lock
+ * makes the invariant explicit and protects against any duplicate job delivery.
+ */
+async function runScheduledVerification() {
+  return withAdvisoryLock(
+    LOCK_KEYS.co2Verification,
+    runVerificationForAllProjects,
+  );
+}
+
+/**
  * Start the CO₂ verification cron scheduler.
  *
  * Registers a pg-boss cron job that runs weekly. The schedule can be
  * overridden with the CO2_VERIFICATION_CRON env var (cron syntax).
  * Set CO2_VERIFICATION_CRON="disabled" to turn it off entirely.
+ *
+ * @returns {Promise<void>}
  */
 async function startCO2VerificationCron() {
   const cronOverride = process.env.CO2_VERIFICATION_CRON;
@@ -991,7 +1017,7 @@ async function startCO2VerificationCron() {
       { event: "co2_verification_cron_disabled" },
       "[co2Verifier] Cron disabled via CO2_VERIFICATION_CRON=disabled",
     );
-    return;
+    return false;
   }
 
   const cronSchedule = cronOverride || DEFAULT_CRON;
@@ -1011,6 +1037,7 @@ async function startCO2VerificationCron() {
     );
 
     await boss.start();
+    await boss.createQueue(QUEUE);
 
     // Register the cron schedule (idempotent — pg-boss deduplicates by name)
     await boss.schedule(QUEUE, cronSchedule, {}, { tz: "UTC" });
@@ -1021,7 +1048,7 @@ async function startCO2VerificationCron() {
         { event: "co2_verification_cron_triggered" },
         "[co2Verifier] Scheduled verification run starting",
       );
-      await runVerificationForAllProjects();
+      await runScheduledVerification();
     });
 
     logger.info(
@@ -1032,28 +1059,27 @@ async function startCO2VerificationCron() {
       `[co2Verifier] Cron scheduled: ${cronSchedule}`,
     );
   } catch (err) {
+    boss = null;
     logger.error(
       {
         event: "co2_verification_cron_startup_error",
         err: err.message,
       },
-      "Failed to start CO₂ verification cron; runs will be manual only",
+      "Failed to start CO2 verification cron; runs will be manual only",
     );
+    return false;
   }
 }
 
 /**
  * Gracefully stop the pg-boss instance.
+ *
+ * @returns {Promise<void>}
  */
 async function stopCO2VerificationCron() {
-  if (boss) {
-    try {
-      await boss.stop({ timeout: 5000 });
-    } catch {
-      // ignore
-    }
-    boss = null;
-  }
+  if (!boss) return;
+  await boss.stop({ timeout: 5000 });
+  boss = null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1084,4 +1110,5 @@ module.exports = {
   // Cron scheduling
   startCO2VerificationCron,
   stopCO2VerificationCron,
+  runScheduledVerification,
 };

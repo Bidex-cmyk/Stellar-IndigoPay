@@ -18,6 +18,7 @@ const { getStatus } = require("../../services/indexerService");
 const { getStatus: getReconcilerStatus } = require("../../services/indexerReconciler");
 const pool = require("../../db/pool");
 const logger = require("../../logger");
+const { sendAppError } = require("../../errors");
 
 /**
  * Trigger a manual backfill.
@@ -59,10 +60,7 @@ router.post("/backfill", adminRequired, async (req, res) => {
       { event: "admin_backfill_error", err: err.message },
       "Admin backfill failed",
     );
-    res.status(500).json({
-      success: false,
-      error: err.message || "Backfill failed",
-    });
+    return sendAppError(res, "INTERNAL_ERROR");
   }
 });
 
@@ -100,7 +98,70 @@ router.get("/status", adminRequired, async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return sendAppError(res, "INTERNAL_ERROR");
+  }
+});
+
+
+/**
+ * Rescan a specific ledger range.
+ */
+router.post("/rescan", adminRequired, async (req, res) => {
+  try {
+    const { fromLedger, toLedger } = req.body || {};
+    if (typeof fromLedger !== "number" || typeof toLedger !== "number") {
+      return sendAppError(res, "VALIDATION_ERROR", { detail: "fromLedger and toLedger required" });
+    }
+    
+    // Trigger in both services
+    const { rescanRange: indexerRescan } = require("../../services/indexerService");
+    const { rescanRange: sorobanRescan } = require("../../services/sorobanEventService");
+    
+    // Do not block the response
+    Promise.all([
+      indexerRescan({ fromLedger, toLedger }),
+      sorobanRescan({ fromLedger, toLedger })
+    ]).catch(err => logger.error({ err: err.message }, "Rescan failed"));
+    
+    res.status(202).json({ success: true, message: "Rescan started" });
+  } catch (err) {
+    logger.error({ event: "admin_rescan_error", err: err.message }, "Admin rescan failed");
+    return sendAppError(res, "INTERNAL_ERROR");
+  }
+});
+
+/**
+ * Get checkpoint info
+ */
+router.get("/checkpoint", adminRequired, async (req, res) => {
+  try {
+    const stateResult = await pool.query(
+      "SELECT last_processed_ledger, last_processed_at, cursor_hash FROM indexer_state WHERE key = 'primary'"
+    );
+    const primary = stateResult.rows[0] || {};
+    
+    const sorobanResult = await pool.query(
+      "SELECT value as last_processed_ledger, updated_at as last_processed_at, cursor_hash FROM indexer_state WHERE key = 'soroban_event_cursor'"
+    );
+    const soroban = sorobanResult.rows[0] || {};
+    
+    res.json({
+      success: true,
+      data: {
+        primary: {
+          ledger: primary.last_processed_ledger,
+          timestamp: primary.last_processed_at,
+          hash: primary.cursor_hash
+        },
+        soroban: {
+          ledger: soroban.last_processed_ledger,
+          timestamp: soroban.last_processed_at,
+          hash: soroban.cursor_hash
+        }
+      }
+    });
+  } catch (err) {
+    return sendAppError(res, "INTERNAL_ERROR");
   }
 });
 

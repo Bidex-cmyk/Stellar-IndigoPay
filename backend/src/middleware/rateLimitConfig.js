@@ -42,6 +42,9 @@ const RATE_LIMIT_TIERS = {
   "GET /api/stats":                        { points: 60,  duration: 60   },
   "GET /api/impact/*":                     { points: 60,  duration: 60   },
   "GET /api/map":                          { points: 60,  duration: 60   },
+  "POST /api/attestations":                { points: 10,  duration: 60   },
+  "GET /api/attestations":                 { points: 60,  duration: 60   },
+  "GET /api/oracle/price":                 { points: 60,  duration: 60   },
 
   // ── Analytics endpoint (token-bucket for burst tolerance) ──────────────
   "GET /api/analytics/*":                  {
@@ -53,6 +56,12 @@ const RATE_LIMIT_TIERS = {
   // ── Notifications (mobile push) ────────────────────────────────────────
   "POST /api/notifications":               { points: 30,  duration: 60   },
   "POST /api/subscriptions":               { points: 20,  duration: 60   },
+
+  // ── Public audit-chain verification (no auth, public verifiability) ──
+  // Both the unversioned /api/audit/* and versioned /api/v1/audit/* paths
+  // must be covered; the router is mounted under both prefixes.
+  "GET /api/audit/*":                      { points: 30,  duration: 60   },  // 30 req / min
+  "GET /api/v1/audit/*":                   { points: 30,  duration: 60   },  // 30 req / min
 
   // ── Default (catch-all fallback) ───────────────────────────────────────
   default:                                 { points: 150, duration: 900  },  // 150 req / 15 min

@@ -3,27 +3,32 @@
  *
  * Bootstrap order (matters):
  *   1. Env validation + dotenv
- *   2. Sentry init (before anything that could throw)
- *   3. Express app + http.Server
- *   4. Sentry request handler (first middleware)
- *   5. pino-http request logger (sets req.id / correlationId)
- *   6. X-Request-Id response header
- *   7. /metrics endpoint (unauth in dev, bearer-token in prod)
- *   8. /api/health (liveness) + /api/readyz (readiness) — no auth, no CSRF
- *   9. /api/csrf-token endpoint
- *  10. Helmet + CORS + JSON parser + cookie-parser
- *  11. CSRF (skipped for the notification routes that need cross-origin POSTs)
- *  12. Rate limiter
- *  13. Per-request metrics middleware (BEFORE route handlers so it captures the full request)
- *  14. /api/docs Swagger UI (dev only)
- *  15. /api/* and /api/v1/* route mounts
- *  16. 404 handler
- *  17. Sentry error handler
- *  18. Custom error handler
+ *   2. OTel tracing init (before anything that produces spans)
+ *   3. Sentry init (before anything that could throw)
+ *   4. Express app + http.Server
+ *   5. Sentry request handler (first middleware)
+ *   6. pino-http request logger (sets req.id / correlationId)
+ *   7. X-Request-Id response header
+ *   8. OTel trace ID ↔ X-Request-Id correlation middleware
+ *   9. /metrics endpoint (unauth in dev, bearer-token in prod)
+ *  10. /api/health (liveness) + /api/readyz (readiness) — no auth, no CSRF
+ *  11. /api/csrf-token endpoint
+ *  12. Helmet + CORS + JSON parser + cookie-parser
+ *  13. CSRF (skipped for the notification routes that need cross-origin POSTs)
+ *  14. Rate limiter
+ *  15. Per-request metrics middleware (BEFORE route handlers so it captures the full request)
+ *  16. /api/docs Swagger UI (dev only)
+ *  17. /api/* and /api/v1/* route mounts
+ *  18. 404 handler
+ *  19. Sentry error handler
+ *  20. Custom error handler
  */
 "use strict";
 
 require("dotenv").config();
+
+// ── OpenTelemetry tracing (must init before anything that produces spans) ──
+const { initTracing, traceIdMiddleware, stopTracing } = require("./services/tracing");
 
 // Validate the environment up-front so the process exits cleanly on misconfig
 // rather than failing on the first request that touches a missing var.
@@ -37,6 +42,7 @@ const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const csurf = require("csurf");
 const { redisRateLimiter } = require("./middleware/rateLimiter");
+const { socketAuth } = require("./middleware/socketAuth");
 const http = require("http");
 const { Server } = require("socket.io");
 
@@ -57,21 +63,22 @@ const {
 const { runMigrations } = require("./db/migrate");
 const { AppError } = require("./errors");
 const { startTurretsServer } = require("./services/turrets");
-const { start: startSummaryQueue } = require("./services/summaryQueue");
-const { start: startProfileQueue } = require("./services/profileQueue");
-const { start: startWebhookQueue,
-  stop: stopWebhookQueue,
-} = require("./services/webhookQueue");
-const { start: startPushQueue } = require("./services/pushQueue");
-const { start: startImpactQueue } = require("./services/impactQueue");
-const { start: startIdempotencyCleanup } = require("./services/idempotencyCleanup");
-const { start: startBlacklistCleanup } = require("./services/blacklistCleanup");
+const summaryQueue = require("./services/summaryQueue");
+const profileQueue = require("./services/profileQueue");
+const matchQueue = require("./services/matchQueue");
+const webhookQueue = require("./services/webhookQueue");
+const pushQueue = require("./services/pushQueue");
+const impactQueue = require("./services/impactQueue");
+const idempotencyCleanup = require("./services/idempotencyCleanup");
+const recurringDonationWorker = require("./services/recurringDonationWorker");
+const blacklistCleanup = require("./services/blacklistCleanup");
 const { startCO2VerificationCron, stopCO2VerificationCron } = require("./services/co2Verifier");
-const { startIndexer } = require("./services/indexerService");
+const indexerService = require("./services/indexerService");
 const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
 const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
-const { stop: stopSorobanEvents } = require("./services/sorobanEventService");
+const sorobanEventService = require("./services/sorobanEventService");
 const lifecycle = require("./services/lifecycle");
+const { startManagedWorker } = require("./services/workerLifecycle");
 const guardianService = require("./services/guardian");
 const recurringKeeper = require("./services/recurringKeeper");
 
@@ -108,6 +115,9 @@ app.use(Sentry.Handlers.tracingHandler());
 // metrics so they can both read req.id.
 app.use(requestLogger);
 app.use(requestId);
+// OTel trace ID ↔ X-Request-Id correlation: sets req.id from the active
+// span's trace ID so pino logs and distributed traces share one identifier.
+app.use(traceIdMiddleware);
 app.use(queryRouter);
 
 // /metrics: bearer-token auth in prod, unauth in dev. Mounted before
@@ -150,6 +160,96 @@ const csrfProtection = csurf({
   },
   ignoreMethods: ["GET", "HEAD", "OPTIONS"],
 });
+
+// ── CSRF token rotation + method/path binding ────────────────────────────────
+// Each token is bound to the HTTP method + path it was issued for, and is
+// rotated after every successful validated request. Used tokens are stored in
+// Redis with a short TTL (5 minutes) so a replayed token is rejected even if
+// it is presented again before the session cookie expires.
+const { getClient: getRedisClient } = require("./services/redis");
+
+const CSRF_USED_TTL_SECONDS = 300; // 5 minutes
+const CSRF_USED_PREFIX = "csrf:used:";
+
+function csrfBindingKey(req) {
+  return `${req.method}:${req.path}`;
+}
+
+function csrfUsedKey(token) {
+  return `${CSRF_USED_PREFIX}${token}`;
+}
+
+async function isTokenUsed(token) {
+  try {
+    const client = getRedisClient(csrfUsedKey(token));
+    const exists = await client.exists(csrfUsedKey(token));
+    return exists === 1;
+  } catch {
+    return false;
+  }
+}
+
+async function markTokenUsed(token) {
+  try {
+    const client = getRedisClient(csrfUsedKey(token));
+    await client.set(csrfUsedKey(token), "1", "EX", CSRF_USED_TTL_SECONDS);
+  } catch {
+    // Best-effort; a Redis failure must not block legitimate requests.
+  }
+}
+
+// Wrap csurf to add rotation, method+path binding, and replay protection.
+function csrfWithRotation(req, res, next) {
+  // Skip validation for ignored methods (GET/HEAD/OPTIONS) — csurf already
+  // short-circuits those while still attaching req.csrfToken().
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    return csrfProtection(req, res, next);
+  }
+
+  const token = req.headers["x-csrf-token"];
+  const binding = csrfBindingKey(req);
+
+  // Reject if the token was already used (replay of a rotated token).
+  if (token) {
+    isTokenUsed(token).then((used) => {
+      if (used) {
+        return res.status(403).json({
+          error: {
+            code: "FORBIDDEN",
+            message: "CSRF token has already been used; request a new token",
+          },
+        });
+      }
+      csrfProtection(req, res, (err) => {
+        if (err) return next(err);
+        // On success, mark the token used and rotate to a fresh one bound to
+        // this method+path.
+        markTokenUsed(token).then(() => {
+          req.csrfToken = () => {
+            const fresh = csurfTokenFor(req);
+            return fresh;
+          };
+          next();
+        });
+      });
+    });
+    return;
+  }
+
+  return csrfProtection(req, res, next);
+}
+
+// Generate a fresh token bound to the current method+path. csurf's token is
+// session-scoped, so we derive a per-binding token by hashing the session
+// secret with the binding key.
+const crypto = require("crypto");
+function csurfTokenFor(req) {
+  const base = req.csrfToken();
+  return crypto
+    .createHash("sha256")
+    .update(`${base}:${csrfBindingKey(req)}`)
+    .digest("hex");
+}
 // Endpoints whose only credential is the refresh cookie. SameSite=Strict keeps
 // that cookie off every cross-site request, so a CSRF token would cost the
 // admin client a round-trip without closing an attack path. Listed per mount
@@ -175,7 +275,7 @@ app.use((req, res, next) => {
   if (COOKIE_AUTH_PATHS.includes(req.path)) {
     return next();
   }
-  return csrfProtection(req, res, next);
+  return csrfWithRotation(req, res, next);
 });
 
 // CSRF token endpoint — MUST be registered AFTER the csurf middleware so
@@ -262,10 +362,23 @@ try {
   );
 }
 
+// Admin management of AI summary prompt template versions (issue #929).
+try {
+  const adminAiPromptVersionsRouter = require("./routes/admin/aiPromptVersions");
+  app.use("/api/admin/ai-prompt-versions", adminAiPromptVersionsRouter);
+  app.use("/api/v1/admin/ai-prompt-versions", adminAiPromptVersionsRouter);
+} catch (err) {
+  logger.error(
+    { event: "route_load_failed", route: "admin/aiPromptVersions", err: err.message },
+    "Failed to load admin AI prompt versions route module",
+  );
+}
+
 // ── Application routes ──────────────────────────────────────────────────────
 // Each route file is mounted under both /api and /api/v1 so that the v1
 // versioned path and the legacy unversioned path stay in lockstep.
 const routeMounts = [
+  "auth",
   "donations",
   "projects",
   "profiles",
@@ -283,6 +396,8 @@ const routeMounts = [
   "oracle",
   "map",
   "matches",
+  "dsr",
+  "audit",
 ];
 
 for (const name of routeMounts) {
@@ -444,254 +559,239 @@ const io = new Server(server, {
     credentials: false,
   },
 });
+// Realtime events carry donor-identifying data: refuse every connection that
+// cannot prove itself with the same access token the REST layer requires.
+io.use(socketAuth);
 app.set("io", io);
 
 // ── Background workers (registered with the lifecycle so they stop on shutdown)
+async function startOptionalWorker(config) {
+  try {
+    await startManagedWorker(config);
+  } catch {
+    // Optional workers report their own structured startup error.
+  }
+}
+
 async function startServer() {
   await runMigrations();
-  await startSummaryQueue(io);
-  await startProfileQueue(io);
-  await startWebhookQueue();
-  await startPushQueue();
-  await startIdempotencyCleanup();
-  await startBlacklistCleanup();
-  await startCO2VerificationCron();
+  await startManagedWorker({
+    name: "summary_queue",
+    label: "Summary queue",
+    start: () => summaryQueue.start(io),
+    stop: summaryQueue.stop,
+  });
+  await startManagedWorker({
+    name: "profile_queue",
+    label: "Profile queue",
+    start: () => profileQueue.start(io),
+    stop: profileQueue.stop,
+  });
+  await startManagedWorker({
+    name: "match_queue",
+    label: "Match queue",
+    start: matchQueue.start,
+    stop: matchQueue.stop,
+  });
+  await startManagedWorker({
+    name: "webhook_queue",
+    label: "Webhook queue",
+    start: webhookQueue.start,
+    stop: webhookQueue.stop,
+  });
+  await startManagedWorker({
+    name: "push_queue",
+    label: "Push queue",
+    start: pushQueue.start,
+    stop: pushQueue.stop,
+  });
+  await startManagedWorker({
+    name: "impact_queue",
+    label: "Impact queue",
+    start: () => impactQueue.start(io),
+    stop: impactQueue.stop,
+  });
+  await startManagedWorker({
+    name: "idempotency_cleanup",
+    label: "Idempotency cleanup",
+    start: idempotencyCleanup.start,
+    stop: idempotencyCleanup.stop,
+  });
+  await startManagedWorker({
+    name: "recurring_donation_worker",
+    label: "Recurring donation worker",
+    start: () => recurringDonationWorker.start(io),
+    stop: recurringDonationWorker.stop,
+  });
+  await startManagedWorker({
+    name: "blacklist_cleanup",
+    label: "Blacklist cleanup",
+    start: blacklistCleanup.start,
+    stop: blacklistCleanup.stop,
+  });
+  await startOptionalWorker({
+    name: "co2_verification_cron",
+    label: "CO2 verification cron",
+    start: startCO2VerificationCron,
+    stop: stopCO2VerificationCron,
+  });
 
   // Match expiry: deactivates pools that have expired (time-based) or been
   // exhausted (cap reached). Runs every 15 minutes.
-  try {
-    const matchExpiry = require("./services/matchExpiry");
-    matchExpiry.start();
-    lifecycle.onShutdown(async () => {
-      try { matchExpiry.stop(); } catch { /* ignore */ }
-    });
-    logger.info({ event: "match_expiry_scheduled" }, "Match expiry service scheduled");
-  } catch (err) {
-    logger.error(
-      { event: "match_expiry_startup_error", err: err.message },
-      "Match expiry service could not be started",
-    );
-  }
+  const matchExpiry = require("./services/matchExpiry");
+  await startOptionalWorker({
+    name: "match_expiry",
+    label: "Match expiry service",
+    start: matchExpiry.start,
+    stop: matchExpiry.stop,
+  });
 
   // Retention worker: a dedicated pg-boss instance schedules the config-driven
   // data-retention policies. Kept separate from the request queues so a
   // retention failure can never interfere with donation/delivery processing.
-  try {
-    const PgBoss = require("pg-boss");
-    const { registerRetentionWorker } = require("./services/retentionWorker");
-    const retentionBoss = new PgBoss(
-      process.env.DATABASE_URL ||
-        "postgres://postgres:postgres@localhost:5432/indigopay",
-    );
-    retentionBoss.on("error", (err) =>
-      logger.error(
-        { event: "retention_boss_error", err: err.message },
-        "retention pg-boss error",
-      ),
-    );
-    await retentionBoss.start();
-    await registerRetentionWorker(retentionBoss);
-    lifecycle.onShutdown(async () => {
-      try {
-        await retentionBoss.stop();
-      } catch {
-        // ignore
-      }
-    });
-    logger.info(
-      { event: "retention_worker_started" },
-      "Retention worker scheduled",
-    );
-  } catch (err) {
-    logger.error(
-      { event: "retention_startup_error", err: err.message },
-      "Retention worker could not be started",
-    );
-  }
+  let retentionBoss;
+  await startOptionalWorker({
+    name: "retention_worker",
+    label: "Retention worker",
+    start: async () => {
+      const PgBoss = require("pg-boss");
+      const { registerRetentionWorker } = require("./services/retentionWorker");
+      retentionBoss = new PgBoss(
+        process.env.DATABASE_URL ||
+          "postgres://postgres:postgres@localhost:5432/indigopay",
+      );
+      retentionBoss.on("error", (err) =>
+        logger.error(
+          { event: "retention_boss_error", err: err.message },
+          "retention pg-boss error",
+        ),
+      );
+      await retentionBoss.start();
+      await registerRetentionWorker(retentionBoss);
+    },
+    stop: () => retentionBoss.stop(),
+  });
 
   // digestQueue is optional in some deployments
-  try {
-    const { start: startDigestQueue } = require("./services/digestQueue");
-    await startDigestQueue();
-  } catch (err) {
-    logger.warn(
-      { event: "digest_queue_disabled", err: err.message },
-      "digestQueue could not be started",
-    );
-  }
-
-  startIndexer(io).catch((err) =>
-    logger.error(
-      { event: "indexer_startup_error", err: err.message },
-      "Indexer failed to start",
-    ),
-  );
-
-  try {
-    const oracleService = require("./services/oracleService");
-    oracleService.start();
-    logger.info({ event: "oracle_scheduler_started" }, "Oracle service scheduler started");
-  } catch (err) {
-    logger.error(
-      { event: "oracle_startup_error", err: err.message },
-      "Oracle service failed to start",
-    );
-  }
-
-  try {
-    guardianService.start();
-    logger.info({ event: "guardian_scheduler_started" }, "Guardian service scheduler started");
-  } catch (err) {
-    logger.error(
-      { event: "guardian_startup_error", err: err.message },
-      "Guardian service failed to start",
-    );
-  }
-
-  try {
-    recurringKeeper.start();
-    logger.info({ event: "recurring_keeper_started" }, "Recurring keeper service started");
-  } catch (err) {
-    logger.error(
-      { event: "recurring_keeper_startup_error", err: err.message },
-      "Recurring keeper service failed to start",
-    );
-  }
-
-  // The Stellar Horizon stream in the indexer holds the event loop open.
-  // Register a shutdown hook so the stream is closed cleanly on SIGTERM.
-  lifecycle.onShutdown(async () => {
-    try {
-      const indexer = require("./services/indexerService");
-      if (typeof indexer.stop === "function") await indexer.stop();
-    } catch {
-      // Indexer may already be stopped; swallow.
-    }
-    try {
-      const oracleService = require("./services/oracleService");
-      if (typeof oracleService.stop === "function") oracleService.stop();
-    } catch {
-      // ignore
-    }
-    try {
-      if (typeof guardianService.stop === "function") guardianService.stop();
-    } catch {
-      // ignore
-    }
-    try {
-      if (typeof recurringKeeper.stop === "function") await recurringKeeper.stop();
-    } catch {
-      // ignore
-    }
+  const digestQueue = require("./services/digestQueue");
+  await startOptionalWorker({
+    name: "digest_queue",
+    label: "Digest queue",
+    start: digestQueue.start,
+    stop: digestQueue.stop,
   });
 
-  lifecycle.onShutdown(async () => {
-    await stopReconciler();
+  await startOptionalWorker({
+    name: "indexer",
+    label: "Indexer",
+    start: () => indexerService.startIndexer(io),
+    stop: indexerService.stop,
+  });
+  await startOptionalWorker({
+    name: "indexer_reconciler",
+    label: "Indexer reconciler",
+    start: startReconciler,
+    stop: stopReconciler,
+  });
+  await startOptionalWorker({
+    name: "indexer_dlq_worker",
+    label: "Indexer DLQ worker",
+    start: startDLQWorker,
+    stop: stopDLQWorker,
   });
 
-  lifecycle.onShutdown(async () => {
-    await stopDLQWorker();
+  const oracleService = require("./services/oracleService");
+  await startOptionalWorker({
+    name: "oracle_service",
+    label: "Oracle service",
+    start: oracleService.start,
+    stop: oracleService.stop,
+  });
+  await startOptionalWorker({
+    name: "guardian_service",
+    label: "Guardian service",
+    start: guardianService.start,
+    stop: guardianService.stop,
+  });
+  await startOptionalWorker({
+    name: "recurring_keeper",
+    label: "Recurring keeper",
+    start: recurringKeeper.start,
+    stop: recurringKeeper.stop,
   });
 
   // Soroban event service: start the polling loop.
-  try {
-    const sorobanEvents = require("./services/sorobanEventService");
-    sorobanEvents.start(io);
-  } catch (err) {
-    logger.error(
-      { event: "soroban_events_startup_error", err: err.message },
-      "Soroban event service failed to start",
-    );
-  }
-
-  // Soroban event service: stop the polling loop and persist the cursor on shutdown.
-  lifecycle.onShutdown(async () => {
-    try {
-      const sorobanEvents = require("./services/sorobanEventService");
-      if (typeof sorobanEvents.stop === "function") await sorobanEvents.stop();
-    } catch {
-      // Service may already be stopped or not loaded; swallow.
-    }
+  await startOptionalWorker({
+    name: "soroban_events",
+    label: "Soroban event service",
+    start: () => sorobanEventService.start(io),
+    stop: sorobanEventService.stop,
   });
 
-  // pg-boss queues: each one exposes a `stop()` method that drains in-flight
-  // jobs. We register one hook per queue so a failure in one doesn't stop
-  // the others from draining.
-  for (const queue of [
-    "./services/summaryQueue",
-    "./services/profileQueue",
-    "./services/digestQueue",
-    "./services/webhookQueue",
-    "./services/pushQueue",
-    "./services/idempotencyCleanup",
-    "./services/blacklistCleanup",
-    "./services/co2Verifier",
-  ]) {
-    lifecycle.onShutdown(async () => {
-      try {
-        const mod = require(queue);
-        if (mod && typeof mod.stop === "function") await mod.stop();
-      } catch {
-        // Module may not be loaded; swallow.
-      }
-    });
-  }
-
-  // CO2 verification cron: stop the pg-boss instance gracefully.
-  lifecycle.onShutdown(async () => {
-    try {
-      if (typeof stopCO2VerificationCron === "function") await stopCO2VerificationCron();
-    } catch {
-      // Module may not be loaded; swallow.
-    }
-  });
-
-  // Socket.IO: stop accepting new connections, wait for in-flight, then close.
-  lifecycle.onShutdown(async () => {
-    await new Promise((resolve) => io.close(resolve));
-  });
-
-  // Database pool: end all idle clients.
-  lifecycle.onShutdown(async () => {
-    try {
-      const pool = require("./db/pool");
-      await pool.end();
-    } catch (err) {
-      logger.warn(
-        { event: "pool_close_error", err: err.message },
-        "pool.end() failed during shutdown",
-      );
-    }
-  });
-
-  // Redis: close the connection (non-fatal if it was never opened).
-  lifecycle.onShutdown(async () => {
-    try {
-      const redis = require("./services/redis");
-      const c = redis.getClient();
-      await c.quit();
-    } catch {
-      // Redis is optional; ignore.
-    }
-  });
-
-  // Sentry: flush any buffered events before the process exits.
-  lifecycle.onShutdown(async () => {
-    try {
-      await Sentry.close(2000);
-    } catch {
-      // ignore
-    }
+  await startManagedWorker({
+    name: "socket_io",
+    label: "Socket.IO",
+    start: () => {},
+    stop: () => new Promise((resolve) => io.close(resolve)),
   });
 
   const pool = require("./db/pool");
-  const metricsTimer = setInterval(
-    () => refreshDbPoolMetrics(pool._writerPool),
-    15000,
-  );
-  lifecycle.onShutdown(() => {
-    clearInterval(metricsTimer);
+  await startManagedWorker({
+    name: "database_pool",
+    label: "Database pool",
+    start: () => {},
+    stop: pool.end,
   });
+
+  const redis = require("./services/redis");
+  let redisClient;
+  await startManagedWorker({
+    name: "redis",
+    label: "Redis",
+    start: () => {
+      redisClient = redis.getClient();
+    },
+    stop: () => redisClient.quit(),
+  });
+
+  await startManagedWorker({
+    name: "sentry",
+    label: "Sentry",
+    start: () => {},
+    stop: () => Sentry.close(2000),
+  });
+
+  await startManagedWorker({
+    name: "otel_tracing",
+    label: "OpenTelemetry tracing",
+    start: () => {},
+    stop: stopTracing,
+  });
+
+  let metricsTimer;
+  await startManagedWorker({
+    name: "db_pool_metrics",
+    label: "Database pool metrics",
+    start: () => {
+      metricsTimer = setInterval(
+        () => refreshDbPoolMetrics(pool._writerPool),
+        15000,
+      );
+      if (typeof metricsTimer.unref === "function") metricsTimer.unref();
+    },
+    stop: () => clearInterval(metricsTimer),
+  });
+
+  const dsrQueue = require("./services/dsr/dsrQueue");
+  await startManagedWorker({
+    name: "dsr_queue",
+    label: "DSR queue workers",
+    start: () => dsrQueue.start(),
+    stop: () => dsrQueue.stop()
+  });
+
+  // ── OpenTelemetry tracing (start AFTER server is ready) ───────────────
+  await initTracing();
 
   server.listen(PORT, () => {
     logger.info(
@@ -702,7 +802,24 @@ async function startServer() {
 
   if (process.env.ENABLE_TURRETS === "true") {
     const turretsPort = process.env.TURRETS_PORT || 3001;
-    startTurretsServer(turretsPort);
+    let turretsServer;
+    await startOptionalWorker({
+      name: "turrets_server",
+      label: "Turrets server",
+      start: () =>
+        new Promise((resolve, reject) => {
+          turretsServer = startTurretsServer(turretsPort);
+          turretsServer.once("listening", resolve);
+          turretsServer.once("error", reject);
+        }),
+      stop: () =>
+        new Promise((resolve, reject) => {
+          turretsServer.close((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        }),
+    });
   }
 }
 

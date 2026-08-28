@@ -3,6 +3,7 @@ import withBundleAnalyzer from "@next/bundle-analyzer";
 
 const withBundleAnalyzerConfig = withBundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
+  openAnalyzer: false,
 });
 
 /** @type {import('next').NextConfig} */
@@ -10,16 +11,17 @@ const withBundleAnalyzerConfig = withBundleAnalyzer({
 // ---------------------------------------------------------------------------
 // Content Security Policy
 // ---------------------------------------------------------------------------
-// The LIVE CSP (with a per-request nonce) is generated dynamically in
-// middleware.ts.  The constants below are the canonical allowlist reference
-// and provide a static fallback for any edge-case that bypasses middleware
-// (e.g. raw static-file serving without Next.js runtime).
+// The LIVE CSP is generated dynamically in middleware.ts.  The constants below
+// are the canonical allowlist reference and provide a static fallback for any
+// edge-case that bypasses middleware (e.g. raw static-file serving without
+// Next.js runtime). Both layers allow the single inline script (the FOUC
+// theme script) via its SHA-256 hash rather than a per-request nonce, so the
+// policy is identical for SSG / ISR / edge-cached and server-rendered HTML.
 //
 // connect-src covers:
 //   • Stellar Horizon (testnet + mainnet) — REST API + EventSource streaming
 //   • Soroban RPC (testnet + mainnet)     — Soroban simulate/send calls
 //   • Stellar Friendbot                    — testnet account funding
-//   • CoinGecko                            — XLM/USD spot price
 //
 // In production set NEXT_PUBLIC_API_URL to your deployed backend; the 'self'
 // origin already covers same-domain backends.  In local dev middleware.ts
@@ -41,35 +43,35 @@ const LEAFLET_TILE_SOURCES = [
   "https://c.tile.openstreetmap.org",
 ].join(" ");
 
-// unpkg serves the Leaflet CSS (dynamically injected by ProjectMap.tsx)
-const UNPKG = "https://unpkg.com";
-
 function buildStaticCsp(allowFraming = false) {
   const frameAncestors = allowFraming
     ? "frame-ancestors *"
     : "frame-ancestors 'none'";
   return [
     "default-src 'self'",
-    // Static fallback uses unsafe-inline; middleware.ts replaces this with a
-    // nonce + strict-dynamic pair which achieves an A grade on csp-evaluator.
-    "script-src 'self' 'unsafe-inline'",
-    // unpkg serves the Leaflet CSS stylesheet loaded dynamically in ProjectMap.
-    `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com ${UNPKG}`,
+    // static fallback uses the FOUC theme-script SHA-256, which is the
+    // only inline script that can appear on SSG pages (no per-request nonce).
+    // Keep in sync with FOUC_THEME_SCRIPT_HASH in lib/csp.ts.
+    `script-src 'self' 'sha256-ErtPdouQiLu8LLZozyBPb9ROeob7973X5nwZqhHweqY=' https://*.stellar.org`,
+    `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
     "font-src 'self' https://fonts.gstatic.com",
     // OSM tiles loaded as images; Leaflet marker icons use data: URIs.
     `img-src 'self' data: blob: ${LEAFLET_TILE_SOURCES}`,
-    `connect-src 'self' ${STELLAR_CONNECT} https://api.coingecko.com ${process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL : ''}`,
+    `connect-src 'self' ${STELLAR_CONNECT} ${process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL : ''}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
     frameAncestors,
     "upgrade-insecure-requests",
+    "report-uri /api/csp-report",
   ].join("; ");
 }
 
 const nextConfig = {
   reactStrictMode: true,
+  staticPageGenerationTimeout: 300,
   experimental: {
+
     optimizePackageImports: ["@sentry/nextjs"],
   },
   images: {
@@ -93,8 +95,8 @@ const nextConfig = {
     return [
       {
         // Applied to every route.  middleware.ts overrides Content-Security-Policy
-        // with the nonce-stamped version for all HTML responses.
-        source: "/(.*)",
+        // with the hash-stamped version for all HTML responses.
+        source: "/((?!api/csp-report).*)",
         headers: [
           { key: "Content-Security-Policy", value: buildStaticCsp(false) },
           // Security headers (Issue #472)
