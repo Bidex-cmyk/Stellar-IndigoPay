@@ -97,3 +97,52 @@ The unifying property: **the production platform can survive any single-componen
 **Modified (26):** `.github/workflows/{database-backup,image-scan,restore-drill,sbom}.yml`, `.trivyignore`, `backend/src/middleware/auth.js`, `backend/src/routes/admin.js`, `backend/src/services/{redis,stellar}.js`, `docs/api/openapi.yaml`, `docs/architecture.md`, `gitops/argo-rollouts-canary.yaml`, `helm/indigopay/{values.yaml,templates/postgres-failover-rbac.yaml,templates/postgres.yaml}`, `k8s/{external-secret,secret,postgres,postgres-failover-job,postgres-failover-rbac,postgres-failover-script,kustomization}.yaml`, `monitoring/{alert-rules,recording-rules}.yml`, `scripts/{backup-db,setup-replication}.sh`.
 
 **Added (~16):** `scripts/{postgres-healthcheck-daemon,sbom-diff,synthetic-monitor,trivyignore-gate,validate-networkpolicies}.js`, `scripts/verify-restore-checksum.sh`, `scripts/workflow/{rotate,update,restore}_secrets.py`, `backend/src/services/signingSecretProvider.js` (+ test), `backend/src/routes/admin/secrets.js`, `docs/runbooks/{postgres-failover,canary-analysis}.md`, `k8s/{postgres-primary-lock,synthetic-monitor}.yaml`, `helm/indigopay/templates/postgres-primary-lock.yaml`, `gitops/analysis-template.yaml`, `.github/workflows/{networkpolicy-lint,sbom-weekly-diff,synthetic-monitor}.yml`, `monitoring/grafana/dashboards/{canary-analysis,synthetic-monitor}.json`.
+---
+
+## 🔧 Follow-up: CI fixes after main merge (commit `20fa4dd`)
+
+### 1. Merge reconciliation (fixes `CI / Backend (Node.js)`)
+
+Merging `main` into this branch replaced several WS3/WS7 backend files with
+main's newer versions, breaking consumers of the signing-secret rotation
+provider (`TypeError: keyIdFor is not a function`, `getAuthCandidates is not
+defined`). The two implementations are now merged instead of overwritten:
+
+- **`backend/src/services/signingSecretProvider.js`** — exports both main's
+  `getSigningSecret`/`SIGNER_CONFIG` (used by `recurringKeeper`/`guardian`)
+  *and* the WS3 multi-version rotation API (`currentKey`,
+  `keysForAcceptance`, `describe`, `getRenderedStatus`, `registeredSecretNames`,
+  `keyIdFor`) used by `auth.js`/`secrets.js`.
+- **`backend/src/services/redis.js`** — keeps main's Sentinel/failover mode and
+  restores the dual-version AUTH fallback helper `getAuthCandidates`.
+- **`backend/src/services/stellar.js`** — keeps main's tracing /
+  `submitWithFeeBump` / `getTransaction` and restores WS7
+  `getSyntheticSenderInfo`.
+- **`signingSecretProvider.test.js`** — merged test suites for both APIs
+  (13 tests).
+
+Verified locally: `npm run lint` (0 errors), full containerized suite
+**137 suites / 1429 tests pass**.
+
+### 2. Image Scan severity-gate remediation (fixes both `Image Scan / Fail on CRITICAL/HIGH CVEs`)
+
+The gate (WS5) blocked on pre-existing CRITICAL/HIGH CVEs. Fixed the fixable
+app-layer CVEs and documented the remainder as time-boxed exceptions:
+
+- **Backend lockfile** — upgraded `undici` → 7.29/8.10, `js-yaml` → 4.3.2,
+  `fast-uri` → 3.1.6, `brace-expansion` → 1.1.18/2.1.4/5.0.9, `ip-address` → 10.5.0.
+- **Frontend lockfile** — `next` 14.2.3 → **14.2.35** (closes the CRITICAL
+  **CVE-2025-29927** middleware bypass + 4 HIGH advisories), `nanoid` → 3.3.18,
+  `postcss` → 8.5.26, `rollup` → 2.80.0/4.63.1, `sharp` → 0.35.0 (via npm
+  `overrides` for the exact-pinned transitive copies).
+- **`.trivyignore`** — documented the 21 remaining CVEs as **reviewed,
+  time-boxed exceptions** (expiry **2026-12-31**, reviewer `@LaPoshBaby`):
+  the 11 base-image CVEs bundled in `node:22-alpine` (npm CLI + openssl, not
+  present in any app lockfile) and the 10 frontend-only CVEs that only next
+  **15.5.16+ / 16.x** fixes (React 19 migration tracked separately) plus the
+  `postcss` 8.4.31 copy exact-pinned inside next 14.2.35.
+
+Verified locally: both severity-gate runs (`trivy --exit-code 1` with the
+effective ignore list) **exit 0** with no un-excepted findings; frontend
+type-check, lint, jest **67 suites / 618 tests**, CSP + locale parity, and
+the production `next build` all pass on the upgraded dependency tree.
