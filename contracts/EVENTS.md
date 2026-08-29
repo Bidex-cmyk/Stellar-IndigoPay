@@ -2,6 +2,28 @@
 
 This document lists all events emitted by the Stellar IndigoPay Soroban smart contracts.
 
+## Donation messages & `msg_hash` semantics (issue #1104)
+
+Every donate entrypoint (`donate`, `donate_token`, `donate_usdc`, `donate_asset`,
+`donate_anonymous`, `donate_vested`, and the stealth paths) accepts a **fixed-size**
+`msg_hash: u32` (stealth paths use `BytesN<32>`) — the raw donation message is
+**never** accepted on-chain as a `String`. On-chain processing cost is therefore
+constant in the original message length; no arbitrary-length input is hashed
+inside the contract.
+
+- **Message cap.** Clients MUST enforce `MAX_DONATION_MSG_LEN` (**140 bytes**) on the
+  message *before* hashing it into `msg_hash`. The constant is defined on-chain
+  (`contracts/indigopay-contract/src/lib.rs`) as the documented policy; the on-chain
+  input surface is already bounded by type.
+- **Normalization.** Clients MUST trim whitespace and reject control characters
+  before hashing, so identical visible messages produce identical `msg_hash` values.
+- **Collision caveat.** `msg_hash` is a 32-bit digest. At ~10,000 donations the
+  birthday bound is ~2^16, so two different messages will collide with
+  non-negligible probability. `msg_hash` MUST NOT be used as a unique message
+  identifier, a dedup key, or a message-identity assertion — treat the raw message
+  (stored/transported off-chain) as the source of truth. `msg_hash` is an
+  attribution hint only.
+
 ## Event Schema Format
 
 | Event Name | Topics | Data | When Emitted |

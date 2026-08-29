@@ -2,7 +2,6 @@
 // WS2: forbid `.unwrap()` / `.expect()` in production code.
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
-#![allow(deprecated)]
 
 //! Escrow contract with milestone-based fund release.
 //! Client locks funds with `create_job`, then releases them per milestone.
@@ -1924,6 +1923,11 @@ mod tests {
     }
 
     #[test]
+    // Legacy `dispute_job`/`resolve_dispute` are retained for backward
+    // compatibility and are authorized with the same M-of-N `require_admin`
+    // gate as `dispute_milestone`/`resolve_milestone_dispute` (issue #1104,
+    // Part B) — the allow is scoped to these compatibility tests only.
+    #[allow(deprecated)]
     fn test_dispute_freezes_release() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1967,6 +1971,8 @@ mod tests {
     }
 
     #[test]
+    // Legacy-path compatibility test; see `test_dispute_freezes_release`.
+    #[allow(deprecated)]
     fn test_resolve_dispute_deprecated() {
         let env = Env::default();
         env.mock_all_auths();
@@ -3059,6 +3065,36 @@ mod tests {
         }
     }
 
+    /// Create a funded single-milestone job and return its key components.
+    /// Shared by the issue #1104 dispute-authorization tests.
+    fn create_job_fixture(
+        env: &Env,
+        client: &EscrowContractClient,
+    ) -> (Address, Address, Address, String) {
+        let client_addr = Address::generate(env);
+        let freelancer = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(env, &token).mint(&client_addr, &1000i128);
+        let job_id = String::from_str(env, "job-authz-audit");
+
+        let mut milestones = Vec::new(env);
+        milestones.push_back(make_milestone(env, "M1", 100));
+
+        client.create_job(
+            &client_addr,
+            &freelancer,
+            &job_id,
+            &token,
+            &1000i128,
+            &milestones,
+            &RELEASE_AFTER_LEDGERS,
+        );
+        (client_addr, freelancer, token, job_id)
+    }
+
     #[test]
     fn test_amend_unreleased_job() {
         let env = Env::default();
@@ -3471,6 +3507,134 @@ mod tests {
         mixed_signers.push_back(admins[0].clone());
         mixed_signers.push_back(stranger);
         client.dispute_milestone(&mixed_signers, &job_id, &0u32);
+    }
+
+    // ─── Issue #1104, Part B: legacy dispute-path authorization audit ────────
+    // `dispute_job` and `resolve_dispute` are deprecated but retained for
+    // backward compatibility; the audit (issue #1104) requires them to be
+    // gated with the SAME M-of-N `require_admin` checks as
+    // `dispute_milestone`/`resolve_milestone_dispute`, with tests for wrong
+    // callers, insufficient admin signatures, and disputed-state transitions.
+
+    /// A non-admin signer cannot dispute a job through the legacy entrypoint.
+    #[test]
+    #[should_panic]
+    fn test_dispute_job_wrong_signer_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, client) = setup(&env);
+
+        let (client_addr, freelancer, token, job_id) = create_job_fixture(&env, &client);
+
+        // 1-of-1 admin set: a stranger's signature never satisfies the threshold.
+        let stranger = Address::generate(&env);
+        client.dispute_job(&signers1(&env, &stranger), &job_id);
+        let _ = (admin, client_addr, freelancer, token);
+    }
+
+    /// The legacy `dispute_job` enforces the same M-of-N threshold as the
+    /// modern `dispute_milestone` — one valid admin of a 2-of-2 set is not
+    /// enough.
+    #[test]
+    #[should_panic]
+    fn test_dispute_job_insufficient_signatures_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let cid = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &cid);
+
+        let admins = [Address::generate(&env), Address::generate(&env)];
+        client.initialize(&build_signers(&env, &admins), &2u32);
+
+        let (client_addr, freelancer, token, job_id) = create_job_fixture(&env, &client);
+        let _ = (client_addr, freelancer, token);
+
+        // Only one of the two required admins signs; the second signer is a
+        // stranger, so the valid count stays at 1 (< 2).
+        let stranger = Address::generate(&env);
+        let mut mixed_signers = Vec::new(&env);
+        mixed_signers.push_back(admins[0].clone());
+        mixed_signers.push_back(stranger);
+        client.dispute_job(&mixed_signers, &job_id);
+    }
+
+    /// The legacy `resolve_dispute` enforces the same M-of-N threshold.
+    #[test]
+    #[should_panic]
+    fn test_resolve_dispute_insufficient_signatures_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let cid = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &cid);
+
+        let admins = [Address::generate(&env), Address::generate(&env)];
+        client.initialize(&build_signers(&env, &admins), &2u32);
+
+        let (_client_addr, _freelancer, _token, job_id) = create_job_fixture(&env, &client);
+
+        // Put the job into a disputed state with a full admin set first.
+        client.dispute_job(&build_signers(&env, &admins), &job_id);
+
+        // Resolving with only one valid admin must be rejected.
+        let stranger = Address::generate(&env);
+        let mut mixed_signers = Vec::new(&env);
+        mixed_signers.push_back(admins[0].clone());
+        mixed_signers.push_back(stranger);
+        client.resolve_dispute(&mixed_signers, &job_id, &true);
+    }
+
+    /// `resolve_milestone_dispute` enforces the same M-of-N threshold.
+    #[test]
+    #[should_panic]
+    fn test_resolve_milestone_dispute_insufficient_signatures_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let cid = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &cid);
+
+        let admins = [Address::generate(&env), Address::generate(&env)];
+        client.initialize(&build_signers(&env, &admins), &2u32);
+
+        let (_client_addr, _freelancer, _token, job_id) = create_job_fixture(&env, &client);
+
+        client.dispute_milestone(&build_signers(&env, &admins), &job_id, &0u32);
+
+        let stranger = Address::generate(&env);
+        let mut mixed_signers = Vec::new(&env);
+        mixed_signers.push_back(admins[0].clone());
+        mixed_signers.push_back(stranger);
+        client.resolve_milestone_dispute(&mixed_signers, &job_id, &0u32, &true);
+    }
+
+    /// `resolve_dispute` on a job that was never disputed panics.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #39)")]
+    fn test_resolve_dispute_not_disputed_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, client) = setup(&env);
+
+        let (_client_addr, _freelancer, _token, job_id) = create_job_fixture(&env, &client);
+
+        client.resolve_dispute(&signers1(&env, &admin), &job_id, &true);
+    }
+
+    /// A non-admin signer cannot resolve a milestone dispute.
+    #[test]
+    #[should_panic]
+    fn test_resolve_milestone_dispute_wrong_signer_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, client) = setup(&env);
+
+        let (_client_addr, _freelancer, _token, job_id) = create_job_fixture(&env, &client);
+        client.dispute_milestone(&signers1(&env, &admin), &job_id, &0u32);
+
+        let stranger = Address::generate(&env);
+        client.resolve_milestone_dispute(&signers1(&env, &stranger), &job_id, &0u32, &true);
     }
 
     #[test]
