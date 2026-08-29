@@ -3,7 +3,7 @@ import type { AppProps } from "next/app";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { AnimatePresence } from "framer-motion";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import SkipToContent from "@/components/SkipToContent";
 import PageTransition from "@/components/PageTransition";
 import CookieConsent from "@/components/CookieConsent";
@@ -13,7 +13,12 @@ import { I18nProvider } from "@/lib/i18n";
 import { PriceProvider } from "@/lib/priceContext";
 import { WalletProvider } from "@/lib/WalletProvider";
 import { ErrorBoundary } from "@/lib/ErrorBoundary";
-import { queryRetryPolicy } from "@/lib/queryRetry";
+import {
+  createQueryClient,
+  indexedDbPersister,
+  QUERY_CACHE_MAX_AGE,
+  shouldDehydrateMutation,
+} from "@/lib/queryClient";
 import useOnlineStatus from "@/hooks/useOnlineStatus";
 import useShortcuts from "@/hooks/useShortcuts";
 import GlobalSearchModal from "@/components/GlobalSearchModal";
@@ -60,18 +65,7 @@ export default function App({ Component, pageProps }: AppProps) {
   }, [router]);
 
   // Create QueryClient once per session so cache survives page navigations.
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 30_000, // 30s default
-            retry: queryRetryPolicy,
-            refetchOnWindowFocus: true,
-          },
-        },
-      }),
-  );
+  const [queryClient] = useState(createQueryClient);
 
   useEffect(() => {
     initAnalytics();
@@ -100,7 +94,20 @@ export default function App({ Component, pageProps }: AppProps) {
   }, []);
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{
+          persister: indexedDbPersister,
+          maxAge: QUERY_CACHE_MAX_AGE,
+          buster: "indigopay-query-cache-v1",
+          dehydrateOptions: {
+            // Donation recording is already covered by the durable offline
+            // queue. Do not persist a paused mutation that could outlive the
+            // signed transaction flow or resume after a reload.
+            shouldDehydrateMutation,
+          },
+        }}
+      >
         <ThemeProvider>
           <I18nProvider>
             <PriceProvider>
@@ -147,7 +154,7 @@ export default function App({ Component, pageProps }: AppProps) {
             </PriceProvider>
           </I18nProvider>
         </ThemeProvider>
-      </QueryClientProvider>
+      </PersistQueryClientProvider>
     </ErrorBoundary>
   );
 }
