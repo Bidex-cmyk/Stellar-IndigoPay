@@ -664,7 +664,7 @@ export async function routeLink(
 export function buildRoutePath(target: RouteTarget): string {
   switch (target.kind) {
     case "project":
-      return `/projects/${encodeURIComponent(target.projectId)}`;
+      return `/project/${encodeURIComponent(target.projectId)}`;
     case "profile":
       return `/profile/${encodeURIComponent(target.address)}`;
     case "donate": {

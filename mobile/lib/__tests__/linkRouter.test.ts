@@ -451,7 +451,7 @@ describe("resolveRoute — canonical-data rendering (anti-phishing)", () => {
 describe("buildRoutePath", () => {
   test("builds a project path", () => {
     expect(buildRoutePath({ kind: "project", projectId: "proj-1" })).toBe(
-      "/projects/proj-1",
+      "/project/proj-1",
     );
   });
 
