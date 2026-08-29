@@ -1067,6 +1067,21 @@ const CHALLENGE_WINDOW_LEDGERS: u32 = 17_280;
 #[cfg(feature = "donation")]
 const MAX_CHALLENGE_REASON_LEN: u32 = 200;
 
+// Maximum byte length of a donation message. Donation messages are **never**
+// accepted on-chain as raw strings: every donate entrypoint (`donate`,
+// `donate_token`, `donate_usdc`, `donate_asset`, `donate_anonymous`,
+// `donate_vested`, and the stealth paths) takes a fixed-size `msg_hash: u32`
+// (or `BytesN<32>` for stealth), so on-chain processing cost is constant in
+// the original message length — there is no unbounded string hashing inside
+// the contract (issue #1104, Part A).
+//
+// This constant documents the client-side message policy: messages MUST be
+// capped at 140 bytes and normalized (trimmed; control characters rejected)
+// *before* hashing, so identical visible messages hash identically. It is a
+// policy constant — the on-chain input surface is already bounded by type.
+#[allow(dead_code)]
+const MAX_DONATION_MSG_LEN: u32 = 140;
+
 // 72 hours × 3600 s / 5 s per ledger = 51 840 ledgers. The delay between
 // M-of-N initiation and permissionless force-refund execution.
 #[cfg(feature = "refund")]
@@ -16238,6 +16253,34 @@ mod tests {
 
         let challenge = client.get_donation_challenge(&donation_index).unwrap();
         assert!(challenge.challenged);
+    }
+
+    /// Issue #1104, Part A: the donation-message surface is bounded by type.
+    /// Every donate entrypoint accepts a fixed-size `msg_hash: u32` (or
+    /// `BytesN<32>` for stealth) — no arbitrary-length message string is
+    /// hashed on-chain. This test pins the passthrough semantics: the
+    /// caller-supplied `msg_hash` is stored verbatim on the `DonationRecord`,
+    /// including the extreme values of the u32 domain, so there is no hidden
+    /// message-processing path that could grow with input length.
+    #[test]
+    fn test_msg_hash_passthrough_is_fixed_size_input() {
+        let (env, _cid, client, _admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * STROOP));
+
+        for (idx, msg_hash) in [0u32, 42, u32::MAX].iter().enumerate() {
+            client.donate(&token, &donor, &pid, &(25 * STROOP), msg_hash);
+            let record = client.get_donation_record(&(idx as u32));
+            assert_eq!(
+                record.message_hash, *msg_hash,
+                "msg_hash must pass through verbatim"
+            );
+        }
+        assert_eq!(MAX_DONATION_MSG_LEN, 140, "documented message cap policy");
     }
 
     #[test]
