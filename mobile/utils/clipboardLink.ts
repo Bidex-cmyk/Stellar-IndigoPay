@@ -16,7 +16,22 @@
 import * as Clipboard from "expo-clipboard";
 import { parseLink, RouteResult } from "../lib/linkRouter";
 
-let lastCheckedText: string | null = null;
+let lastCheckedDigest: string | null = null;
+
+/**
+ * Cheap non-cryptographic digest (FNV-1a) used only to detect "same value
+ * as last time" — never to authenticate anything. Kept dependency-free so
+ * the de-dupe memory below never retains clipboard plaintext (which may be
+ * a password or recovery phrase) for the life of the app process.
+ */
+function fnv1aDigest(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
 
 /**
  * Read the clipboard and, if it contains a *new* valid link, return the
@@ -33,7 +48,7 @@ export async function checkClipboardForLink(): Promise<RouteResult | null> {
   try {
     const hasString = await Clipboard.hasStringAsync();
     if (!hasString) {
-      lastCheckedText = null;
+      lastCheckedDigest = null;
       return null;
     }
     text = await Clipboard.getStringAsync();
@@ -44,14 +59,15 @@ export async function checkClipboardForLink(): Promise<RouteResult | null> {
   }
 
   if (!text || !text.trim()) {
-    lastCheckedText = null;
+    lastCheckedDigest = null;
     return null;
   }
-  if (text === lastCheckedText) {
+  const digest = fnv1aDigest(text);
+  if (digest === lastCheckedDigest) {
     // Already prompted for this exact value; don't nag on every foreground.
     return null;
   }
-  lastCheckedText = text;
+  lastCheckedDigest = digest;
 
   const result = parseLink(text, "clipboard");
   return result.status === "valid" ? result : null;
@@ -59,5 +75,5 @@ export async function checkClipboardForLink(): Promise<RouteResult | null> {
 
 /** Reset the "already prompted" memory — primarily for tests. */
 export function resetClipboardLinkMemory(): void {
-  lastCheckedText = null;
+  lastCheckedDigest = null;
 }

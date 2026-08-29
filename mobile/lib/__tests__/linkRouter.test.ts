@@ -350,9 +350,23 @@ describe("shared validator building blocks", () => {
 
 describe("resolveCanonicalProject", () => {
   test("resolves by project id from the live registry", async () => {
-    mockedAxiosGet.mockResolvedValueOnce({ data: { data: [PROJECT_A] } });
+    // Id-based lookups hit the single-project endpoint (GET /api/projects/:id),
+    // not the capped list endpoint — see the "resolves via the single-project
+    // endpoint" test below for the URL assertion.
+    mockedAxiosGet.mockResolvedValueOnce({ data: { data: PROJECT_A } });
     const project = await resolveCanonicalProject({ projectId: PROJECT_A.id });
     expect(project).toEqual(PROJECT_A);
+  });
+
+  test("uses the single-project endpoint, not the capped list, for id-based lookups", async () => {
+    mockedAxiosGet.mockResolvedValueOnce({ data: { data: PROJECT_A } });
+    await resolveCanonicalProject({ projectId: PROJECT_A.id });
+    expect(mockedAxiosGet).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/projects/${PROJECT_A.id}`),
+    );
+    expect(mockedAxiosGet).not.toHaveBeenCalledWith(
+      expect.stringContaining("limit=100"),
+    );
   });
 
   test("resolves by wallet address from the live registry", async () => {
@@ -376,7 +390,7 @@ describe("resolveCanonicalProject", () => {
 
 describe("resolveRoute — canonical-data rendering (anti-phishing)", () => {
   test("a link claiming project name X resolves to the server's real name, not X", async () => {
-    mockedAxiosGet.mockResolvedValueOnce({ data: { data: [PROJECT_A] } });
+    mockedAxiosGet.mockResolvedValueOnce({ data: { data: PROJECT_A } });
 
     const parsed = parseLink(
       `https://indigopay.example.com/project/${PROJECT_A.id}?name=TotallyLegitCharityScam`,
@@ -395,7 +409,7 @@ describe("resolveRoute — canonical-data rendering (anti-phishing)", () => {
   });
 
   test("downgrades to entity_not_found when the project no longer exists", async () => {
-    mockedAxiosGet.mockResolvedValueOnce({ data: { data: [] } });
+    mockedAxiosGet.mockResolvedValueOnce({ data: { data: null } });
     const parsed = parseLink(
       "https://indigopay.example.com/project/deleted-project",
       "universal_link",
@@ -407,7 +421,7 @@ describe("resolveRoute — canonical-data rendering (anti-phishing)", () => {
 
   test("downgrades to entity_inactive for a paused/inactive project", async () => {
     mockedAxiosGet.mockResolvedValueOnce({
-      data: { data: [{ ...PROJECT_A, status: "paused" }] },
+      data: { data: { ...PROJECT_A, status: "paused" } },
     });
     const parsed = parseLink(
       `https://indigopay.example.com/project/${PROJECT_A.id}`,
@@ -436,7 +450,7 @@ describe("resolveRoute — canonical-data rendering (anti-phishing)", () => {
   });
 
   test("routeLink() = parseLink() + resolveRoute() in one call", async () => {
-    mockedAxiosGet.mockResolvedValueOnce({ data: { data: [PROJECT_A] } });
+    mockedAxiosGet.mockResolvedValueOnce({ data: { data: PROJECT_A } });
     const result = (await routeLink(
       `https://indigopay.example.com/project/${PROJECT_A.id}`,
       "universal_link",

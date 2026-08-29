@@ -35,9 +35,9 @@
 import axios from "axios";
 import { isValidStellarAddress } from "../utils/stellarValidation";
 import {
+  ACTIVE_PROJECT_STATUS,
   RegistryProject,
   resolveProjectByAddress,
-  resolveProjectById,
 } from "../utils/projectValidation";
 import { captureException } from "./errorReporter";
 
@@ -85,8 +85,12 @@ export function isValidTxHash(value: unknown): value is string {
   return typeof value === "string" && TX_HASH_RE.test(value);
 }
 
+/** Full-string match — `Number.parseFloat` alone would accept "5abc". */
+const AMOUNT_RE = /^\d+(\.\d+)?$/;
+
 export function isValidAmount(value: string | null | undefined): boolean {
   if (!value) return false;
+  if (!AMOUNT_RE.test(value)) return false;
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) && parsed > 0;
 }
@@ -100,15 +104,35 @@ export function sanitizeAmountParam(
   return isValidAmount(trimmed) ? trimmed : undefined;
 }
 
-/** Stellar text memos max out at 28 bytes; trim anything longer. Other
- * free-text fields (SEP-0007 `message`) may pass a larger `maxLength`. */
+/** Truncate `value` to at most `maxBytes` UTF-8 bytes without splitting a
+ * multi-byte code point. */
+function truncateUtf8Bytes(value: string, maxBytes: number): string {
+  let bytes = 0;
+  let result = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    const charBytes =
+      codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+    if (bytes + charBytes > maxBytes) break;
+    bytes += charBytes;
+    result += char;
+  }
+  return result;
+}
+
+/** Stellar text memos max out at 28 bytes; trim anything longer. `maxLength`
+ * is a byte count, not a character count — non-ASCII memos are truncated by
+ * UTF-8 byte length so the result never exceeds what Stellar will accept.
+ * Other free-text fields (SEP-0007 `message`) may pass a larger
+ * `maxLength`. */
 export function sanitizeMemoParam(
   value: string | null | undefined,
   maxLength = 28,
 ): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+  if (!trimmed) return undefined;
+  return truncateUtf8Bytes(trimmed, maxLength);
 }
 
 /**
@@ -584,15 +608,21 @@ export async function resolveCanonicalProject(query: {
 }): Promise<RegistryProject | null> {
   if (!query.projectId && !query.address) return null;
   try {
+    // Id-based lookups go straight to the single-project endpoint — the
+    // list endpoint below is capped at 100 rows, which would silently
+    // "not found" any valid project outside that page.
+    if (query.projectId) {
+      const res = await axios.get(
+        `${API_URL}/api/projects/${encodeURIComponent(query.projectId)}`,
+      );
+      const project = res.data?.data as RegistryProject | undefined;
+      return project?.id ? project : null;
+    }
+
     const res = await axios.get(`${API_URL}/api/projects?limit=100`);
     const list: RegistryProject[] = Array.isArray(res.data?.data)
       ? res.data.data
       : [];
-
-    if (query.projectId) {
-      const result = resolveProjectById(list, query.projectId);
-      if (result.kind !== "unknown") return result.project;
-    }
     if (query.address) {
       const result = resolveProjectByAddress(list, query.address);
       if (result.kind !== "unknown") return result.project;
@@ -635,7 +665,7 @@ export async function resolveRoute(result: RouteResult): Promise<RouteResult> {
   if (!project) {
     return rejected(result.surface, result.raw, "entity_not_found");
   }
-  if (project.status && project.status !== "active") {
+  if (project.status !== ACTIVE_PROJECT_STATUS) {
     return rejected(result.surface, result.raw, "entity_inactive");
   }
 
@@ -681,6 +711,13 @@ export function buildRoutePath(target: RouteTarget): string {
       query.set("destination", target.destination);
       if (target.amount) query.set("amount", target.amount);
       if (target.memo) query.set("memo", target.memo);
+      if (target.memoType) query.set("memo_type", target.memoType);
+      if (target.assetCode) query.set("asset_code", target.assetCode);
+      if (target.assetIssuer) query.set("asset_issuer", target.assetIssuer);
+      if (target.message) query.set("message", target.message);
+      if (target.callback) query.set("callback", target.callback);
+      if (target.networkPassphrase)
+        query.set("network_passphrase", target.networkPassphrase);
       return `/sep0007?uri=${encodeURIComponent(`web+stellar:pay?${query.toString()}`)}`;
     }
     default:
