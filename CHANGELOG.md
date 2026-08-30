@@ -267,6 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **test:** Shared deterministic fixture factory (`packages/fixtures`) with seeded RNG, typed builders (project, donation, match, profile, campaign, milestone, update, queueItem), scenario builders (offline-replay, idempotent-retry, stale-price, conflict), and OpenAPI compatibility validation for frontend, mobile, and extension test suites (closes #941).
+- **backend/testing:** add chaos harness (`backend/test/chaos/`) for worker crash-safety and partial-failure recovery — 8 scenarios covering kill-after-claim/lease-reclaim, DB-commit/queue-ack gap with idempotent dedup, queue-store outage with backoff/resume, two recovery paths racing on a stranded job, deliberate idempotency-guard removal regression detection, crash-during-DLQ-replay nested fault, batch lease-expiry cycle (no loss/no dup), and DLQ poison isolation + targeted replay; includes `FaultInjector`, `FakeConsumer`, assertion helpers, CI `chaos` job (10 min bounded), and `docs/chaos-harness.md` (closes #939)
 
 ### Fixed
 - **indigopay-contract:** Reconciled the campaign escrow custody model by funding the escrow job directly from `ProjectContractBalance(project, token)` instead of `project.total_raised`. This prevents escrow creation failures when donations bypass the contract (e.g. direct-to-wallet) and correctly rejects funding with `InsufficientContractBalanceForEscrow` if the contract holds insufficient funds.
